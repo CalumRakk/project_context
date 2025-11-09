@@ -3,3 +3,4 @@ __pycache__/
 *.txt
 client_secrets.json
 token.json
+!requirements.txt
