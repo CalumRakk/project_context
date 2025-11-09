@@ -1,13 +1,11 @@
 from project_context.api_drive import GoogleDriveManager
-from project_context.browser import Browser
+from project_context.browser.browser import Browser
 from project_context.utils import generate_context
 
 cookies_path = r"aistudio.google.com_cookies.txt"
 browser = Browser(cookies_path=cookies_path)
-
-
-browser.go_to_chat()
-browser.select_model("Gemini 2.0 Flash")
+models = browser.chat.get_models()
+print(browser.chat.model_current)
 
 
 project_path = r"D:\github Leo\servercontrol"
