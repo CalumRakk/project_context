@@ -46,9 +46,10 @@ def generate_context(proyect_path: Union[str, Path]) -> str:
     return context
 
 
-def save_context(project_path: Union[str, Path], context):
+def save_context(project_path: Union[str, Path], context: str) -> Path:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
     inodo = generate_unique_id(project_path)
     output = project_path / "context" / f"{inodo}.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(context, encoding="utf-8")
+    return output
