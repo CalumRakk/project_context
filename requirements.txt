@@ -53,6 +53,7 @@ trio==0.32.0
 trio-websocket==0.12.2
 typing-inspection==0.4.2
 typing_extensions==4.15.0
+undetected-chromedriver==3.5.5
 uritemplate==4.2.0
 urllib3==2.5.0
 webdriver-manager==4.0.2

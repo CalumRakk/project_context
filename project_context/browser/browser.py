@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import Union
 
-from selenium import webdriver
+import undetected_chromedriver as us
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -38,11 +38,11 @@ class Browser:
         except:
             return False
 
-    def _start(self) -> webdriver.Chrome:
+    def _start(self) -> us.Chrome:
         """Inicializa el driver si no existe todavía."""
 
         logger.info("Iniciando driver...")
-        options = webdriver.ChromeOptions()
+        options = us.ChromeOptions()
 
         if self.headless:
             options.add_argument("--headless=new")
@@ -59,7 +59,9 @@ class Browser:
         options.add_argument("--lang=en-US")
 
         service = ChromeService(executable_path=ChromeDriverManager().install())
-        self._driver = webdriver.Chrome(service=service, options=options)
+        self._driver = us.Chrome(
+            service=service, options=options, headless=self.headless
+        )
         self._driver.set_window_size(1000, 600)
         logger.info("Driver iniciado.")
         return self._driver
