@@ -106,6 +106,8 @@ class Browser:
             self.driver.refresh()
 
         self.driver.get("https://aistudio.google.com/")
+        if not self.is_login():
+            raise Exception("No se pudo iniciar sesion")
         self.accept_dialog_autosave()
         logger.info("Cookies agregadas.")
 

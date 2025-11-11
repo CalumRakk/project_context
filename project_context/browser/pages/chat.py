@@ -1,11 +1,13 @@
 import re
 import time
 from contextlib import contextmanager
-from typing import Generator, Optional
+from pathlib import Path
+from typing import Generator, Optional, Union
 
 from selenium import webdriver
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
+    StaleElementReferenceException,
     TimeoutException,
 )
 from selenium.webdriver.common.keys import Keys
@@ -61,22 +63,25 @@ class ChatBrowser:
                 )
             )
         )
+        for _ in range(3):
 
-        all_element = wait.until(
-            EC.presence_of_element_located(
-                (
-                    "xpath",
-                    ".//button[@variant='filter-chip' and contains(text(), 'All')]",
+            all_element = wait.until(
+                EC.presence_of_element_located(
+                    (
+                        "xpath",
+                        ".//button[@variant='filter-chip' and contains(text(), 'All')]",
+                    )
                 )
             )
-        )
-        try:
-            all_element.click()
-        except ElementClickInterceptedException:
-            self.driver.execute_script(
-                "arguments[0].scrollIntoView(true);", all_element
-            )
-            all_element.click()
+            try:
+                all_element.click()
+            except ElementClickInterceptedException:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView(true);", all_element
+                )
+                all_element.click()
+            except StaleElementReferenceException:
+                time.sleep(1)
 
     def get_models(self):
         """Devuelve los nombre de los modelos disponibles."""
@@ -260,3 +265,33 @@ class ChatBrowser:
         xpath = "//h2[@id='mat-mdc-dialog-title-2']"
         wait = WebDriverWait(self.driver, 5)
         wait.until(EC.invisibility_of_element_located(("xpath", xpath)))
+
+    def attach_file(self, file_path: Union[str, Path]):
+        def wait_loading_file():
+
+            wait = WebDriverWait(self.driver, 5)
+            # Primera barra de progreso donde aparece el texto cargando en blanco
+            wait.until(
+                EC.invisibility_of_element_located(
+                    ("xpath", "//*[@role='progressbar']")
+                )
+            )
+            # Segunda barra de progreso donde aparece un circulo al lado del archivo cargando.
+            wait.until(
+                EC.invisibility_of_element_located(
+                    ("xpath", "//mat-icon[contains(text(), 'progress_activity ')]")
+                )
+            )
+
+        button = self.driver.find_element(
+            "xpath",
+            "//button[@aria-label='Insert assets such as images, videos, files, or audio']",
+        )
+        button.click()
+        input = self.driver.find_element(
+            "xpath",
+            "//div[@class='mat-mdc-menu-content']//button[@aria-label='Upload File']//input",
+        )
+        input.send_keys(str(file_path))
+        wait_loading_file()
+        self.utils.simulate_escape()
