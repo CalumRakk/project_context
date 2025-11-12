@@ -1,4 +1,8 @@
 import hashlib
+import io
+import json
+import ssl
+import time
 from pathlib import Path
 from typing import Optional, cast
 
@@ -7,8 +11,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from pydantic import BaseModel
 
-from project_context.schema import FileDrive
+from project_context.schema import ChatIAStudio, FileDrive
 
 
 def generate_md5(content: str) -> str:
@@ -24,6 +30,12 @@ def generate_md5(content: str) -> str:
     md5_hash = hashlib.md5()
     md5_hash.update(content.encode("utf-8"))
     return md5_hash.hexdigest()
+
+
+class DownloadedFile(BaseModel):
+    content: bytes
+    mime_type: str
+    name: str
 
 
 class GoogleDriveManager:
@@ -155,3 +167,185 @@ class GoogleDriveManager:
         folder_id = self._find_folder_by_name("Google AI Studio")
         if folder_id:
             return self.list_files_in_folder(folder_id.id)
+
+    def get_file_metadata(self, file_id: str) -> dict | None:
+        """
+        Obtiene la metadata de un archivo por su ID.
+        Campos importantes para v3: 'name', 'mimeType', 'modifiedTime', 'id'.
+        """
+        try:
+            # Especificar los campos que queremos para eficiencia.
+            file_metadata = (
+                self.drive_service.files()
+                .get(
+                    fileId=file_id,
+                    fields="id, name, mimeType, modifiedTime, webViewLink, webContentLink",
+                )
+                .execute()
+            )
+            return file_metadata
+        except HttpError as error:
+            if error.resp.status == 404:
+                print(f"Error: Archivo con ID '{file_id}' no encontrado.")
+            else:
+                print(f"Error al obtener metadata del archivo '{file_id}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al obtener metadata del archivo '{file_id}': {e}")
+            return None
+
+    def get_file_content(self, file_id: str) -> bytes | None:
+        """
+        Descarga el contenido de un archivo de Google Drive.
+
+        Args:
+            file_id (str): El ID del archivo en Drive.
+
+        Returns:
+            bytes | None: El contenido del archivo como bytes, o None si hubo un error.
+        """
+        try:
+            request = self.drive_service.files().get_media(fileId=file_id)
+            file_stream = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_stream, request)
+            done = False
+            retries = 0
+            max_retries = 5
+
+            while not done and retries < max_retries:
+                try:
+                    status, done = downloader.next_chunk()
+                    print(f"Descargando... {int(status.progress() * 100)}%")
+                except ssl.SSLEOFError:
+                    retries += 1
+                    print(
+                        f"SSLEOFError al descargar. Reintentando ({retries}/{max_retries})..."
+                    )
+                    time.sleep(3 * retries)  # Espera exponencial
+                except Exception as e:
+                    print(f"Error inesperado durante la descarga: {e}")
+                    return None
+
+            if not done:
+                print("La descarga falló después de múltiples reintentos.")
+                return None
+
+            return file_stream.getvalue()
+
+        except HttpError as error:
+            print(f"Error HTTP al descargar archivo '{file_id}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al descargar archivo '{file_id}': {e}")
+            return None
+
+    def download_file_with_metadata(self, file_id: str) -> DownloadedFile | None:
+        """
+        Descarga un archivo y devuelve su contenido en bytes junto con sus metadatos.
+
+        Args:
+            file_id (str): El ID del archivo en Drive.
+
+        Returns:
+            DownloadedFile | None: Un objeto con el contenido, mime_type y nombre,
+                                  o None si ocurre un error o es una carpeta.
+        """
+        metadata = self.get_file_metadata(file_id)
+        if not metadata:
+            return None
+
+        if metadata.get("mimeType") == "application/vnd.google-apps.folder":
+            print(
+                f"Error: El ID '{file_id}' corresponde a una carpeta, la cual no se puede descargar."
+            )
+            return None
+
+        content = self.get_file_content(file_id)
+        if content is None:
+            return None
+
+        return DownloadedFile(
+            content=content,
+            mime_type=metadata.get("mimeType", "application/octet-stream"),
+            name=metadata.get("name", "unknown"),
+        )
+
+    def get_chat_ia_studio(self, chat_id: str) -> ChatIAStudio | None:
+        """
+        Obtiene el contenido JSON asociado a un chat ID.
+
+        Args:
+            chat_id (str): El ID del chat.
+
+        Returns:
+            dict | None: El contenido JSON del chat, o None si hubo un error.
+        """
+        chat_content_bytes = self.get_file_content(chat_id)
+        if not chat_content_bytes:
+            print(f"No se pudo obtener el contenido del chat con ID '{chat_id}'.")
+            return None
+
+        try:
+            chat_content = json.loads(chat_content_bytes.decode("utf-8"))
+            return ChatIAStudio(**chat_content)
+        except json.JSONDecodeError as e:
+            print(f"Error al decodificar el contenido JSON del chat '{chat_id}': {e}")
+            return None
+
+    def update_file_content(
+        self, file_id: str, local_path: Path, mime_type: str | None = None
+    ) -> str | None:
+        """
+        Actualiza el contenido de un archivo existente en Google Drive.
+
+        Args:
+            file_id (str): El ID del archivo en Drive a actualizar.
+            local_path (Path): La ruta al archivo local con el nuevo contenido.
+            mime_type (str | None): Opcional. El nuevo tipo MIME si cambia.
+
+        Returns:
+            str | None: El ID del archivo actualizado en Drive, o None si hubo un error.
+        """
+        if not local_path.exists():
+            print(f"Error: El archivo local '{local_path}' no existe para actualizar.")
+            return None
+
+        # Obtener el MIME type actual si no se proporciona uno nuevo
+        if mime_type is None:
+            metadata = self.get_file_metadata(file_id)
+            if metadata:
+                mime_type = metadata.get("mimeType", "application/octet-stream")
+            else:
+                print(
+                    f"Advertencia: No se pudo obtener el mimeType del archivo Drive '{file_id}'. Usando 'application/octet-stream'."
+                )
+                mime_type = "application/octet-stream"
+
+        file_metadata_body = {
+            "name": local_path.name,
+        }
+
+        try:
+            media = MediaFileUpload(
+                local_path.resolve(), mimetype=mime_type, resumable=True
+            )
+            updated_file = (
+                self.drive_service.files()
+                .update(
+                    fileId=file_id,
+                    media_body=media,
+                    body=file_metadata_body,
+                    fields="id, name, modifiedTime",
+                )
+                .execute()
+            )
+            print(
+                f'Archivo actualizado: "{updated_file.get("name")}" (ID: "{updated_file.get("id")}", Última modificación: {updated_file.get("modifiedTime")}).'
+            )
+            return updated_file.get("id")
+        except HttpError as error:
+            print(f"Error al actualizar archivo '{file_id}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al actualizar archivo: {e}")
+            return None

@@ -135,8 +135,9 @@ class Browser:
 
             for cookie in cookies_list:
                 cookies_dict = cookie.model_dump()
-                if cookies_dict["expiry"] == 0:
-                    cookies_dict.pop("expiry")
+                # if cookies_dict["expiry"] == 0:
+                #     cookies_dict.pop("expiry")
+                cookies_dict.pop("expiry")
                 self.driver.add_cookie(cookies_dict)
 
             self.driver.refresh()
