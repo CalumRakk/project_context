@@ -17,11 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 class Browser:
-    def __init__(self, cookies_path: Union[str, Path], headless=False):
+    def __init__(self, cookies_path: Union[str, Path], headless=False, debug=False):
         self.headless = headless
+        self.debug = debug
         self.driver = self._start()
+        self.patch_disabled_app_visibility()
 
-        self.chat = ChatBrowser(self.driver)
+        self.chat = ChatBrowser(self.driver, debug=self.debug)
 
         # login y check
         cookies = load_netscape_cookies(cookies_path)
@@ -45,26 +47,56 @@ class Browser:
         options = us.ChromeOptions()
 
         if self.headless:
-            options.add_argument("--headless=new")
+            options.add_argument("--headless")
 
-        options.add_argument("--disable-extensions")
-        options.add_argument("--ignore-certificate-errors")
-        options.add_argument("--disable-infobars")
-        options.add_argument("--no-first-run")
-        options.add_argument("--disable-session-crashed-bubble")
-        options.add_argument("--disable-background-networking")
-        options.add_argument("--disable-popup-blocking")
-        options.add_argument("--disable-notifications")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--lang=en-US")
+        # options.add_argument("--window-position=-2000,0")
+
+        # options.add_argument("--disable-extensions")
+        # options.add_argument("--ignore-certificate-errors")
+        # options.add_argument("--disable-infobars")
+        # options.add_argument("--no-first-run")
+        # options.add_argument("--disable-session-crashed-bubble")
+        # options.add_argument("--disable-background-networking")
+        # options.add_argument("--disable-popup-blocking")
+        # options.add_argument("--disable-notifications")
+        # options.add_argument("--no-sandbox")
+        # options.add_argument("--lang=en-US")
 
         service = ChromeService(executable_path=ChromeDriverManager().install())
-        self._driver = us.Chrome(
-            service=service, options=options, headless=self.headless
-        )
+        self._driver = us.Chrome(use_subprocess=False, options=options, service=service)
+
         self._driver.set_window_size(1000, 600)
         logger.info("Driver iniciado.")
+        if self.debug:
+            logger.info("Modo debug activado, deteniendo la ejecucion...")
+            self._driver.save_screenshot("logs/debug_screenshot.png")
         return self._driver
+
+    def patch_disabled_app_visibility(self):
+        self.driver.execute_script(
+            """
+            console.log('Parchando visibility API...');
+            const fixVisibility = () => {
+                Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+                Object.defineProperty(document, 'hidden', { get: () => false });
+            };
+            fixVisibility();
+
+            // Interceptar cambios
+            ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focus'].forEach(evt => {
+                window.addEventListener(evt, e => {
+                    fixVisibility();
+                    e.stopImmediatePropagation();
+                }, true);
+            });
+
+            // Neutralizar los eventos
+            document.addEventListener('visibilitychange', e => e.stopImmediatePropagation(), true);
+            document.addEventListener('webkitvisibilitychange', e => e.stopImmediatePropagation(), true);
+            window.addEventListener('blur', e => e.stopImmediatePropagation(), true);
+            window.addEventListener('focus', e => e.stopImmediatePropagation(), true);
+        """
+        )
 
     # def refresh(self):
     #     """Refresca la página actual y espera explícitamente 5 segundos."""
@@ -97,6 +129,10 @@ class Browser:
 
         for domain_url, cookies_list in cookies_by_domain.items():
             self.driver.get(domain_url)
+            if self.debug:
+                url = domain_url.replace("https://", "").replace("/", "_")
+                self.driver.save_screenshot(f"logs/screens/debug_set_cookies_{url}.png")
+
             for cookie in cookies_list:
                 cookies_dict = cookie.model_dump()
                 if cookies_dict["expiry"] == 0:
@@ -104,20 +140,34 @@ class Browser:
                 self.driver.add_cookie(cookies_dict)
 
             self.driver.refresh()
+            if self.debug:
+                url = domain_url.replace("https://", "").replace("/", "_")
+                self.driver.save_screenshot(
+                    f"logs/debug_set_cookies_after_refresh_{url}.png"
+                )
 
         self.driver.get("https://aistudio.google.com/")
         if not self.is_login():
+            if self.debug:
+                self.driver.save_screenshot("logs/debug_set_cookies_no_login.png")
             raise Exception("No se pudo iniciar sesion")
+        if self.debug:
+            self.driver.save_screenshot("logs/debug_set_cookies_logged_in.png")
         self.accept_dialog_autosave()
         logger.info("Cookies agregadas.")
 
     def accept_dialog_autosave(self):
         logger.info("Aceptando dialogo de autosave...")
+        if self.debug:
+            self.driver.save_screenshot("logs/debug_accept_dialog_autosave.png")
         wait = WebDriverWait(self.driver, 10)
         dialog = wait.until(
             EC.presence_of_element_located(("xpath", "//div[@class='dialog']"))
         )
         dialog.find_element("xpath", ".//button").click()
+        if self.debug:
+            self.driver.save_screenshot("logs/debug_accept_dialog_autosave_after.png")
+        logger.info("Dialogo de autosave aceptado.")
 
     def simulate_escape(self):
         logger.info("Simulando escape...")

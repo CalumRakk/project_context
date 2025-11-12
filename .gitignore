@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
+logs/
 *.txt
 client_secrets.json
 token.json
