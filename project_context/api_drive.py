@@ -1,6 +1,5 @@
 import io
 import json
-from pathlib import Path
 from typing import Optional, cast
 
 from google.auth.transport.requests import Request
@@ -11,15 +10,20 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.schema import ChatIAStudio
+from project_context.utils import get_user_config_dir
 
 
 class GoogleDriveManager:
     SCOPES = ["https://www.googleapis.com/auth/drive"]
-    CLIENT_SECRETS_FILE = "client_secrets.json"
-    TOKEN_FILE = "token.json"
 
     def __init__(self):
         """Inicializa el cliente de Drive y se autentica."""
+        self.config_dir = get_user_config_dir("project_context")
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+
+        self.client_secrets_file = self.config_dir / "client_secrets.json"
+        self.token_file = self.config_dir / "token.json"
+
         self.credentials = self._authenticate()
         self.service = build("drive", "v3", credentials=self.credentials)
         print("Google Drive Manager inicializado con éxito.")
@@ -27,11 +31,10 @@ class GoogleDriveManager:
     def _authenticate(self) -> Credentials:
         """
         Gestiona el proceso de autenticación de OAuth 2.0.
-        Carga credenciales existentes o realiza un nuevo flujo de autorización.
         """
         creds: Optional[Credentials] = None
-        if Path(self.TOKEN_FILE).exists():
-            creds = Credentials.from_authorized_user_file(self.TOKEN_FILE, self.SCOPES)
+        if self.token_file.exists():
+            creds = Credentials.from_authorized_user_file(self.token_file, self.SCOPES)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -45,21 +48,21 @@ class GoogleDriveManager:
                     creds = None
 
             if not creds:
-                if not Path(self.CLIENT_SECRETS_FILE).exists():
+                if not self.client_secrets_file.exists():
                     raise FileNotFoundError(
-                        f"El archivo '{self.CLIENT_SECRETS_FILE}' no se encontró. "
-                        "Por favor, descárgalo de Google Cloud Console."
+                        f"El archivo '{self.client_secrets_file}' no se encontró. "
+                        "Por favor, descárgalo de Google Cloud Console y colócalo en esa ruta."
                     )
                 print("Iniciando flujo de autenticación de Google Drive...")
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    self.CLIENT_SECRETS_FILE, self.SCOPES
+                    self.client_secrets_file, self.SCOPES
                 )
                 creds = cast(Credentials, flow.run_local_server(port=0))
                 print("Autenticación completada.")
 
-            with open(self.TOKEN_FILE, "w") as token:
+            with open(self.token_file, "w") as token:
                 token.write(creds.to_json())
-            print(f"Credenciales guardadas en '{self.TOKEN_FILE}'.")
+            print(f"Credenciales guardadas en '{self.token_file}'.")
 
         return creds
 
