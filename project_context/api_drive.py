@@ -156,7 +156,10 @@ class GoogleDriveManager:
             print(f"Error inesperado al listar archivos: {e}")
             return []
 
-    def _find_folder_by_name(self, folder_name: str) -> Optional[FileDrive]:
+    def find_folder_by_name(self, folder_name: str) -> Optional[FileDrive]:
+        """
+        Busca una carpeta en Google Drive por su nombre en la raíz (Mi unidad).
+        """
         folders = [i for i in self.list_files_in_folder("root") if i.is_folder]
         for folder in folders:
             if folder.name == folder_name:
@@ -164,7 +167,7 @@ class GoogleDriveManager:
         return None
 
     def list_files_google_ia_studio(self):
-        folder_id = self._find_folder_by_name("Google AI Studio")
+        folder_id = self.find_folder_by_name("Google AI Studio")
         if folder_id:
             return self.list_files_in_folder(folder_id.id)
 
@@ -424,7 +427,11 @@ class GoogleDriveManager:
             return None
 
     def create_file(
-        self, folder_id: str, local_path: Path, mime_type: str
+        self,
+        folder_id: str,
+        local_path: Path,
+        mime_type: str,
+        file_name: str | None = None,
     ) -> str | None:
         """
         Crea un nuevo archivo en Google Drive dentro de una carpeta específica.
@@ -442,7 +449,9 @@ class GoogleDriveManager:
             return None
 
         file_metadata = {
-            "name": local_path.name,  # En v3 se usa 'name' en lugar de 'title'
+            "name": (
+                file_name if file_name else local_path.name
+            ),  # En v3 se usa 'name' en lugar de 'title'
             "parents": [folder_id],
             "mimeType": mime_type,
         }
@@ -462,6 +471,53 @@ class GoogleDriveManager:
             return file.get("id")
         except HttpError as error:
             print(f"Error al crear archivo '{local_path.name}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al crear archivo: {e}")
+            return None
+
+    def create_file_from_memory(
+        self,
+        folder_id: str,
+        content: str,
+        mime_type: str,
+        file_name: str,
+    ) -> str | None:
+        """
+        Crea un nuevo archivo en Google Drive desde un stream en memoria.
+
+        Args:
+            folder_id (str): El ID de la carpeta de destino.
+            content (str): El contenido del archivo como string.
+            mime_type (str): El tipo MIME del archivo (ej. 'text/markdown', 'image/jpeg').
+            file_name (str): El nombre del archivo a crear.
+
+        Returns:
+            str | None: El ID del archivo creado en Drive, o None si hubo un error.
+        """
+        file_metadata = {
+            "name": file_name,
+            "parents": [folder_id],
+            "mimeType": mime_type,
+        }
+
+        try:
+            # Usa MediaIoBaseUpload para streams en memoria
+            content_stream = io.BytesIO(content.encode("utf-8"))
+            media = MediaIoBaseUpload(
+                content_stream, mimetype=mime_type, resumable=True
+            )
+            file = (
+                self.drive_service.files()
+                .create(body=file_metadata, media_body=media, fields="id, name")
+                .execute()
+            )
+            print(
+                f'Archivo creado en memoria: "{file.get("name")}" (ID: "{file.get("id")}") en la carpeta {folder_id}.'
+            )
+            return file.get("id")
+        except HttpError as error:
+            print(f"Error al crear archivo '{file_name}': {error}")
             return None
         except Exception as e:
             print(f"Error inesperado al crear archivo: {e}")

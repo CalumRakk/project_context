@@ -3,9 +3,18 @@ from pathlib import Path
 import click
 
 from project_context.api_drive import GoogleDriveManager
-from project_context.browser import Browser
+from project_context.schema import (
+    ChatIAStudio,
+    ChunkedPrompt,
+    ChunksFile,
+    ChunksText,
+    DriveDocument,
+    RunSettings,
+    SystemInstruction,
+)
 from project_context.utils import (
     PROMPT_TEMPLATE,
+    RESPONSE_TEMPLATE,
     compute_md5,
     generate_context,
     load_project_context_state,
@@ -14,7 +23,7 @@ from project_context.utils import (
 )
 
 
-def interactive_session(browser: Browser, api: GoogleDriveManager, state: dict):
+def interactive_session(api: GoogleDriveManager, state: dict):
     """Inicia un bucle interactivo para recibir comandos del usuario."""
     print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
@@ -31,17 +40,17 @@ def interactive_session(browser: Browser, api: GoogleDriveManager, state: dict):
 
             if command in ["exit", "quit"]:
                 print("Cerrando navegador y terminando sesión...")
-                browser.close()
+                # browser.close()
                 break
-            elif command == "ask":
-                if not args:
-                    print("Error: El comando 'ask' requiere una pregunta.")
-                    continue
-                print("Enviando prompt...")
-                response, _ = browser.chat.write_prompt(args)
-                print("\nRespuesta de la IA:\n--------------------")
-                print(response)
-                print("--------------------")
+            # elif command == "ask":
+            #     if not args:
+            #         print("Error: El comando 'ask' requiere una pregunta.")
+            #         continue
+            #     print("Enviando prompt...")
+            #     response, _ = browser.chat.write_prompt(args)
+            #     print("\nRespuesta de la IA:\n--------------------")
+            #     print(response)
+            #     print("--------------------")
             elif command == "help":
                 print("\nComandos disponibles:")
                 print('  ask "<pregunta>" - Envía una pregunta a la IA.')
@@ -56,7 +65,7 @@ def interactive_session(browser: Browser, api: GoogleDriveManager, state: dict):
                 success = api.clear_chat_ia_studio(state["chat_id"])
                 if success:
                     print("Historial limpiado.")
-                    browser.driver.refresh()
+                    # browser.driver.refresh()
                 else:
                     print("Error al limpiar el historial.")
             else:
@@ -64,7 +73,7 @@ def interactive_session(browser: Browser, api: GoogleDriveManager, state: dict):
 
         except KeyboardInterrupt:
             print("\nCerrando sesión por interrupción.")
-            browser.close()
+            # browser.close()
             break
         except Exception as e:
             print(f"Ocurrió un error: {e}")
@@ -79,8 +88,8 @@ def main(project_path):
     Inicia o actualiza el contexto de un proyecto para Google AI Studio
     y entra en una sesión interactiva.
     """
-    cookies_path = r"aistudio.google.com_cookies.txt"
-    browser = Browser(cookies_path=cookies_path)
+    # cookies_path = r"aistudio.google.com_cookies.txt"
+    # browser = Browser(cookies_path=cookies_path)
     api = GoogleDriveManager()
 
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
@@ -88,36 +97,57 @@ def main(project_path):
 
     project_context_state = load_project_context_state(project_path)
     if project_context_state is None:
-        content = generate_context(project_path)
+        content, expected_tokens = generate_context(project_path)
         path_context = save_context(project_path, content)
         content_md5 = compute_md5(path_context)
 
-        browser.chat.select_model("Gemini 2.5 Flash")
+        folder = api.find_folder_by_name("Google AI Studio")
+        if not folder:
+            raise ValueError("No se encontró la carpeta 'Google AI Studio' en Drive.")
 
-        browser.chat.attach_file(path_context)
-        response, chat_id = browser.chat.write_prompt(
-            PROMPT_TEMPLATE, thinking_mode=False
+        # crea file context en google drive
+        mimetype = "text/plain"
+        filename = project_path.name + "_context.txt"
+        document_id = api.create_file(folder.id, path_context, mimetype, filename)
+        if not document_id:
+            raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
+
+        # document
+        drive_document = DriveDocument(id=document_id)
+        chat_file = ChunksFile(
+            driveDocument=drive_document, role="user", tokenCount=expected_tokens
+        )
+        # user prompt
+        chunks_text_prompt = ChunksText(
+            text=PROMPT_TEMPLATE, role="user", tokenCount=248
+        )
+        # model response
+        chunks_text_response = ChunksText(
+            text=RESPONSE_TEMPLATE, role="model", tokenCount=4
         )
 
-        chat_ia_studio = api.get_chat_ia_studio(chat_id)
-        if not chat_ia_studio:
-            raise ValueError("No se pudo obtener el contenido del archivo subido.")
-        file_ids = [
-            getattr(i, "driveDocument").id
-            for i in chat_ia_studio.chunkedPrompt.chunks
-            if hasattr(i, "driveDocument")
-        ]
-        if not file_ids:
-            raise ValueError(
-                "No se encontraron IDs de archivos en el contenido obtenido."
-            )
+        chat_ia_studio = ChatIAStudio(
+            runSettings=RunSettings(),
+            systemInstruction=SystemInstruction(),
+            chunkedPrompt=ChunkedPrompt(
+                chunks=[chat_file, chunks_text_prompt, chunks_text_response],
+                pendingInputs=[],
+            ),
+        )
+
+        data = chat_ia_studio.model_dump_json()
+        mimetype = "application/vnd.google-makersuite.prompt"
+        filename = project_path.name + "_chat.prompt"
+        chat_id = api.create_file_from_memory(folder.id, data, mimetype, filename)
+        if not chat_id:
+            raise ValueError("No se pudo crear el chat en Google Drive.")
 
         project_context_state = {
             "path": str(project_path),
             "last_modified": last_modified,
             "md5": content_md5,
             "chat_id": chat_id,
-            "file_id": file_ids[0],
+            "file_id": document_id,
         }
         save_project_context_state(project_path, project_context_state)
     else:
@@ -134,7 +164,7 @@ def main(project_path):
         else:
             api = GoogleDriveManager()
             print("El proyecto ha cambiado. Generando nuevo contexto...")
-            content = generate_context(project_path)
+            content, expected_tokens = generate_context(project_path)
             path_context = save_context(project_path, content)
             content_md5 = compute_md5(path_context)
             if content_md5 == context_md5_saved:
@@ -148,6 +178,4 @@ def main(project_path):
                 project_context_state["md5"] = content_md5
                 save_project_context_state(project_path, project_context_state)
 
-        browser.chat.go_to_chat(chat_id_saved)
-
-    interactive_session(browser, api, project_context_state)
+    interactive_session(api, project_context_state)

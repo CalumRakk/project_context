@@ -27,6 +27,8 @@ INSTRUCCIONES OBLIGATORIAS:
 ¿Entendido? Confirma con "Listo, proyecto cargado" y dime brevemente de qué va el proyecto según lo que ves.
 """
 
+RESPONSE_TEMPLATE = """Entendido, proyecto cargado."""
+
 
 def compute_md5(file_path):
     import hashlib
@@ -68,11 +70,22 @@ APP_FOLDER = get_user_config_dir("project_context")
 #     return chats
 
 
-def generate_context(proyect_path: Union[str, Path]) -> str:
+def human_to_int(value):
+    value = value.strip().lower()
+    multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+    if value[-1] in multipliers:
+        return int(float(value[:-1]) * multipliers[value[-1]])
+    return int(float(value))
+
+
+def generate_context(proyect_path: Union[str, Path]) -> tuple[str, int]:
     proyect_path = Path(proyect_path) if isinstance(proyect_path, str) else proyect_path
     summary, tree, content = ingest(str(proyect_path))
+
+    estimated_tokens = human_to_int(summary.split()[-1])
     context = tree + "\n\n" + content
-    return context
+    return context, estimated_tokens
 
 
 def save_context(project_path: Union[str, Path], context: str) -> Path:
