@@ -422,3 +422,47 @@ class GoogleDriveManager:
         except Exception as e:
             print(f"Error inesperado al modificar archivo: {e}")
             return None
+
+    def create_file(
+        self, folder_id: str, local_path: Path, mime_type: str
+    ) -> str | None:
+        """
+        Crea un nuevo archivo en Google Drive dentro de una carpeta específica.
+
+        Args:
+            folder_id (str): El ID de la carpeta de destino.
+            local_path (Path): La ruta al archivo local a subir.
+            mime_type (str): El tipo MIME del archivo (ej. 'text/markdown', 'image/jpeg').
+
+        Returns:
+            str | None: El ID del archivo creado en Drive, o None si hubo un error.
+        """
+        if not local_path.exists():
+            print(f"Error: El archivo local '{local_path}' no existe.")
+            return None
+
+        file_metadata = {
+            "name": local_path.name,  # En v3 se usa 'name' en lugar de 'title'
+            "parents": [folder_id],
+            "mimeType": mime_type,
+        }
+
+        try:
+            media = MediaFileUpload(
+                local_path.resolve(), mimetype=mime_type, resumable=True
+            )
+            file = (
+                self.drive_service.files()
+                .create(body=file_metadata, media_body=media, fields="id, name")
+                .execute()
+            )
+            print(
+                f'Archivo subido: "{file.get("name")}" (ID: "{file.get("id")}") en la carpeta {folder_id}.'
+            )
+            return file.get("id")
+        except HttpError as error:
+            print(f"Error al crear archivo '{local_path.name}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al crear archivo: {e}")
+            return None
