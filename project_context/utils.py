@@ -6,8 +6,6 @@ from typing import Optional, Union, cast
 
 from gitingest import ingest
 
-from project_context.models import generate_unique_id
-
 PROMPT_TEMPLATE = """Eres un ingeniero de software senior y experto en análisis de código completo.
 
 A continuación te paso **todo el código fuente de mi proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest). 
@@ -53,21 +51,17 @@ def get_user_config_dir(app_name: str) -> Path:
 
 
 APP_FOLDER = get_user_config_dir("project_context")
-# chat_path_cache = APP_FOLDER / "chat_cache.json"
 
 
-# def save_chats(chats: list[dict], chat_path_cache=chat_path_cache):
-#     chat_path_cache.parent.mkdir(parents=True, exist_ok=True)
-#     with open(chat_path_cache, "w", encoding="utf-8") as f:
-#         json.dump(chats, f, ensure_ascii=False, indent=4)
+def generate_unique_id(path: Union[str, Path]) -> str:
+    """Genera un identificador único a partir del stat del archivo.
 
-
-# def load_chats(chat_path_cache=chat_path_cache) -> list[dict]:
-#     if not chat_path_cache.exists():
-#         return []
-#     with open(chat_path_cache, "r", encoding="utf-8") as f:
-#         chats = json.load(f)
-#     return chats
+    Formato: "<st_dev>-<st_ino>" — robusto contra renombres pero no contra
+    copiar el archivo a otro FS.
+    """
+    p = Path(path) if isinstance(path, str) else path
+    st = p.stat()
+    return f"{st.st_dev}-{st.st_ino}"
 
 
 def human_to_int(value):

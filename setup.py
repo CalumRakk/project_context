@@ -6,7 +6,7 @@ setup(
     author="CalumRakk",
     author_email="leocasti2@gmail.com",
     description="A CLI tool for managing project context with Google AI Studio",
-    packages=["project_context", "project_context.browser"],
+    packages=["project_context"],
     install_requires=[
         "click==8.3.0",
         "gitingest==0.3.1",
