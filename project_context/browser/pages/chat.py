@@ -301,3 +301,8 @@ class ChatBrowser:
         wait_loading_file()
         self.utils.simulate_escape()
         self._debug_screenshot("after_attach_file")
+
+    def go_to_chat(self, chat_id: str):
+        url = f"https://aistudio.google.com/app/prompts/{chat_id}"
+        self.driver.get(url)
+        self._debug_screenshot("go_to_chat")

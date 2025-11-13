@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import click
+
 from project_context.api_drive import GoogleDriveManager
 from project_context.browser import Browser
 from project_context.utils import (
@@ -11,8 +13,69 @@ from project_context.utils import (
     save_project_context_state,
 )
 
-if __name__ == "__main__":
-    project_path = Path(r"D:\github Leo\project_context")
+
+def interactive_session(browser: Browser, project_path: Path, state: dict):
+    """Inicia un bucle interactivo para recibir comandos del usuario."""
+    print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
+    print("\tEscribe 'help' para ver los comandos disponibles.\n")
+
+    while True:
+        try:
+            command_line = input(">> ")
+            if not command_line.strip():
+                continue
+
+            parts = command_line.split(" ", 1)
+            command = parts[0].lower()
+            args = parts[1] if len(parts) > 1 else ""
+
+            if command in ["exit", "quit"]:
+                print("Cerrando navegador y terminando sesión...")
+                browser.close()
+                break
+            elif command == "ask":
+                if not args:
+                    print("Error: El comando 'ask' requiere una pregunta.")
+                    continue
+                print("Enviando prompt...")
+                response, _ = browser.chat.write_prompt(args)
+                print("\nRespuesta de la IA:\n--------------------")
+                print(response)
+                print("--------------------")
+            elif command == "help":
+                print("\nComandos disponibles:")
+                print('  ask "<pregunta>" - Envía una pregunta a la IA.')
+                print("  clear              - Limpia el historial del chat.")
+                print(
+                    "  update             - Revisa y actualiza el contexto si el proyecto cambió."
+                )
+                print("  status             - Muestra el estado de la sesión.")
+                print("  exit / quit        - Cierra la sesión.\n")
+            else:
+                print(f"Comando desconocido: '{command}'")
+
+        except KeyboardInterrupt:
+            print("\nCerrando sesión por interrupción.")
+            browser.close()
+            break
+        except Exception as e:
+            print(f"Ocurrió un error: {e}")
+
+
+@click.command()
+@click.argument(
+    "project_path", type=click.Path(exists=True, file_okay=False, resolve_path=True)
+)
+def main(project_path):
+    """
+    Inicia o actualiza el contexto de un proyecto para Google AI Studio
+    y entra en una sesión interactiva.
+    """
+    cookies_path = r"aistudio.google.com_cookies.txt"
+    browser = Browser(cookies_path=cookies_path)
+    api = GoogleDriveManager()
+
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
     last_modified = project_path.stat().st_mtime
 
     project_context_state = load_project_context_state(project_path)
@@ -21,9 +84,6 @@ if __name__ == "__main__":
         path_context = save_context(project_path, content)
         content_md5 = compute_md5(path_context)
 
-        cookies_path = r"aistudio.google.com_cookies.txt"
-        browser = Browser(cookies_path=cookies_path)
-        api = GoogleDriveManager()
         browser.chat.select_model("Gemini 2.5 Flash")
 
         browser.chat.attach_file(path_context)
@@ -56,6 +116,7 @@ if __name__ == "__main__":
         last_modified_saved = project_context_state.get("last_modified", 0)
         context_md5_saved = project_context_state.get("md5", "")
         file_id_saved = project_context_state.get("file_id", "")
+        chat_id_saved = project_context_state.get("chat_id", "")
 
         current_mtime = project_path.stat().st_mtime
         if current_mtime <= last_modified_saved:
@@ -78,3 +139,7 @@ if __name__ == "__main__":
                 project_context_state["last_modified"] = current_mtime
                 project_context_state["md5"] = content_md5
                 save_project_context_state(project_path, project_context_state)
+
+        browser.chat.go_to_chat(chat_id_saved)
+
+    interactive_session(browser, project_path, project_context_state)
