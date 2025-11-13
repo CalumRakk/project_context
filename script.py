@@ -12,7 +12,7 @@ from project_context.utils import (
 )
 
 if __name__ == "__main__":
-    project_path = Path(r"D:\github Leo\servercontrol")
+    project_path = Path(r"D:\github Leo\project_context")
     last_modified = project_path.stat().st_mtime
 
     project_context_state = load_project_context_state(project_path)
@@ -66,13 +66,13 @@ if __name__ == "__main__":
             api = GoogleDriveManager()
             print("El proyecto ha cambiado. Generando nuevo contexto...")
             content = generate_context(project_path)
-            content_md5 = compute_md5(project_path)
+            path_context = save_context(project_path, content)
+            content_md5 = compute_md5(path_context)
             if content_md5 == context_md5_saved:
                 print(
                     "El contenido del proyecto no ha cambiado. No se requiere actualización."
                 )
             else:
-                path_context = save_context(project_path, content)
                 api.update_file_content(file_id_saved, path_context)
 
                 project_context_state["last_modified"] = current_mtime
