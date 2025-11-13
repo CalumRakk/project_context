@@ -22,9 +22,11 @@ class Parts(BaseModel):
 class chunks_text(BaseModel):
     text: str
     role: Literal["user", "model"]
-    tokenCount: int
+    tokenCount: Optional[int] = None
     finishReason: Optional[str] = None
     parts: Optional[list[Parts]] = None
+    isThought: Optional[bool] = None
+    thinkingBudget: Optional[int] = None
 
 
 class driveDocument(BaseModel):

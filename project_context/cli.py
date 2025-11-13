@@ -14,7 +14,7 @@ from project_context.utils import (
 )
 
 
-def interactive_session(browser: Browser, project_path: Path, state: dict):
+def interactive_session(browser: Browser, api: GoogleDriveManager, state: dict):
     """Inicia un bucle interactivo para recibir comandos del usuario."""
     print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
@@ -51,6 +51,14 @@ def interactive_session(browser: Browser, project_path: Path, state: dict):
                 )
                 print("  status             - Muestra el estado de la sesión.")
                 print("  exit / quit        - Cierra la sesión.\n")
+            elif command == "clear":
+                print("Limpiando historial del chat...")
+                success = api.clear_chat_ia_studio(state["chat_id"])
+                if success:
+                    print("Historial limpiado.")
+                    browser.driver.refresh()
+                else:
+                    print("Error al limpiar el historial.")
             else:
                 print(f"Comando desconocido: '{command}'")
 
@@ -142,4 +150,4 @@ def main(project_path):
 
         browser.chat.go_to_chat(chat_id_saved)
 
-    interactive_session(browser, project_path, project_context_state)
+    interactive_session(browser, api, project_context_state)

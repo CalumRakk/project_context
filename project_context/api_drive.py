@@ -11,7 +11,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 from pydantic import BaseModel
 
 from project_context.schema import ChatIAStudio, FileDrive
@@ -348,4 +348,77 @@ class GoogleDriveManager:
             return None
         except Exception as e:
             print(f"Error inesperado al actualizar archivo: {e}")
+            return None
+
+    def clear_chat_ia_studio(self, chat_id: str) -> bool:
+        """
+        Limpia el contenido de un chat en Google AI Studio sobrescribiéndolo con un JSON vacío.
+
+        Args:
+            chat_id (str): El ID del chat a limpiar.
+
+        Returns:
+            bool: True si la operación fue exitosa, False en caso contrario.
+        """
+
+        metadata = self.get_file_metadata(chat_id)
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat or not metadata:
+            print(f"No se pudo obtener el chat con ID '{chat_id}' para limpiar.")
+            return False
+
+        data = chat.model_dump()
+        chunks = data["chunkedPrompt"]["chunks"][:3]
+        data["chunkedPrompt"]["chunks"] = chunks
+
+        mime_type = metadata["mimeType"]
+        empty_content = json.dumps(data)
+        result = self.update_file_content_from_memory(chat_id, empty_content, mime_type)
+        return True if result else False
+
+    def update_file_content_from_memory(
+        self, file_id: str, string: str, mime_type: str, file_name: str | None = None
+    ) -> str | None:
+        """
+        Actualiza el contenido de un archivo existente en Google Drive desde un stream en memoria.
+
+        Args:
+            file_id (str): El ID del archivo en Drive a actualizar.
+            string (str): El contenido nuevo en formato string.
+            mime_type (str): El tipo MIME del contenido.
+            file_name (str | None): Opcional. Nuevo nombre para el archivo.
+
+        Returns:
+            str | None: El ID del archivo actualizado en Drive, o None si hubo un error.
+        """
+        file_metadata_body = {}
+        if file_name:
+            file_metadata_body["name"] = file_name
+
+        try:
+            # Usa MediaIoBaseUpload para streams en memoria
+            content_stream = io.BytesIO(string.encode("utf-8"))
+            media_body = MediaIoBaseUpload(
+                content_stream, mimetype=mime_type, resumable=True
+            )
+            updated_file = (
+                self.drive_service.files()
+                .update(
+                    fileId=file_id,
+                    media_body=media_body,
+                    body=file_metadata_body,  # Puede ser vacío si solo se actualiza el contenido
+                    fields="id, name, modifiedTime",
+                )
+                .execute()
+            )
+            print(
+                f'Contenido del archivo "{updated_file.get("name")}" (ID: {updated_file.get("id")}) actualizado con éxito desde memoria.'
+            )
+            print(f"Última modificación: {updated_file.get('modifiedTime')}")
+            return updated_file.get("id")
+        except HttpError as error:
+            print(f"Error al modificar archivo '{file_id}': {error}")
+            return None
+        except Exception as e:
+            print(f"Error inesperado al modificar archivo: {e}")
             return None
