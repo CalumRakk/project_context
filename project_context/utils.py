@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional, Union, cast
 
@@ -117,3 +118,37 @@ def load_project_context_state(
         return None
     content = input_path.read_text(encoding="utf-8")
     return json.loads(content)
+
+
+def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> bool:
+    """
+    Devuelve True si algún archivo dentro de `folder` ha sido modificado después de `st_mtime`.
+    Si `gitignore` es True, se respetan las reglas del archivo .gitignore en la raíz de `folder`.
+    """
+    if gitignore:
+        path_gitignore = folder / ".gitignore"
+        if path_gitignore.exists():
+            ignore = [
+                i.strip()
+                for i in path_gitignore.read_text(encoding="utf-8").splitlines()
+                if i.strip() and not i.strip().startswith("#")
+            ]
+        else:
+            ignore = []
+
+    folder = Path(folder)
+    for file in folder.rglob("*"):
+        if not file.is_file():
+            continue
+
+        ruta_rel = str(file.relative_to(folder))
+
+        # Verificamos si coincide con alguno de los patrones a ignorar
+        if gitignore is True:
+            if any(fnmatch(ruta_rel, patron) for patron in ignore):  # type: ignore
+                continue
+
+        fecha_mod = file.stat().st_mtime
+        if fecha_mod > st_mtime:
+            return True
+    return False

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from project_context.api_drive import GoogleDriveManager
+from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
@@ -17,13 +17,14 @@ from project_context.utils import (
     RESPONSE_TEMPLATE,
     compute_md5,
     generate_context,
+    has_files_modified_since,
     load_project_context_state,
     save_context,
     save_project_context_state,
 )
 
 
-def interactive_session(api: GoogleDriveManager, state: dict):
+def interactive_session(api: AIStudioDriveManager, state: dict):
     """Inicia un bucle interactivo para recibir comandos del usuario."""
     print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
@@ -88,9 +89,7 @@ def main(project_path):
     Inicia o actualiza el contexto de un proyecto para Google AI Studio
     y entra en una sesión interactiva.
     """
-    # cookies_path = r"aistudio.google.com_cookies.txt"
-    # browser = Browser(cookies_path=cookies_path)
-    api = GoogleDriveManager()
+    api = AIStudioDriveManager()
 
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
     last_modified = project_path.stat().st_mtime
@@ -101,19 +100,20 @@ def main(project_path):
         path_context = save_context(project_path, content)
         content_md5 = compute_md5(path_context)
 
-        folder = api.find_folder_by_name("Google AI Studio")
-        if not folder:
-            raise ValueError("No se encontró la carpeta 'Google AI Studio' en Drive.")
-
         # crea file context en google drive
         mimetype = "text/plain"
         filename = project_path.name + "_context.txt"
-        document_id = api.create_file(folder.id, path_context, mimetype, filename)
-        if not document_id:
+        document = api.gdm.create_file_from_memory(
+            folder_id=api.ai_studio_folder,
+            file_name=filename,
+            content=content,
+            mime_type=mimetype,
+        )
+        if not document:
             raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
 
         # document
-        drive_document = DriveDocument(id=document_id)
+        drive_document = DriveDocument(id=document["id"])
         chat_file = ChunksFile(
             driveDocument=drive_document, role="user", tokenCount=expected_tokens
         )
@@ -126,7 +126,7 @@ def main(project_path):
             text=RESPONSE_TEMPLATE, role="model", tokenCount=4
         )
 
-        chat_ia_studio = ChatIAStudio(
+        chat_data = ChatIAStudio(
             runSettings=RunSettings(),
             systemInstruction=SystemInstruction(),
             chunkedPrompt=ChunkedPrompt(
@@ -135,10 +135,8 @@ def main(project_path):
             ),
         )
 
-        data = chat_ia_studio.model_dump_json()
-        mimetype = "application/vnd.google-makersuite.prompt"
         filename = project_path.name + "_chat.prompt"
-        chat_id = api.create_file_from_memory(folder.id, data, mimetype, filename)
+        chat_id = api.create_chat_file(file_name=filename, chat_data=chat_data)
         if not chat_id:
             raise ValueError("No se pudo crear el chat en Google Drive.")
 
@@ -147,22 +145,20 @@ def main(project_path):
             "last_modified": last_modified,
             "md5": content_md5,
             "chat_id": chat_id,
-            "file_id": document_id,
+            "file_id": document["id"],
         }
         save_project_context_state(project_path, project_context_state)
     else:
         last_modified_saved = project_context_state.get("last_modified", 0)
         context_md5_saved = project_context_state.get("md5", "")
         file_id_saved = project_context_state.get("file_id", "")
-        chat_id_saved = project_context_state.get("chat_id", "")
 
         current_mtime = project_path.stat().st_mtime
-        if current_mtime <= last_modified_saved:
+        if has_files_modified_since(current_mtime, project_path) is False:
             print(
                 "El proyecto no ha cambiado desde la última vez. No se requiere actualización."
             )
         else:
-            api = GoogleDriveManager()
             print("El proyecto ha cambiado. Generando nuevo contexto...")
             content, expected_tokens = generate_context(project_path)
             path_context = save_context(project_path, content)
@@ -172,7 +168,7 @@ def main(project_path):
                     "El contenido del proyecto no ha cambiado. No se requiere actualización."
                 )
             else:
-                api.update_file_content(file_id_saved, path_context)
+                api.gdm.update_file_from_memory(file_id_saved, content, "text/plain")
 
                 project_context_state["last_modified"] = current_mtime
                 project_context_state["md5"] = content_md5
