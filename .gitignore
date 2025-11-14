@@ -7,3 +7,4 @@ token.json
 !requirements.txt
 *.egg-info
 script.py
+build/

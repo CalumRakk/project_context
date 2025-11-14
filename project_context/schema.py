@@ -29,10 +29,15 @@ class DriveDocument(BaseModel):
     id: str
 
 
-class ChunksFile(BaseModel):
+class ChunksDocument(BaseModel):
     driveDocument: DriveDocument
     role: Literal["user", "model"]
     tokenCount: int
+class ChunksImage(BaseModel):
+    driveImage: DriveDocument
+    role: Literal["user", "model"]
+    tokenCount: int
+
 
 
 class PendingInputs(BaseModel):
@@ -41,7 +46,7 @@ class PendingInputs(BaseModel):
 
 
 class ChunkedPrompt(BaseModel):
-    chunks: list[Union[ChunksText, ChunksFile]] = []
+    chunks: list[Union[ChunksText, ChunksDocument, ChunksImage]] = []
     pendingInputs: list[PendingInputs] = []
 
 
