@@ -6,7 +6,7 @@ from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
-    ChunksFile,
+    ChunksDocument,
     ChunksText,
     DriveDocument,
     RunSettings,
@@ -114,7 +114,7 @@ def main(project_path):
 
         # document
         drive_document = DriveDocument(id=document["id"])
-        chat_file = ChunksFile(
+        chat_file = ChunksDocument(
             driveDocument=drive_document, role="user", tokenCount=expected_tokens
         )
         # user prompt
