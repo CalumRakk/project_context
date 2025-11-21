@@ -4,6 +4,7 @@ from typing import Dict
 import click
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.history import SnapshotManager
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
@@ -131,11 +132,12 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     return state
 
 
-def interactive_session(api: AIStudioDriveManager, state: dict):
+def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
     """Inicia un bucle interactivo para recibir comandos del usuario."""
     print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
 
+    monitor = SnapshotManager(api, project_path, state)
     while True:
         try:
             command_line = input(">> ")
@@ -147,10 +149,21 @@ def interactive_session(api: AIStudioDriveManager, state: dict):
             args = parts[1] if len(parts) > 1 else ""
 
             if command in ["exit", "quit"]:
+                monitor.stop_monitoring()
                 print("Cerrando sesión...")
                 break
+
             elif command == "help":
                 print("\nComandos disponibles:")
+                print(
+                    "  monitor on/off     - Activa/Desactiva el guardado automático de historial."
+                )
+                print(
+                    "  history            - Muestra los puntos de restauración disponibles."
+                )
+                print(
+                    "  restore <id>       - Restaura el chat y contexto a un punto anterior."
+                )
                 print(
                     "  clear              - Limpia el historial del chat en Google Drive."
                 )
@@ -158,23 +171,67 @@ def interactive_session(api: AIStudioDriveManager, state: dict):
                     "  update             - Revisa y actualiza el contexto si el proyecto cambió."
                 )
                 print("  exit / quit        - Cierra la sesión.\n")
+
+            elif command == "monitor":
+                if args == "on":
+                    monitor.start_monitoring()
+                elif args == "off":
+                    monitor.stop_monitoring()
+                else:
+                    print("Uso correcto: monitor on | monitor off")
+
+            elif command == "history":
+                snaps = monitor.list_snapshots()
+                if not snaps:
+                    print("No hay historial disponible.")
+                else:
+                    print(f"\n{'TIMESTAMP (ID)':<20} | {'HORA':<25} | {'CONTEXTO REF'}")
+                    print("-" * 65)
+                    for snap in snaps:
+                        ctx_ref = snap.get("context_md5", "")[:8] + "..."
+                        print(
+                            f"{snap['timestamp']:<20} | {snap['human_time']:<25} | {ctx_ref}"
+                        )
+                    print("")
+
+            elif command == "restore":
+                if not args:
+                    print(
+                        "Debes especificar el TIMESTAMP (cópialo del comando 'history')."
+                    )
+                else:
+                    confirm = input(
+                        f"ESTO SOBREESCRIBIRÁ EL CHAT ACTUAL EN DRIVE. ¿Seguro? (s/n): "
+                    )
+                    if confirm.lower() == "s":
+                        monitor.stop_monitoring()
+                        success = monitor.restore_snapshot(args.strip())
+                        if success:
+                            print(
+                                "Recarga la página de AI Studio para ver los cambios."
+                            )
+
             elif command == "clear":
                 print("Limpiando historial del chat...")
                 success = api.clear_chat_ia_studio(state["chat_id"])
                 if success:
-                    print(
-                        "Historial limpiado. Refresca la página del chat en AI Studio para ver los cambios."
-                    )
+                    print("Historial limpiado.")
                 else:
                     print("Error al limpiar el historial.")
+
             elif command == "update":
-                project_path = Path(state["path"])
+                # Pausamos monitor para evitar detectar el cambio de contexto como un cambio de chat
+                monitor.stop_monitoring()
                 state = update_context(api, project_path, state)
                 save_project_context_state(project_path, state)
+                monitor.state = state
+                print("Puedes reactivar el monitor con 'monitor on'.")
+
             else:
                 print(f"Comando desconocido: '{command}'")
 
         except KeyboardInterrupt:
+            monitor.stop_monitoring()
             print("\nCerrando sesión por interrupción.")
             break
         except Exception as e:
@@ -183,7 +240,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict):
 
 @click.command()
 @click.argument(
-    "project_path", type=click.Path(exists=True, file_okay=False, resolve_path=True)
+    "project_path",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
 )
 def main(project_path):
     """
@@ -202,4 +260,4 @@ def main(project_path):
 
     save_project_context_state(project_path, state)
 
-    interactive_session(api, state)
+    interactive_session(api, state, project_path)

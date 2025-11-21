@@ -175,6 +175,18 @@ class GoogleDriveManager:
             print(f"Error al crear archivo '{file_name}': {error}")
             return None
 
+    def get_file_metadata(self, file_id: str) -> Optional[dict]:
+        """Obtiene solo metadatos esenciales para verificar cambios (evita descargar contenido)."""
+        try:
+            return (
+                self.service.files()
+                .get(fileId=file_id, fields="id, name, modifiedTime, md5Checksum")
+                .execute()
+            )
+        except HttpError as error:
+            print(f"Error al obtener metadata de '{file_id}': {error}")
+            return None
+
 
 class AIStudioDriveManager:
     """
