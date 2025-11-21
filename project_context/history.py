@@ -175,7 +175,7 @@ class SnapshotManager:
         stored_context_path = self.context_store_dir / f"{context_md5}.txt"
         if not stored_context_path.exists():
             print(
-                f"ERROR CRÍTICO: La versión del contexto {context_md5} no se encuentra en el almacén."
+                f"ERROR CRITICO: La versión del contexto {context_md5} no se encuentra en el almacén."
             )
             return False
 

@@ -201,7 +201,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     )
                 else:
                     confirm = input(
-                        f"ESTO SOBREESCRIBIRÁ EL CHAT ACTUAL EN DRIVE. ¿Seguro? (s/n): "
+                        f"ESTO SOBREESCRIBIRA EL CHAT ACTUAL EN DRIVE. ¿Seguro? (s/n): "
                     )
                     if confirm.lower() == "s":
                         monitor.stop_monitoring()
@@ -243,7 +243,13 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     "project_path",
     type=click.Path(exists=True, file_okay=False, resolve_path=True),
 )
-def main(project_path):
+@click.option(
+    "-u",
+    "--update-only",
+    is_flag=True,
+    help="Solo crea o actualiza el contexto y sale sin iniciar la sesión interactiva.",
+)
+def main(project_path, update_only: bool):
     """
     Inicia o actualiza el contexto de un proyecto para Google AI Studio
     y entra en una sesión interactiva.
@@ -260,4 +266,7 @@ def main(project_path):
 
     save_project_context_state(project_path, state)
 
-    interactive_session(api, state, project_path)
+    if update_only:
+        print("Contexto sincronizado correctamente. Saliendo.")
+    else:
+        interactive_session(api, state, project_path)
