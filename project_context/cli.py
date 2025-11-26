@@ -195,17 +195,42 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
             elif command == "history":
                 snaps = monitor.list_snapshots()
+
                 if not snaps:
                     print("No hay historial disponible.")
                 else:
-                    print(f"\n{'TIMESTAMP (ID)':<20} | {'HORA':<25} | {'CONTEXTO REF'}")
+                    limit = 10  # Por defecto mostramos 10
+
+                    if args.strip():
+                        if args.strip() == "all":
+                            limit = len(snaps)
+                        elif args.strip().isdigit():
+                            limit = int(args.strip())
+
+                    total_snaps = len(snaps)
+
+                    subset = snaps[:limit]
+                    subset_reversed = list(reversed(subset))
+
+                    print(
+                        f"\nMostrando los últimos {len(subset)} de {total_snaps} snapshots:"
+                    )
+                    print(f"{'TIMESTAMP (ID)':<20} | {'HORA':<25} | {'CONTEXTO REF'}")
                     print("-" * 65)
-                    for snap in snaps:
+
+                    for snap in subset_reversed:
                         ctx_ref = snap.get("context_md5", "")[:8] + "..."
+                        prefix = " "
                         print(
-                            f"{snap['timestamp']:<20} | {snap['human_time']:<25} | {ctx_ref}"
+                            f"{prefix} {snap['timestamp']:<20} | {snap['human_time']:<25} | {ctx_ref}"
                         )
-                    print("")
+
+                    if limit < total_snaps:
+                        print(
+                            f"... (escribe 'history {total_snaps}' o 'history all' para ver todo)\n"
+                        )
+                    else:
+                        print("")
 
             elif command == "restore":
                 if not args:
