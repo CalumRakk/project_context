@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import Dict
 
@@ -249,7 +250,13 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     is_flag=True,
     help="Solo crea o actualiza el contexto y sale sin iniciar la sesión interactiva.",
 )
-def main(project_path, update_only: bool):
+@click.option(
+    "-i",
+    "--interactive-only",
+    is_flag=True,
+    help="Entra directo a modo interactivo sin escanear ni actualizar el proyecto (requiere contexto previo).",
+)
+def main(project_path, update_only: bool, interactive_only: bool):
     """
     Inicia o actualiza el contexto de un proyecto para Google AI Studio
     y entra en una sesión interactiva.
@@ -258,13 +265,25 @@ def main(project_path, update_only: bool):
     project_path = Path(project_path)
 
     state = load_project_context_state(project_path)
+    if interactive_only:
+        if state is None or not state.get("chat_id"):
+            click.secho(
+                "Error: No se encontró un contexto previo para este proyecto/cuenta.",
+                fg="red",
+            )
+            click.echo(
+                "Ejecuta el comando sin la opción -i primero para crear el contexto."
+            )
+            sys.exit(1)
 
-    if state is None:
-        state = initialize_project_context(api, project_path)
+        print(f"Modo interactivo rápido activado. Omitiendo escaneo de archivos.")
     else:
-        state = update_context(api, project_path, state)
+        if state is None:
+            state = initialize_project_context(api, project_path)
+        else:
+            state = update_context(api, project_path, state)
 
-    save_project_context_state(project_path, state)
+        save_project_context_state(project_path, state)
 
     if update_only:
         print("Contexto sincronizado correctamente. Saliendo.")
