@@ -139,6 +139,10 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
 
     monitor = SnapshotManager(api, project_path, state)
+    if state.get("monitor_active", False):
+        print("[Estado guardado] Reactivando monitor automáticamente...")
+        monitor.start_monitoring()
+
     while True:
         try:
             command_line = input(">> ")
@@ -176,8 +180,16 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             elif command == "monitor":
                 if args == "on":
                     monitor.start_monitoring()
+                    if not state.get("monitor_active"):
+                        state["monitor_active"] = True
+                        save_project_context_state(project_path, state)
+                        print("(Estado 'monitor on' guardado para futuras sesiones)")
                 elif args == "off":
                     monitor.stop_monitoring()
+                    if state.get("monitor_active"):
+                        state["monitor_active"] = False
+                        save_project_context_state(project_path, state)
+                        print("(Estado 'monitor off' guardado)")
                 else:
                     print("Uso correcto: monitor on | monitor off")
 
