@@ -217,15 +217,17 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             print(f"Error: {e}")
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
-@click.option(
-    "-p",
-    "--path",
-    "project_path",
-    type=click.Path(exists=True, file_okay=False),
-    default=".",
-    help="Ruta del proyecto a analizar.",
+@click.group()
+def main():
+    """
+    Herramienta CLI para gestionar contexto de proyecto en Google AI Studio.
+    """
+    pass
+
+
+@main.command(name="run")
+@click.argument(
+    "project_path", type=click.Path(exists=True, file_okay=False), required=True
 )
 @click.option(
     "-u", "--update-only", is_flag=True, help="Solo crea/actualiza el contexto y sale."
@@ -233,16 +235,14 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 @click.option(
     "-i", "--interactive-only", is_flag=True, help="Entra directo a modo interactivo."
 )
-def main(ctx, project_path, update_only, interactive_only):
+def run_command(project_path, update_only, interactive_only):
     """
-    Herramienta CLI para gestionar contexto de proyecto en Google AI Studio.
-    Soporta múltiples perfiles de usuario.
-    """
-    # Si se invocó un subcomando (ej: 'project_context profile list'), salimos de aquí.
-    if ctx.invoked_subcommand is not None:
-        return
+    Analiza y sincroniza el proyecto en la ruta indicada.
 
+    Uso: project_context run .
+    """
     project_path = Path(project_path).resolve()
+
     try:
         api = AIStudioDriveManager()
     except Exception as e:
@@ -301,7 +301,7 @@ def add_profile(name):
     profile_manager.set_active_profile(name)
     click.secho(f"Perfil '{name}' creado y activado.", fg="green")
     click.echo(
-        "La próxima vez que ejecutes 'project_context .', se te pedirá autenticación."
+        "La próxima vez que ejecutes 'project_context run .', se te pedirá autenticación."
     )
 
 
@@ -328,7 +328,7 @@ def profile_info():
     click.echo(f"\n--- 👤 Perfil Actual: {name} ---")
     click.echo(f"Datos:      {working_dir}")
     click.echo(f"Secretos:   {secrets_type}")
-    click.echo(f"   └─ Ruta:    {secrets_path}")
+    click.echo(f"   └── Ruta:    {secrets_path}")
 
     if token_path.exists():
         click.secho("Estado:     Sesión activa (Token existe)", fg="green")
@@ -342,7 +342,7 @@ def profile_info():
 def set_secrets(secrets_path):
     """
     Instala un client_secrets.json específico para este perfil.
-    Útil si este perfil usa una App de Google Cloud distinta a la global.
+    Util si este perfil usa una App de Google Cloud distinta a la global.
     """
     target_path = profile_manager.get_working_dir() / "client_secrets.json"
     shutil.copy(secrets_path, target_path)
