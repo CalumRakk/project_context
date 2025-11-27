@@ -10,19 +10,24 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.schema import ChatIAStudio
-from project_context.utils import get_user_config_dir
+from project_context.utils import profile_manager
 
 
 class GoogleDriveManager:
     SCOPES = ["https://www.googleapis.com/auth/drive"]
 
     def __init__(self):
-        """Inicializa el cliente de Drive y se autentica."""
-        self.config_dir = get_user_config_dir("project_context")
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        """Inicializa el cliente de Drive y se autentica usando el perfil activo."""
+        self.profile_name = profile_manager.get_active_profile_name()
+        self.working_dir = profile_manager.get_working_dir()
 
-        self.client_secrets_file = self.config_dir / "client_secrets.json"
-        self.token_file = self.config_dir / "token.json"
+        # Estrategia de Cascada para Secretos
+        self.client_secrets_file, source_type = profile_manager.resolve_secrets_file()
+
+        # El token siempre es específico del perfil
+        self.token_file = self.working_dir / "token.json"
+
+        print(f"Perfil activo: [{self.profile_name}]")
 
         self.credentials = self._authenticate()
         self.service = build("drive", "v3", credentials=self.credentials)
@@ -42,17 +47,18 @@ class GoogleDriveManager:
                     creds.refresh(Request())
                     print("Credenciales de Drive refrescadas.")
                 except Exception as e:
-                    print(
-                        f"Error al refrescar credenciales: {e}. Se requiere re-autenticación."
-                    )
+                    print(f"Error al refrescar: {e}. Se requiere re-autenticación.")
                     creds = None
 
             if not creds:
                 if not self.client_secrets_file.exists():
                     raise FileNotFoundError(
-                        f"El archivo '{self.client_secrets_file}' no se encontró. "
-                        "Por favor, descárgalo de Google Cloud Console y colócalo en esa ruta."
+                        f"No se encontró 'client_secrets.json'.\n"
+                        f"Ruta esperada: {self.client_secrets_file}\n"
+                        f"Por favor, coloca el archivo JSON en la carpeta global ({profile_manager.root_dir})\n"
+                        f"o en la carpeta del perfil actual ({self.working_dir})."
                     )
+
                 print("Iniciando flujo de autenticación de Google Drive...")
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.client_secrets_file, self.SCOPES
@@ -60,6 +66,7 @@ class GoogleDriveManager:
                 creds = cast(Credentials, flow.run_local_server(port=0))
                 print("Autenticación completada.")
 
+            # Guardamos el token en la carpeta del perfil
             with open(self.token_file, "w") as token:
                 token.write(creds.to_json())
             print(f"Credenciales guardadas en '{self.token_file}'.")
@@ -67,7 +74,6 @@ class GoogleDriveManager:
         return creds
 
     def list_files(self, folder_id: str = "root") -> list[dict]:
-        """Lista archivos y carpetas en una carpeta específica, devolviendo los datos crudos."""
         items = []
         page_token = None
         try:
@@ -92,7 +98,6 @@ class GoogleDriveManager:
             return []
 
     def find_item_by_name(self, name: str, parent_id: str = "root") -> Optional[dict]:
-        """Busca un archivo o carpeta por nombre en una carpeta padre."""
         try:
             response = (
                 self.service.files()
@@ -110,7 +115,6 @@ class GoogleDriveManager:
             return None
 
     def get_file_content(self, file_id: str) -> Optional[bytes]:
-        """Descarga el contenido crudo (bytes) de un archivo."""
         try:
             request = self.service.files().get_media(fileId=file_id)
             file_stream = io.BytesIO()
@@ -118,7 +122,7 @@ class GoogleDriveManager:
             done = False
             while not done:
                 status, done = downloader.next_chunk()
-                print(f"Descargando... {int(status.progress() * 100)}%")
+                # print(f"Descargando... {int(status.progress() * 100)}%")
             return file_stream.getvalue()
         except HttpError as error:
             print(f"Error HTTP al descargar archivo '{file_id}': {error}")
@@ -127,7 +131,6 @@ class GoogleDriveManager:
     def update_file_from_memory(
         self, file_id: str, content: str, mime_type: str
     ) -> Optional[dict]:
-        """Actualiza el contenido de un archivo desde un string en memoria."""
         try:
             content_stream = io.BytesIO(content.encode("utf-8"))
             media_body = MediaIoBaseUpload(
@@ -142,9 +145,7 @@ class GoogleDriveManager:
                 )
                 .execute()
             )
-            print(
-                f'Contenido del archivo "{updated_file.get("name")}" actualizado con éxito.'
-            )
+            print(f'Contenido del archivo "{updated_file.get("name")}" actualizado.')
             return updated_file
         except HttpError as error:
             print(f"Error al modificar archivo '{file_id}': {error}")
@@ -153,7 +154,6 @@ class GoogleDriveManager:
     def create_file_from_memory(
         self, folder_id: str, file_name: str, content: str, mime_type: str
     ) -> Optional[dict]:
-        """Crea un nuevo archivo desde un string en memoria."""
         file_metadata = {
             "name": file_name,
             "parents": [folder_id],
@@ -176,7 +176,6 @@ class GoogleDriveManager:
             return None
 
     def get_file_metadata(self, file_id: str) -> Optional[dict]:
-        """Obtiene solo metadatos esenciales para verificar cambios (evita descargar contenido)."""
         try:
             return (
                 self.service.files()
@@ -189,12 +188,6 @@ class GoogleDriveManager:
 
 
 class AIStudioDriveManager:
-    """
-    Gestiona las operaciones específicas de la aplicación con Google AI Studio en Drive.
-    Utiliza GoogleDriveManager para las interacciones de bajo nivel con la API.
-    Esta clase conoce la estructura de los chats, la carpeta "Google AI Studio", etc.
-    """
-
     AI_STUDIO_FOLDER_NAME = "Google AI Studio"
 
     def __init__(self):
@@ -206,8 +199,7 @@ class AIStudioDriveManager:
             )
 
     def _find_ai_studio_folder(self) -> Optional[str]:
-        """Encuentra la carpeta raíz de Google AI Studio."""
-        print(f"Buscando la carpeta '{self.AI_STUDIO_FOLDER_NAME}'...")
+        # print(f"Buscando la carpeta '{self.AI_STUDIO_FOLDER_NAME}'...")
         folder = self.gdm.find_item_by_name(self.AI_STUDIO_FOLDER_NAME)
         if not folder:
             print(f"La carpeta '{self.AI_STUDIO_FOLDER_NAME}' no fue encontrada.")
@@ -217,9 +209,6 @@ class AIStudioDriveManager:
         return folder.get("id")
 
     def get_chat_ia_studio(self, chat_id: str) -> Optional[ChatIAStudio]:
-        """
-        Obtiene y parsea el contenido de un archivo de chat de AI Studio.
-        """
         content_bytes = self.gdm.get_file_content(chat_id)
         if not content_bytes:
             print(f"No se pudo obtener el contenido del chat con ID '{chat_id}'.")
@@ -232,19 +221,13 @@ class AIStudioDriveManager:
             return None
 
     def clear_chat_ia_studio(self, chat_id: str) -> bool:
-        """
-        Limpia el historial de un chat, conservando las 3 primeras instrucciones (contexto y prompts iniciales).
-        """
         print(f"Intentando limpiar el chat con ID: {chat_id}")
         chat = self.get_chat_ia_studio(chat_id)
         if not chat:
             return False
 
-        # Mantiene solo los 3 primeros chunks (archivo de contexto, prompt del usuario, respuesta del modelo)
         original_chunks_count = len(chat.chunkedPrompt.chunks)
         chat.chunkedPrompt.chunks = chat.chunkedPrompt.chunks[:3]
-
-        # Convierte el objeto Pydantic modificado de nuevo a un string JSON
         cleared_content_json = chat.model_dump_json()
 
         result = self.gdm.update_file_from_memory(
@@ -254,20 +237,15 @@ class AIStudioDriveManager:
         )
 
         if result:
-            print(
-                f"Chat limpiado con éxito. Se eliminaron {original_chunks_count - 3} mensajes."
-            )
+            print(f"Chat limpiado. Mensajes eliminados: {original_chunks_count - 3}")
             return True
         else:
-            print("Falló la actualización del archivo del chat en Google Drive.")
+            print("Falló la actualización del archivo del chat.")
             return False
 
     def create_chat_file(
         self, file_name: str, chat_data: ChatIAStudio
     ) -> Optional[str]:
-        """
-        Crea un nuevo archivo de chat en la carpeta de AI Studio.
-        """
         content_json = chat_data.model_dump_json()
         result = self.gdm.create_file_from_memory(
             folder_id=self.ai_studio_folder,

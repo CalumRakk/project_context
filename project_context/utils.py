@@ -1,9 +1,10 @@
 import json
 import os
+import shutil
 import sys
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Optional, Union, cast
+from typing import Optional, Tuple, Union, cast
 
 from gitingest import ingest
 
@@ -29,6 +30,99 @@ INSTRUCCIONES OBLIGATORIAS:
 RESPONSE_TEMPLATE = """Entendido, proyecto cargado."""
 
 
+def get_app_root_dir() -> Path:
+    """Devuelve la raíz de configuración global (~/.config/project_context)."""
+    if sys.platform.startswith("win"):
+        base = Path(cast(str, os.getenv("APPDATA")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "project_context"
+
+
+class ProfileManager:
+    def __init__(self):
+        self.root_dir = get_app_root_dir()
+        self.profiles_dir = self.root_dir / "profiles"
+        self.config_file = self.root_dir / "global_config.json"
+        self._ensure_structure()
+
+    def _ensure_structure(self):
+        """Crea la estructura base y migra datos antiguos si existen."""
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.profiles_dir.mkdir(exist_ok=True)
+
+        # Lógica de Migración Automática
+        old_token = self.root_dir / "token.json"
+        # Buscamos carpetas que parezcan contextos (tienen guiones, ej: "2050-343")
+        # y que no sean la carpeta 'profiles'.
+        old_items = [
+            x
+            for x in self.root_dir.iterdir()
+            if x.is_dir() and "-" in x.name and x.name != "profiles"
+        ]
+
+        # Si encontramos datos viejos en la raíz, los movemos a 'default'
+        if (old_token.exists() or old_items) and not (
+            self.profiles_dir / "default"
+        ).exists():
+            print("Detectada estructura antigua. Migrando al perfil 'default'...")
+            default_dir = self.profiles_dir / "default"
+            default_dir.mkdir(parents=True, exist_ok=True)
+
+            if old_token.exists():
+                shutil.move(str(old_token), str(default_dir / "token.json"))
+
+            for item in old_items:
+                shutil.move(str(item), str(default_dir / item.name))
+
+            self.set_active_profile("default")
+
+    def get_active_profile_name(self) -> str:
+        if not self.config_file.exists():
+            return "default"
+        try:
+            config = json.loads(self.config_file.read_text())
+            return config.get("current_profile", "default")
+        except:
+            return "default"
+
+    def set_active_profile(self, profile_name: str):
+        config = {"current_profile": profile_name}
+        self.config_file.write_text(json.dumps(config))
+        (self.profiles_dir / profile_name).mkdir(parents=True, exist_ok=True)
+
+    def get_working_dir(self) -> Path:
+        """Devuelve la ruta donde se guardan los datos del perfil actual."""
+        profile = self.get_active_profile_name()
+        path = self.profiles_dir / profile
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def list_profiles(self) -> list[str]:
+        return [d.name for d in self.profiles_dir.iterdir() if d.is_dir()]
+
+    def resolve_secrets_file(self) -> Tuple[Path, str]:
+        """
+        Estrategia de Cascada:
+        1. Busca client_secrets.json en la carpeta del perfil.
+        2. Si no está, busca en la carpeta global.
+        Retorna (Path, Tipo_Origen)
+        """
+        profile_dir = self.get_working_dir()
+        specific_secrets = profile_dir / "client_secrets.json"
+
+        if specific_secrets.exists():
+            return specific_secrets, "Perfil (Específico)"
+
+        global_secrets = self.root_dir / "client_secrets.json"
+        return global_secrets, "Global (Compartido)"
+
+
+profile_manager = ProfileManager()
+
+
 def compute_md5(file_path):
     import hashlib
 
@@ -39,27 +133,7 @@ def compute_md5(file_path):
     return hash_md5.hexdigest()
 
 
-def get_user_config_dir(app_name: str) -> Path:
-    if sys.platform.startswith("win"):
-        # En Windows se usa APPDATA → Roaming
-        return Path(cast(str, os.getenv("APPDATA"))) / app_name
-    elif sys.platform == "darwin":
-        # En macOS
-        return Path.home() / "Library" / "Application Support" / app_name
-    else:
-        # En Linux / Unix
-        return Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / app_name
-
-
-APP_FOLDER = get_user_config_dir("project_context")
-
-
 def generate_unique_id(path: Union[str, Path]) -> str:
-    """Genera un identificador único a partir del stat del archivo.
-
-    Formato: "<st_dev>-<st_ino>" — robusto contra renombres pero no contra
-    copiar el archivo a otro FS.
-    """
     p = Path(path) if isinstance(path, str) else path
     st = p.stat()
     return f"{st.st_dev}-{st.st_ino}"
@@ -68,7 +142,6 @@ def generate_unique_id(path: Union[str, Path]) -> str:
 def human_to_int(value):
     value = value.strip().lower()
     multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
-
     if value[-1] in multipliers:
         return int(float(value[:-1]) * multipliers[value[-1]])
     return int(float(value))
@@ -77,7 +150,6 @@ def human_to_int(value):
 def generate_context(proyect_path: Union[str, Path]) -> tuple[str, int]:
     proyect_path = Path(proyect_path) if isinstance(proyect_path, str) else proyect_path
     summary, tree, content = ingest(str(proyect_path))
-
     estimated_tokens = human_to_int(summary.split()[-1])
     context = tree + "\n\n" + content
     return context, estimated_tokens
@@ -85,10 +157,11 @@ def generate_context(proyect_path: Union[str, Path]) -> tuple[str, int]:
 
 def save_context(project_path: Union[str, Path], context: str) -> Path:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
-
     inodo = generate_unique_id(project_path)
 
-    output = APP_FOLDER / inodo / f"project_context.txt"
+    # USAMOS EL DIRECTORIO DEL PERFIL
+    base_dir = profile_manager.get_working_dir()
+    output = base_dir / inodo / f"project_context.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(context, encoding="utf-8")
     return output
@@ -98,22 +171,20 @@ def save_project_context_state(
     project_path: Union[str, Path], project_context_state: dict
 ):
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
-
     inodo = generate_unique_id(project_path)
 
-    output = APP_FOLDER / inodo / f"project_context_state.json"
+    base_dir = profile_manager.get_working_dir()
+    output = base_dir / inodo / f"project_context_state.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(project_context_state), encoding="utf-8")
 
 
-def load_project_context_state(
-    project_path: Union[str, Path],
-) -> Optional[dict]:
+def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
-
     inodo = generate_unique_id(project_path)
 
-    input_path = APP_FOLDER / inodo / f"project_context_state.json"
+    base_dir = profile_manager.get_working_dir()
+    input_path = base_dir / inodo / f"project_context_state.json"
     if not input_path.exists():
         return None
     content = input_path.read_text(encoding="utf-8")
@@ -121,10 +192,6 @@ def load_project_context_state(
 
 
 def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> bool:
-    """
-    Devuelve True si algún archivo dentro de `folder` ha sido modificado después de `st_mtime`.
-    Si `gitignore` es True, se respetan las reglas del archivo .gitignore en la raíz de `folder`.
-    """
     if gitignore:
         path_gitignore = folder / ".gitignore"
         if path_gitignore.exists():
@@ -140,14 +207,10 @@ def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> b
     for file in folder.rglob("*"):
         if not file.is_file():
             continue
-
         ruta_rel = str(file.relative_to(folder))
-
-        # Verificamos si coincide con alguno de los patrones a ignorar
         if gitignore is True:
             if any(fnmatch(ruta_rel, patron) for patron in ignore):  # type: ignore
                 continue
-
         fecha_mod = file.stat().st_mtime
         if fecha_mod > st_mtime:
             return True
