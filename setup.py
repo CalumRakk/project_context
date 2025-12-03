@@ -9,7 +9,7 @@ setup(
     packages=["project_context"],
     install_requires=[
         "click==8.3.0",
-        "gitingest==0.3.1",
+        "gitingest @ git+https://github.com/CalumRakk/gitingest.git@fix/windows-encoding-support",
         "google-api-python-client==2.187.0",
     ],
     keywords="cli google-ai-studio project-context",
