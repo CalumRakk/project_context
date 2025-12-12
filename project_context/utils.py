@@ -180,7 +180,9 @@ def save_project_context_state(
 
 
 def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]:
+    """Devuelve un diccionario con el estado del proyecto."""
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    # TODO: Cambiar inodo por otra forma de identificar el proyecto.
     inodo = generate_unique_id(project_path)
 
     base_dir = profile_manager.get_working_dir()

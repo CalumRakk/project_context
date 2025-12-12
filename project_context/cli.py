@@ -123,7 +123,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     if state.get("monitor_active", False):
         print("[Estado guardado] Reactivando monitor automáticamente...")
         monitor.start_monitoring()
-
+    chat_id = state.get("chat_id")
+    print(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
     while True:
         try:
             command_line = input(">> ")
