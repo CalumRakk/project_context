@@ -210,7 +210,10 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
             else:
                 print(f"Comando desconocido: '{command}'")
-
+        except EOFError:
+            monitor.stop_monitoring()
+            print("\nTerminal cerrada. Saliendo...")
+            break
         except KeyboardInterrupt:
             monitor.stop_monitoring()
             break
