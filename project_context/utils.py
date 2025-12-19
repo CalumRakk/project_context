@@ -4,7 +4,7 @@ import shutil
 import sys
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 from gitingest import ingest
 
@@ -147,9 +147,27 @@ def human_to_int(value):
     return int(float(value))
 
 
-def generate_context(proyect_path: Union[str, Path]) -> tuple[str, int]:
-    proyect_path = Path(proyect_path) if isinstance(proyect_path, str) else proyect_path
-    summary, tree, content = ingest(str(proyect_path))
+def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
+    """Lee patrones de un archivo de ignore (gitignore o contextignore)."""
+    path_file = folder / filename
+    if path_file.exists():
+        return [
+            i.strip()
+            for i in path_file.read_text(encoding="utf-8").splitlines()
+            if i.strip() and not i.strip().startswith("#")
+        ]
+    return []
+
+
+def generate_context(project_path: Union[str, Path]) -> tuple[str, int]:
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+
+    custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+
+    summary, tree, content = ingest(
+        str(project_path), exclude_patterns=set(custom_ignores)
+    )
+
     estimated_tokens = human_to_int(summary.split()[-1])
     context = tree + "\n\n" + content
     return context, estimated_tokens
