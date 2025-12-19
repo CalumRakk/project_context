@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
 from project_context.api_drive import AIStudioDriveManager
 from project_context.utils import generate_unique_id, profile_manager
 
@@ -87,7 +88,10 @@ class SnapshotManager:
             return True
         return False
 
-    def create_snapshot(self, mod_time_str: str):
+    def create_snapshot(self, mod_time_str: str, message: Optional[str] = None):
+        """
+        Crea el snapshot físico. Acepta un mensaje opcional.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         snap_folder = self.snapshots_dir / timestamp
         snap_folder.mkdir(parents=True, exist_ok=True)
@@ -111,9 +115,31 @@ class SnapshotManager:
                 "human_time": datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
                 "drive_modified_time": mod_time_str,
                 "context_md5": current_md5,
+                "message": message,
             }
             (snap_folder / "info.json").write_text(json.dumps(info, indent=2))
-            print(".", end="", flush=True)
+
+            if message:
+                print(f" Snapshot manual '{message}' creado exitosamente.")
+            else:
+                print(".", end="", flush=True)
+
+    def create_named_snapshot(self, message: str):
+        """
+        Fuerza la creación de un snapshot con un nombre/mensaje,
+        obteniendo la fecha de modificación actual de Drive.
+        """
+        chat_id = self.state.get("chat_id")
+        if not chat_id:
+            print("Error: No hay chat ID activo.")
+            return
+
+        metadata = self.api.gdm.get_file_metadata(chat_id)
+        mod_time = (
+            metadata.get("modifiedTime", "Manual Save") if metadata else "Unknown"
+        )
+
+        self.create_snapshot(mod_time, message=message)
 
     def list_snapshots(self) -> List[dict]:
         snaps = []

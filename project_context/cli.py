@@ -143,11 +143,20 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             elif command == "help":
                 print("\nComandos disponibles:")
                 print("  monitor on/off     - Auto-guardado de historial.")
+                print("  save <mensaje>     - Guardar snapshot manual con nombre.")
                 print("  history [N|all]    - Ver puntos de restauración.")
                 print("  restore <id>       - Restaurar chat y contexto.")
                 print("  clear              - Limpiar historial del chat en Drive.")
                 print("  update             - Forzar actualización de contexto.")
                 print("  exit / quit        - Salir.\n")
+
+            elif command == "save":
+                if not args.strip():
+                    print("Por favor, escribe un mensaje para identificar el guardado.")
+                    print("Ejemplo: save refactor login")
+                else:
+                    print(f"Guardando estado actual como: '{args.strip()}'...")
+                    monitor.create_named_snapshot(args.strip())
 
             elif command == "monitor":
                 if args == "on":
@@ -177,10 +186,13 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
                     subset = list(reversed(snaps[:limit]))
                     print(f"\nMostrando últimos {len(subset)} snapshots:")
-                    print(f"{'TIMESTAMP (ID)':<20} | {'HORA':<25}")
-                    print("-" * 50)
+                    print(f"{'TIMESTAMP (ID)':<16} | {'HORA':<20} | {'MENSAJE'}")
+                    print("-" * 70)
                     for snap in subset:
-                        print(f" {snap['timestamp']:<20} | {snap['human_time']:<25}")
+                        msg = snap.get("message") or "-"
+                        print(
+                            f" {snap['timestamp']:<16} | {snap['human_time']:<20} | {msg}"
+                        )
                     print("")
 
             elif command == "restore":
