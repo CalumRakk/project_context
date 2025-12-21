@@ -46,6 +46,7 @@ class ProfileManager:
         self.root_dir = get_app_root_dir()
         self.profiles_dir = self.root_dir / "profiles"
         self.config_file = self.root_dir / "global_config.json"
+        self._temp_profile: Optional[str] = None
         self._ensure_structure()
 
     def _ensure_structure(self):
@@ -79,7 +80,14 @@ class ProfileManager:
 
             self.set_active_profile("default")
 
+    def set_temporary_profile(self, profile_name: str):
+        """Establece un perfil activo solo para la ejecución actual (en memoria)."""
+        self._temp_profile = profile_name
+
     def get_active_profile_name(self) -> str:
+        if self._temp_profile:
+            return self._temp_profile
+
         if not self.config_file.exists():
             return "default"
         try:

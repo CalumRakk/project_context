@@ -251,13 +251,28 @@ def main():
 @click.option(
     "-i", "--interactive-only", is_flag=True, help="Entra directo a modo interactivo."
 )
-def run_command(project_path, update_only, interactive_only):
+@click.option(
+    "--use",
+    help="Usa un perfil específico temporalmente para esta ejecución.",
+    default=None,
+)
+def run_command(project_path, update_only, interactive_only, use):
     """
     Analiza y sincroniza el proyecto en la ruta indicada.
 
     Uso: project_context run .
     """
     project_path = Path(project_path).resolve()
+
+    if use:
+        available_profiles = profile_manager.list_profiles()
+        if use not in available_profiles:
+            click.secho(f"Error: El perfil de usuario '{use}' no existe.", fg="red")
+            click.echo(f"Perfiles disponibles: {', '.join(available_profiles)}")
+            sys.exit(1)
+
+        profile_manager.set_temporary_profile(use)
+        click.secho(f"Usando perfil temporal: {use}", fg="yellow")
 
     try:
         api = AIStudioDriveManager()
