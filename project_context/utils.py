@@ -243,3 +243,23 @@ def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> b
         if fecha_mod > st_mtime:
             return True
     return False
+
+
+def get_custom_prompt(project_path: Union[str, Path]) -> str:
+    """
+    Busca un archivo '.contextprompt' en la raíz del proyecto.
+    Si existe, usa su contenido. Si no, usa el template por defecto.
+    """
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    prompt_file = project_path / ".contextprompt"
+
+    if prompt_file.exists() and prompt_file.is_file():
+        try:
+            content = prompt_file.read_text(encoding="utf-8").strip()
+            if content:
+                print(f"Usando prompt personalizado desde: {prompt_file.name}")
+                return content
+        except Exception as e:
+            print(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
+
+    return PROMPT_TEMPLATE

@@ -17,10 +17,10 @@ from project_context.schema import (
     SystemInstruction,
 )
 from project_context.utils import (
-    PROMPT_TEMPLATE,
     RESPONSE_TEMPLATE,
     compute_md5,
     generate_context,
+    get_custom_prompt,
     has_files_modified_since,
     load_project_context_state,
     profile_manager,
@@ -45,14 +45,14 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     )
     if not document or "id" not in document:
         raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
-
+    prompt_text = get_custom_prompt(project_path)
     drive_document = DriveDocument(id=document["id"])
     chat_file = ChunksDocument(
         driveDocument=drive_document, role="user", tokenCount=expected_tokens
     )
-    chunks_text_prompt = ChunksText(text=PROMPT_TEMPLATE, role="user", tokenCount=248)
+    chunks_text_prompt = ChunksText(text=prompt_text, role="user", tokenCount=None)
     chunks_text_response = ChunksText(
-        text=RESPONSE_TEMPLATE, role="model", tokenCount=4
+        text=RESPONSE_TEMPLATE, role="model", tokenCount=None
     )
 
     chat_data = ChatIAStudio(
