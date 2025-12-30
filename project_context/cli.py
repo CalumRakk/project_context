@@ -1,5 +1,6 @@
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -151,6 +152,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 print("  restore <id>       - Restaurar chat y contexto.")
                 print("  clear              - Limpiar historial del chat en Drive.")
                 print("  update             - Forzar actualización de contexto.")
+                print("  reset              - Actualiza contexto y limpia el chat.")
+                print("  help               - Mostrar ayuda.")
                 print("  exit / quit        - Salir.\n")
 
             elif command == "save":
@@ -223,6 +226,30 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 monitor.state = state
                 print("Puedes reactivar el monitor con 'monitor on'.")
 
+            elif command == "reset":
+                monitor.stop_monitoring()
+                print("Iniciando reinicio de sesión...")
+                date_session_reset = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                monitor.create_named_snapshot(f"ANTES DEL RESET {date_session_reset}")
+
+                try:
+                    state = update_context(api, project_path, state)
+                    save_project_context_state(project_path, state)
+                    monitor.state = state
+                except Exception as e:
+                    print(f"Error actualizando contexto: {e}")
+                    continue
+
+                if api.clear_chat_ia_studio(state["chat_id"]):
+                    print("Chat limpiado.")
+                else:
+                    print("No se pudo limpiar el chat completamente.")
+
+                if state.get("monitor_active", False):
+                    monitor.start_monitoring()
+                    print("Monitor reactivado.")
+
+                print("\n ¡Sesión reiniciada! Contexto actualizado y memoria limpia.")
             else:
                 print(f"Comando desconocido: '{command}'")
         except EOFError:
