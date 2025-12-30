@@ -161,7 +161,7 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
     if path_file.exists():
         return [
             i.strip()
-            for i in path_file.read_text(encoding="utf-8").splitlines()
+            for i in path_file.read_text(encoding="utf-8").splitlines() + [filename]
             if i.strip() and not i.strip().startswith("#")
         ]
     return []

@@ -124,10 +124,13 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
         print("[Estado guardado] Reactivando monitor automáticamente...")
         monitor.start_monitoring()
     chat_id = state.get("chat_id")
+    consecutive_errors = 0
+
     print(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
     while True:
         try:
             command_line = input(">> ")
+            consecutive_errors = 0
             if not command_line.strip():
                 continue
 
@@ -230,7 +233,16 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             monitor.stop_monitoring()
             break
         except Exception as e:
+            consecutive_errors += 1
             print(f"Error: {e}")
+
+            if consecutive_errors > 10:
+                print("\n[SISTEMA] Se detectó un bucle de errores incontrolable.")
+                print(
+                    "Es probable que la terminal se haya desconectado. Forzando salida."
+                )
+                monitor.stop_monitoring()
+                sys.exit(1)
 
 
 @click.group()

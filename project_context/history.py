@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
 from project_context.api_drive import AIStudioDriveManager
 from project_context.utils import generate_unique_id, profile_manager
 
@@ -41,10 +40,13 @@ class SnapshotManager:
         print(f"\n[Auto-Snapshot] Activado. Verificando cambios cada {self.interval}s.")
 
     def stop_monitoring(self):
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.0)
-        print("\n[Auto-Snapshot] Detenido.")
+        try:
+            self.running = False
+            if self.thread:
+                self.thread.join(timeout=1.0)
+            print("\n[Auto-Snapshot] Detenido.")
+        except Exception as e:
+            print(f"\n[Error Auto-Snapshot]: {e}")
 
     def _loop(self):
         while self.running:
