@@ -1,5 +1,8 @@
+import copy
+import os
 import shutil
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -12,6 +15,7 @@ from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
+    ChunksImage,
     ChunksText,
     DriveDocument,
     RunSettings,
@@ -28,6 +32,203 @@ from project_context.utils import (
     save_context,
     save_project_context_state,
 )
+
+if sys.platform.startswith("win"):
+    os.system("chcp 65001 > nul")
+    # Reconfigurar la salida estándar de Python a UTF-8
+    if sys.stdout.encoding != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore
+    if sys.stderr.encoding != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore
+
+
+def format_chunk_row(index: int, chunk) -> str:
+    """Formatea una fila para la tabla de resumen del editor."""
+    role = getattr(chunk, "role", "unknown")
+
+    if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
+        ctype = "FILE"
+        tokens = f"{getattr(chunk, 'tokenCount', 0)}t"
+        snippet = f"[ID: {chunk.driveDocument.id}] (Contexto/Archivo)"
+    elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
+        ctype = "IMG "
+        tokens = f"{getattr(chunk, 'tokenCount', 0)}t"
+        snippet = "[Imagen adjunta]"
+    elif isinstance(chunk, ChunksText) or hasattr(chunk, "text"):
+        ctype = "TEXT"
+        t_count = getattr(chunk, "tokenCount", None)
+        tokens = f"{t_count}t" if t_count is not None else "? t"
+        raw_text = chunk.text.replace("\n", " ").replace("\r", "")
+        snippet = (raw_text[:60] + "...") if len(raw_text) > 60 else raw_text
+    else:
+        ctype = "??? "
+        tokens = "-"
+        snippet = str(chunk)
+
+    return f" {index:<3} | {role:<6} | {ctype:<5} | {tokens:<8} | {snippet}"
+
+
+def get_full_content_for_pager(chunk) -> str:
+    """Prepara el contenido completo para el paginador (view)."""
+    output = []
+    output.append("=" * 80)
+    output.append(f" ROL: {getattr(chunk, 'role', 'N/A').upper()}")
+    output.append("-" * 80)
+
+    if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
+        output.append(f"TIPO: DOCUMENTO DRIVE")
+        output.append(f"ID: {chunk.driveDocument.id}")
+        output.append(f"TOKENS: {getattr(chunk, 'tokenCount', 'N/A')}")
+        output.append(
+            "\n(El contenido es un archivo vinculado en Drive, no texto plano editable aquí)"
+        )
+
+    elif isinstance(chunk, ChunksText) or hasattr(chunk, "text"):
+        output.append(f"TIPO: TEXTO")
+        output.append("-" * 80)
+        output.append(chunk.text)
+
+    else:
+        output.append("Contenido no reconocible o imagen.")
+
+    output.append("\n" + "=" * 80)
+    output.append("(Presiona 'q' para salir de esta vista)")
+    return "\n".join(output)
+
+
+def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
+    """
+    Lógica encapsulada del editor visual.
+    Funciona como una 'ventana modal' sobre la consola.
+    """
+    click.echo(f"Cargando chat {chat_id} para edición...")
+    chat_data = api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        click.secho("Error descargando chat.", fg="red")
+        return
+
+    chunks = copy.deepcopy(chat_data.chunkedPrompt.chunks)
+    unsaved_changes = False
+    while True:
+        click.clear()
+        click.secho(
+            "\n--- MODO EDICIÓN (Borrador en Memoria) ---", fg="green", bold=True
+        )
+        click.echo(f"Chat ID: {chat_id}")
+        if unsaved_changes:
+            click.secho(
+                "(!) HAY CAMBIOS SIN GUARDAR. Usa 'save' para aplicar.",
+                fg="magenta",
+                bold=True,
+            )
+
+        # Renderizar Tabla
+        click.echo("\n" + "-" * 100)
+        click.echo(
+            f" {'ID':<3} | {'ROL':<6} | {'TIPO':<5} | {'TOKENS':<8} | {'PREVISUALIZACIÓN'}"
+        )
+        click.echo("-" * 100)
+
+        for i, chunk in enumerate(chunks):
+            row_str = format_chunk_row(i, chunk)
+            color = None
+            if i == 0:
+                color = "blue"  # Contexto protegido
+            if i == len(chunks) - 1:
+                color = "cyan"  # Último mensaje
+
+            if color:
+                click.secho(row_str, fg=color)
+            else:
+                click.echo(row_str)
+        click.echo("-" * 100)
+
+        try:
+            cmd_input = input("edit >> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if not cmd_input:
+            continue
+
+        parts = cmd_input.split()
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        if cmd in ["exit", "back", "q"]:
+            if unsaved_changes:
+                confirm = input(
+                    "Tienes cambios sin guardar. ¿Salir y descartar? (s/n): "
+                )
+                if confirm.lower() != "s":
+                    continue
+            break
+
+        elif cmd == "help":
+            input(
+                "\nComandos:\n  view <id> : Ver contenido completo.\n  rm <id>   : Borrar mensaje.\n  pop [n]   : Borrar últimos n.\n  save      : Guardar en Drive.\n  exit      : Salir.\n\n[Enter] para continuar..."
+            )
+
+        elif cmd == "view":
+            if args and args[0].isdigit():
+                idx = int(args[0])
+                if 0 <= idx < len(chunks):
+                    click.echo_via_pager(get_full_content_for_pager(chunks[idx]))
+                else:
+                    input("ID fuera de rango. [Enter]...")
+
+        elif cmd == "rm":
+            if args and args[0].isdigit():
+                idx = int(args[0])
+                if idx == 0:
+                    click.secho("¡No puedes borrar el contexto del proyecto!", fg="red")
+                    time.sleep(1.5)
+                    continue
+                if 0 <= idx < len(chunks):
+                    chunks.pop(idx)
+                    unsaved_changes = True
+            else:
+                click.secho("Uso: rm <id>", fg="red")
+                time.sleep(1)
+
+        elif cmd == "pop":
+            count = 1
+            if args and args[0].isdigit():
+                count = int(args[0])
+
+            popped = 0
+            for _ in range(count):
+                if len(chunks) > 1:  # Protege índice 0
+                    chunks.pop()
+                    popped += 1
+                    unsaved_changes = True
+            if popped > 0:
+                print(f"Eliminados {popped} mensajes.")
+                time.sleep(0.5)
+
+        elif cmd == "save":
+            if not unsaved_changes:
+                print("No hay cambios.")
+                time.sleep(1)
+                continue
+
+            print("Subiendo cambios a Google Drive...")
+            chat_data.chunkedPrompt.chunks = chunks
+            new_content = chat_data.model_dump_json()
+            res = api.gdm.update_file_from_memory(
+                chat_id, new_content, "application/vnd.google-makersuite.prompt"
+            )
+
+            if res:
+                click.secho("¡Guardado exitoso!", fg="green")
+                unsaved_changes = False
+                time.sleep(1.5)
+            else:
+                click.secho("Error al guardar.", fg="red")
+                input("[Enter]...")
+        else:
+            click.secho("Comando no reconocido.", fg="red")
+            input("[Enter]...")
 
 
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
@@ -116,6 +317,19 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     return state
 
 
+def command_help():
+    print("\nComandos disponibles:")
+    print("  edit               - [NUEVO] Abrir editor visual de historial.")
+    print("  monitor on/off     - Auto-guardado de historial.")
+    print("  save <mensaje>     - Guardar snapshot manual con nombre.")
+    print("  history [N|all]    - Ver puntos de restauración.")
+    print("  restore <id>       - Restaurar chat y contexto.")
+    print("  clear              - Limpiar historial del chat en Drive.")
+    print("  update             - Forzar actualización de contexto.")
+    print("  reset              - Actualiza contexto y limpia el chat.")
+    print("  exit / quit        - Salir.\n")
+
+
 def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
     print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
@@ -124,10 +338,12 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     if state.get("monitor_active", False):
         print("[Estado guardado] Reactivando monitor automáticamente...")
         monitor.start_monitoring()
+
     chat_id = state.get("chat_id")
     consecutive_errors = 0
 
     print(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
+
     while True:
         try:
             command_line = input(">> ")
@@ -145,23 +361,20 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 break
 
             elif command == "help":
-                print("\nComandos disponibles:")
-                print("  monitor on/off     - Auto-guardado de historial.")
-                print("  save <mensaje>     - Guardar snapshot manual con nombre.")
-                print("  history [N|all]    - Ver puntos de restauración.")
-                print("  restore <id>       - Restaurar chat y contexto.")
-                print("  clear              - Limpiar historial del chat en Drive.")
-                print("  update             - Forzar actualización de contexto.")
-                print("  reset              - Actualiza contexto y limpia el chat.")
-                print("  help               - Mostrar ayuda.")
-                print("  exit / quit        - Salir.\n")
+                command_help()
+
+            elif command == "edit":
+                monitor.stop_monitoring()
+                run_editor_mode(api, state["chat_id"])
+                print("Regresando a la sesión interactiva...")
+                command_help()
+                if state.get("monitor_active", False):
+                    monitor.start_monitoring()
 
             elif command == "save":
                 if not args.strip():
                     print("Por favor, escribe un mensaje para identificar el guardado.")
-                    print("Ejemplo: save refactor login")
                 else:
-                    print(f"Guardando estado actual como: '{args.strip()}'...")
                     monitor.create_named_snapshot(args.strip())
 
             elif command == "monitor":
@@ -175,8 +388,6 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     if state.get("monitor_active"):
                         state["monitor_active"] = False
                         save_project_context_state(project_path, state)
-                else:
-                    print("Uso: monitor on | monitor off")
 
             elif command == "history":
                 snaps = monitor.list_snapshots()
@@ -189,7 +400,6 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                             limit = len(snaps)
                         elif args.strip().isdigit():
                             limit = int(args.strip())
-
                     subset = list(reversed(snaps[:limit]))
                     print(f"\nMostrando últimos {len(subset)} snapshots:")
                     print(f"{'TIMESTAMP (ID)':<16} | {'HORA':<20} | {'MENSAJE'}")
@@ -228,46 +438,32 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
             elif command == "reset":
                 monitor.stop_monitoring()
-                print("Iniciando reinicio de sesión...")
+                print("Iniciando reinicio...")
                 date_session_reset = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 monitor.create_named_snapshot(f"ANTES DEL RESET {date_session_reset}")
-
                 try:
                     state = update_context(api, project_path, state)
                     save_project_context_state(project_path, state)
                     monitor.state = state
                 except Exception as e:
-                    print(f"Error actualizando contexto: {e}")
+                    print(f"Error: {e}")
                     continue
-
                 if api.clear_chat_ia_studio(state["chat_id"]):
                     print("Chat limpiado.")
-                else:
-                    print("No se pudo limpiar el chat completamente.")
-
                 if state.get("monitor_active", False):
                     monitor.start_monitoring()
-                    print("Monitor reactivado.")
+                print("¡Sesión reiniciada!")
 
-                print("\n ¡Sesión reiniciada! Contexto actualizado y memoria limpia.")
             else:
                 print(f"Comando desconocido: '{command}'")
-        except EOFError:
-            monitor.stop_monitoring()
-            print("\nTerminal cerrada. Saliendo...")
-            break
+
         except KeyboardInterrupt:
             monitor.stop_monitoring()
             break
         except Exception as e:
             consecutive_errors += 1
             print(f"Error: {e}")
-
             if consecutive_errors > 10:
-                print("\n[SISTEMA] Se detectó un bucle de errores incontrolable.")
-                print(
-                    "Es probable que la terminal se haya desconectado. Forzando salida."
-                )
                 monitor.stop_monitoring()
                 sys.exit(1)
 
