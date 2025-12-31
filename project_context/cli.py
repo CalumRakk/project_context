@@ -178,18 +178,70 @@ def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
                     input("ID fuera de rango. [Enter]...")
 
         elif cmd == "rm":
-            if args and args[0].isdigit():
-                idx = int(args[0])
-                if idx == 0:
-                    click.secho("¡No puedes borrar el contexto del proyecto!", fg="red")
+            if not args:
+                click.secho("Uso: rm <id> o rm <inicio>-<fin>", fg="red")
+                time.sleep(1)
+                continue
+
+            arg = args[0]
+            indices_to_remove = set()
+
+            try:
+                # Caso Rango (ej: 3-5)
+                if "-" in arg:
+                    start_str, end_str = arg.split("-", 1)
+                    start, end = int(start_str), int(end_str)
+                    if start > end:
+                        start, end = end, start
+                    indices_to_remove.update(range(start, end + 1))
+
+                # Caso Índice único (ej: 3)
+                elif arg.isdigit():
+                    indices_to_remove.add(int(arg))
+                else:
+                    click.secho(
+                        "Formato inválido. Use número (N) o rango (N-M).", fg="red"
+                    )
                     time.sleep(1.5)
                     continue
-                if 0 <= idx < len(chunks):
-                    chunks.pop(idx)
-                    unsaved_changes = True
-            else:
-                click.secho("Uso: rm <id>", fg="red")
+
+            except ValueError:
+                click.secho("Error al interpretar los índices.", fg="red")
                 time.sleep(1)
+                continue
+
+            # Proteger el Contexto (índice 0)
+            if 0 in indices_to_remove:
+                click.secho(
+                    "(!) El índice 0 (Contexto) está protegido y no se borrará.",
+                    fg="yellow",
+                )
+                indices_to_remove.discard(0)
+                time.sleep(1.5)
+
+            # Filtrar índices fuera de rango real
+            max_idx = len(chunks) - 1
+            valid_indices = {i for i in indices_to_remove if 0 < i <= max_idx}
+            if not valid_indices:
+                click.secho(
+                    "No se seleccionaron índices válidos para eliminar.", fg="yellow"
+                )
+                time.sleep(1)
+                continue
+
+            # Reconstruimos la lista excluyendo los índices marcados
+            new_chunks = [
+                chunk for i, chunk in enumerate(chunks) if i not in valid_indices
+            ]
+            chunks = new_chunks
+            unsaved_changes = True
+
+            count = len(valid_indices)
+            click.secho(
+                f"Marcsdos {count} mensaje(s) para eliminar. Usa 'save' para confirmar.",
+                fg="green",
+            )
+            time.sleep(1)
 
         elif cmd == "pop":
             count = 1
