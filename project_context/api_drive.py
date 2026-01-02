@@ -254,3 +254,19 @@ class AIStudioDriveManager:
             mime_type="application/vnd.google-makersuite.prompt",
         )
         return result.get("id") if result else None
+    def update_chat_file(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
+        """
+        Serializa y actualiza un objeto chat directamente en Drive.
+        Encapsula el MIME type y la serialización JSON.
+        """
+        try:
+            content_json = chat_data.model_dump_json()
+            result = self.gdm.update_file_from_memory(
+                file_id=chat_id,
+                content=content_json,
+                mime_type="application/vnd.google-makersuite.prompt",
+            )
+            return bool(result)
+        except Exception as e:
+            print(f"Error actualizando chat: {e}")
+            return False

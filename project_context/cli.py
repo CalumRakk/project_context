@@ -263,21 +263,15 @@ def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
                 print("No hay cambios.")
                 time.sleep(1)
                 continue
-
+            
             print("Subiendo cambios a Google Drive...")
             chat_data.chunkedPrompt.chunks = chunks
-            new_content = chat_data.model_dump_json()
-            res = api.gdm.update_file_from_memory(
-                chat_id, new_content, "application/vnd.google-makersuite.prompt"
-            )
-
-            if res:
+            if api.update_chat_file(chat_id, chat_data):
                 click.secho("¡Guardado exitoso!", fg="green")
                 unsaved_changes = False
                 time.sleep(1.5)
             else:
                 click.secho("Error al guardar.", fg="red")
-                input("[Enter]...")
         else:
             click.secho("Comando no reconocido.", fg="red")
             input("[Enter]...")
