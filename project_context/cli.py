@@ -26,6 +26,7 @@ from project_context.utils import (
     compute_md5,
     generate_context,
     get_custom_prompt,
+    get_diff_message,
     has_files_modified_since,
     load_project_context_state,
     profile_manager,
@@ -263,7 +264,7 @@ def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
                 print("No hay cambios.")
                 time.sleep(1)
                 continue
-            
+
             print("Subiendo cambios a Google Drive...")
             chat_data.chunkedPrompt.chunks = chunks
             if api.update_chat_file(chat_id, chat_data):
@@ -365,7 +366,8 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
 
 def command_help():
     print("\nComandos disponibles:")
-    print("  edit               - [NUEVO] Abrir editor visual de historial.")
+    print("  commit             - [NUEVO] Enviar git diff (staged) al chat.")
+    print("  edit               - Abrir editor visual de historial.")
     print("  monitor on/off     - Auto-guardado de historial.")
     print("  save <mensaje>     - Guardar snapshot manual con nombre.")
     print("  history [N|all]    - Ver puntos de restauración.")
@@ -499,7 +501,43 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 if state.get("monitor_active", False):
                     monitor.start_monitoring()
                 print("¡Sesión reiniciada!")
+            elif command == "commit":
+                print("Verificando cambios en Git (Stage)...")
+                diff_content = get_diff_message(project_path)
 
+                if not diff_content:
+                    print(
+                        "No hay cambios en stage. Ejecuta 'git add <archivos>' primero."
+                    )
+                    continue
+
+                print(
+                    f"Detectados cambios ({len(diff_content)} caracteres). Obteniendo chat..."
+                )
+
+                chat_data = api.get_chat_ia_studio(state["chat_id"])
+                if not chat_data:
+                    print("Error recuperando el chat desde Drive.")
+                    continue
+
+                prompt_text = (
+                    "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas. El archivo context_project.txt contiene el contexto del proyecto:\n\nHe realizado los siguientes cambios:\n\n"
+                    "```diff\n"
+                    f"{diff_content}\n"
+                    "```\n\n"
+                    "Con base en esos cambios, sugiéreme un mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. El mensaje debe ocupar un solo párrafo y reflejar la intención del cambio sin omitir detalles importantes.\n\n"
+                    "Formato: <tipo>(<alcance>): <descripción>"
+                )
+
+                new_chunk = ChunksText(text=prompt_text, role="user", tokenCount=None)
+                chat_data.chunkedPrompt.chunks.append(new_chunk)
+
+                print("Enviando prompt a AI Studio...")
+                if api.update_chat_file(state["chat_id"], chat_data):
+                    print("¡Listo! Prompt de commit agregado al final del chat.")
+                    print("Ve a AI Studio y presiona RUN.")
+                else:
+                    print("Error al guardar el archivo en Drive.")
             else:
                 print(f"Comando desconocido: '{command}'")
 

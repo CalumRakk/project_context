@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import sys
@@ -6,7 +7,10 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+from git import Optional, Repo, exc  # type: ignore
 from gitingest import ingest
+
+logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """Eres un ingeniero de software senior y experto en análisis de código completo.
 
@@ -263,3 +267,34 @@ def get_custom_prompt(project_path: Union[str, Path]) -> str:
             print(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
 
     return PROMPT_TEMPLATE
+
+
+def get_diff_message(project_path: Path) -> Optional[str]:
+    """
+    Obtiene el diff de los archivos en STAGE (listos para commit).
+    Si no hay archivos en stage, retorna None.
+    """
+    try:
+        # search_parent_directories=True permite ejecutarlo en subcarpetas
+        repo = Repo(project_path, search_parent_directories=True)
+
+        # Obtiene el diff de lo que está en 'stage' (cached) vs HEAD
+        diff_text = repo.git.diff("--cached")
+
+        if not diff_text.strip():
+            # Si es un repo nuevo sin commits previos, 'diff --cached' a veces retorna vacío
+            # aunque haya archivos nuevos añadidos.
+            if not repo.head.is_valid():
+                status = repo.git.status("--short")
+                if status:
+                    return f"Initial commit. Files added:\n{status}"
+            return None
+
+        return diff_text
+
+    except exc.InvalidGitRepositoryError:
+        print("Error: El directorio actual no es un repositorio Git válido.")
+        return None
+    except Exception as e:
+        print(f"Error obteniendo git diff: {e}")
+        return None

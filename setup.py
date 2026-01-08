@@ -11,6 +11,7 @@ setup(
         "click==8.3.0",
         "gitingest @ git+https://github.com/CalumRakk/gitingest.git@fix/windows-encoding-support",
         "google-api-python-client==2.187.0",
+        "GitPython==3.1.45",
     ],
     keywords="cli google-ai-studio project-context",
     include_package_data=True,
