@@ -2,13 +2,18 @@ from setuptools import setup
 
 setup(
     name="project-context-cli",
-    version="0.1.2",
+    version="0.2.0",
     author="CalumRakk",
     author_email="leocasti2@gmail.com",
     description="A CLI tool for managing project context with Google AI Studio",
-    packages=["project_context"],
+    packages=[
+        "project_context",
+        "project_context.commands",
+        "project_context.ui",
+    ],
     install_requires=[
-        "click==8.3.0",
+        "typer==0.21.1",
+        "typing-extensions>=3.7.4",
         "gitingest @ git+https://github.com/CalumRakk/gitingest.git@fix/windows-encoding-support",
         "google-api-python-client==2.187.0",
         "GitPython==3.1.45",
@@ -17,7 +22,7 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "project_context=project_context.cli:main",
+            "project_context=project_context.main:main",
         ],
     },
 )
