@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-from project_context.schema import ChatIAStudio
+from project_context.schema import ChatIAStudio, ChunksDocument, ChunksImage, ChunksText
 from project_context.utils import profile_manager
 
 
@@ -186,6 +186,30 @@ class GoogleDriveManager:
             print(f"Error al obtener metadata de '{file_id}': {error}")
             return None
 
+    def upload_binary_to_drive(
+        self, folder_id: str, file_name: str, content: bytes, mime_type: str
+    ) -> Optional[dict]:
+        """Sube cualquier archivo binario (como imágenes)."""
+        file_metadata = {
+            "name": file_name,
+            "parents": [folder_id],
+            "mimeType": mime_type,
+        }
+        try:
+            content_stream = io.BytesIO(content)
+            media = MediaIoBaseUpload(
+                content_stream, mimetype=mime_type, resumable=True
+            )
+            file = (
+                self.service.files()
+                .create(body=file_metadata, media_body=media, fields="id, name")
+                .execute()
+            )
+            return file
+        except HttpError as error:
+            print(f"Error al subir binario '{file_name}': {error}")
+            return None
+
 
 class AIStudioDriveManager:
     AI_STUDIO_FOLDER_NAME = "Google AI Studio"
@@ -221,27 +245,61 @@ class AIStudioDriveManager:
             return None
 
     def clear_chat_ia_studio(self, chat_id: str) -> bool:
-        print(f"Intentando limpiar el chat con ID: {chat_id}")
+        print(f"Analizando estructura del chat para limpieza...")
         chat = self.get_chat_ia_studio(chat_id)
         if not chat:
             return False
 
-        original_chunks_count = len(chat.chunkedPrompt.chunks)
-        chat.chunkedPrompt.chunks = chat.chunkedPrompt.chunks[:3]
-        cleared_content_json = chat.model_dump_json()
-
-        result = self.gdm.update_file_from_memory(
-            file_id=chat_id,
-            content=cleared_content_json,
-            mime_type="application/vnd.google-makersuite.prompt",
-        )
-
-        if result:
-            print(f"Chat limpiado. Mensajes eliminados: {original_chunks_count - 3}")
+        chunks = chat.chunkedPrompt.chunks
+        if not chunks:
+            print("El chat ya está vacío.")
             return True
-        else:
-            print("Falló la actualización del archivo del chat.")
-            return False
+
+        cut_idx = -1  # Primera respuesta del modelo
+        for i, chunk in enumerate(chunks):
+            if chunk.role == "model":
+                cut_idx = i
+                break
+
+        # No se encontro respuesta del modelo
+        if cut_idx == -1:
+            print("Aviso: No se encontró respuesta del modelo para anclar la limpieza.")
+            doc_idx = -1
+            for i, chunk in enumerate(chunks):
+                if isinstance(chunk, (ChunksDocument, ChunksImage)) or hasattr(
+                    chunk, "driveDocument"
+                ):
+                    doc_idx = i
+
+            if doc_idx != -1:
+                if len(chunks) > doc_idx + 1 and isinstance(
+                    chunks[doc_idx + 1], ChunksText
+                ):
+                    cut_idx = doc_idx + 1
+                else:
+                    cut_idx = doc_idx
+            else:
+                print("Error: No se detectó una estructura de contexto válida.")
+                print("Usa el comando 'reset' para reconstruir el chat desde cero.")
+                return False
+
+        original_count = len(chunks)
+        new_chunks = chunks[: cut_idx + 1]
+
+        if len(new_chunks) == original_count:
+            print("El chat ya está limpio (solo contiene el contexto inicial).")
+            return True
+
+        chat.chunkedPrompt.chunks = new_chunks
+
+        if self.update_chat_file(chat_id, chat):
+            print(
+                f"Limpieza completada. Se conservaron los primeros {len(new_chunks)} bloques (Setup)."
+            )
+            print(f"Mensajes eliminados: {original_count - len(new_chunks)}")
+            return True
+
+        return False
 
     def create_chat_file(
         self, file_name: str, chat_data: ChatIAStudio
@@ -254,6 +312,7 @@ class AIStudioDriveManager:
             mime_type="application/vnd.google-makersuite.prompt",
         )
         return result.get("id") if result else None
+
     def update_chat_file(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
         """
         Serializa y actualiza un objeto chat directamente en Drive.

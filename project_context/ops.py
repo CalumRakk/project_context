@@ -1,11 +1,12 @@
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
+    ChunksImage,
     ChunksText,
     DriveDocument,
     RunSettings,
@@ -15,44 +16,38 @@ from project_context.utils import (
     RESPONSE_TEMPLATE,
     compute_md5,
     generate_context,
-    get_custom_prompt,
+    get_filtered_files,
     has_files_modified_since,
+    resolve_prompt,
     save_context,
 )
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
     print("Primer uso para este proyecto. Creando contexto inicial...")
-    content, expected_tokens = generate_context(project_path)
-    path_context = save_context(project_path, content)
-    content_md5 = compute_md5(path_context)
+    # Genera el contexto y las imágenes asociadas
+    chunks = []
+    context_chunk, content_md5 = sync_context(api, project_path)
+    media_chunks = sync_images(api, project_path)
 
-    mimetype = "text/plain"
-    filename = project_path.name + "_context.txt"
-    document = api.gdm.create_file_from_memory(
-        folder_id=api.ai_studio_folder,
-        file_name=filename,
-        content=content,
-        mime_type=mimetype,
+    prompt_chunk = ChunksText(
+        text=resolve_prompt(project_path), role="user", tokenCount=None
     )
-    if not document or "id" not in document:
-        raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
+    model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
 
-    prompt_text = get_custom_prompt(project_path)
-    drive_document = DriveDocument(id=document["id"])
-    chat_file = ChunksDocument(
-        driveDocument=drive_document, role="user", tokenCount=expected_tokens
-    )
-    chunks_text_prompt = ChunksText(text=prompt_text, role="user", tokenCount=None)
-    chunks_text_response = ChunksText(
-        text=RESPONSE_TEMPLATE, role="model", tokenCount=None
-    )
+    chunks.append(context_chunk)
+    chunks.extend(media_chunks)
+    chunks.append(prompt_chunk)
+    chunks.append(model_chunk)
 
+    # Crea el chat en AI Studio
     chat_data = ChatIAStudio(
         runSettings=RunSettings(),
         systemInstruction=SystemInstruction(),
         chunkedPrompt=ChunkedPrompt(
-            chunks=[chat_file, chunks_text_prompt, chunks_text_response],
+            chunks=chunks,
             pendingInputs=[],
         ),
     )
@@ -62,12 +57,13 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     if not chat_id:
         raise ValueError("No se pudo crear el chat en Google Drive.")
 
+    # Define el estado inicial del proyecto
     initial_state = {
         "path": str(project_path),
         "last_modified": project_path.stat().st_mtime,
         "md5": content_md5,
         "chat_id": chat_id,
-        "file_id": document["id"],
+        "file_id": context_chunk.driveDocument.id,
     }
     return initial_state
 
@@ -106,3 +102,68 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     print("Contexto actualizado con Éxito.")
 
     return state
+
+
+def sync_context(
+    api: AIStudioDriveManager, project_path: Path
+) -> Tuple[ChunksDocument, str]:
+    content, expected_tokens = generate_context(project_path)
+    path_context = save_context(project_path, content)
+    content_md5 = compute_md5(path_context)
+
+    # Sube el project_context.txt
+    mimetype = "text/plain"
+    filename = project_path.name + "_context.txt"
+    document = api.gdm.create_file_from_memory(
+        folder_id=api.ai_studio_folder,
+        file_name=filename,
+        content=content,
+        mime_type=mimetype,
+    )
+    if not document or "id" not in document:
+        raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
+    drive_document = DriveDocument(id=document["id"])
+    chat_file = ChunksDocument(
+        driveDocument=drive_document, role="user", tokenCount=expected_tokens
+    )
+    return chat_file, content_md5
+
+
+def sync_images(api, project_path) -> List[ChunksImage]:
+    valid_images = get_filtered_files(project_path, IMAGE_EXTENSIONS)
+    media_chunks = []
+
+    if not valid_images:
+        return []
+
+    print(f"Sincronizando {len(valid_images)} imágenes de contexto...")
+
+    for img_path in valid_images:
+        rel_path = img_path.relative_to(project_path)
+
+        drive_name = f"ctx_{img_path.name}"
+        drive_file = api.gdm.find_item_by_name(
+            drive_name, parent_id=api.ai_studio_folder
+        )
+
+        if not drive_file:
+            with open(img_path, "rb") as f:
+                content = f.read()
+                mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
+                drive_file = api.gdm.upload_binary_to_drive(
+                    api.ai_studio_folder, drive_name, content, mime
+                )
+
+        if drive_file:
+            media_chunks.append(
+                ChunksText(text=f"Archivo visual: {rel_path}", role="user")
+            )
+            media_chunks.append(
+                ChunksImage(
+                    driveImage=DriveDocument(id=drive_file["id"]),
+                    role="user",
+                    tokenCount=None,
+                )
+            )
+
+    return media_chunks

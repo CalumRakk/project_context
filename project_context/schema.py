@@ -33,11 +33,12 @@ class ChunksDocument(BaseModel):
     driveDocument: DriveDocument
     role: Literal["user", "model"]
     tokenCount: int
+
+
 class ChunksImage(BaseModel):
     driveImage: DriveDocument
     role: Literal["user", "model"]
-    tokenCount: int
-
+    tokenCount: Optional[int] = None
 
 
 class PendingInputs(BaseModel):

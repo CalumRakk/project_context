@@ -7,6 +7,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+import pathspec
 from git import Optional, Repo, exc  # type: ignore
 from gitingest import ingest
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """Eres un ingeniero de software senior y experto en análisis de código completo.
 
-A continuación te paso **todo el código fuente de mi proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest). 
+A continuación te paso **todo el código fuente de mi proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest).
 
 Formato del resumen:
 - Las rutas de archivo aparecen entre ``` (tres acentos graves) seguidas del path completo.
@@ -249,7 +250,7 @@ def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> b
     return False
 
 
-def get_custom_prompt(project_path: Union[str, Path]) -> str:
+def resolve_prompt(project_path: Union[str, Path]) -> str:
     """
     Busca un archivo '.contextprompt' en la raíz del proyecto.
     Si existe, usa su contenido. Si no, usa el template por defecto.
@@ -298,3 +299,33 @@ def get_diff_message(project_path: Path) -> Optional[str]:
     except Exception as e:
         print(f"Error obteniendo git diff: {e}")
         return None
+
+
+def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:
+    """
+    Escanea el proyecto buscando archivos con ciertas extensiones,
+    respetando .gitignore y .contextignore.
+    """
+
+    patterns = get_ignore_patterns(project_path, ".gitignore")
+    patterns += get_ignore_patterns(project_path, ".contextignore")
+
+    patterns += [".git/", "node_modules/", "__pycache__/", ".venv/", "venv/"]
+
+    # Crear el objeto de especificación (formato gitignore)
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+
+    valid_files = []
+
+    for file in project_path.rglob("*"):
+        if not file.is_file():
+            continue
+
+        if file.suffix.lower() not in extensions:
+            continue
+
+        rel_path = file.relative_to(project_path)
+        if not spec.match_file(str(rel_path)):
+            valid_files.append(file)
+
+    return valid_files
