@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 from fnmatch import fnmatch
@@ -33,6 +34,11 @@ INSTRUCCIONES OBLIGATORIAS:
 """
 
 RESPONSE_TEMPLATE = """Entendido, proyecto cargado."""
+IMAGE_INSERTION_PROMPT = """He detectado y adjuntado las siguientes imágenes relacionadas con el archivo `{filename}`.
+Utilízalas como referencia visual para complementar tu comprensión del proyecto."""
+
+IMAGE_INSERTION_RESPONSE = """Entendido. He recibido y procesado las imágenes vinculadas a `{filename}`.
+Ya tengo la referencia visual necesaria para ayudarte con esta parte del proyecto. ¿En qué puedo ayudarte ahora?"""
 
 
 def get_app_root_dir() -> Path:
@@ -329,3 +335,55 @@ def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:
             valid_files.append(file)
 
     return valid_files
+
+
+def get_potential_media_folders(project_path: Path) -> list[Path]:
+    """Busca carpetas que probablemente contengan imágenes (assets, attachments, etc)."""
+    common_names = {
+        "assets",
+        "attachments",
+        "img",
+        "images",
+        "media",
+        "static",
+        "public",
+    }
+    found = []
+    for p in project_path.rglob("*"):
+        if p.is_dir() and p.name.lower() in common_names:
+            # Evitar carpetas ignoradas (node_modules, .git, etc)
+            if not any(
+                part.startswith(".") or part == "node_modules" for part in p.parts
+            ):
+                found.append(p)
+    return found
+
+
+def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
+    """
+    Extrae referencias de imágenes.
+    Retorna una lista de tuplas: (nombre_o_ruta, es_wikilink)
+    """
+    if not file_path.exists():
+        return []
+    content = file_path.read_text(encoding="utf-8")
+
+    results = []
+    # Markdown estándar e HTML
+    std_patterns = [
+        r"!\[.*?\]\((.*?\.(?:png|jpg|jpeg|webp|gif))\)",
+        r'<img\s+[^>]*src=["\'](.*?\.(?:png|jpg|jpeg|webp|gif))["\']',
+    ]
+    for pat in std_patterns:
+        matches = re.findall(pat, content, re.IGNORECASE)
+        results.extend(
+            [(m.strip(), False) for m in matches if not m.startswith(("http", "data:"))]
+        )
+
+    # WikiLinks (estilo Obsidian): ![[imagen.png|237]]
+    wiki_matches = re.findall(r"!\[\[(.*?)(?:\|.*?)?\]\]", content)
+    results.extend(
+        [(m.strip(), True) for m in wiki_matches if not m.startswith(("http", "data:"))]
+    )
+
+    return list(dict.fromkeys(results))

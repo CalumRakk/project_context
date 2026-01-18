@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Optional, Tuple
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import (
@@ -129,23 +129,23 @@ def sync_context(
     return chat_file, content_md5
 
 
-def sync_images(api, project_path) -> List[ChunksImage]:
-    valid_images = get_filtered_files(project_path, IMAGE_EXTENSIONS)
+def sync_images(
+    api, project_path: Path, specific_files: Optional[list[Path]] = None
+) -> list:
+    """Sincroniza imágenes específicas o todo el proyecto."""
+    if specific_files is None:
+        valid_images = get_filtered_files(project_path, IMAGE_EXTENSIONS)
+    else:
+        valid_images = [f for f in specific_files if f.exists()]
+
     media_chunks = []
-
-    if not valid_images:
-        return []
-
-    print(f"Sincronizando {len(valid_images)} imágenes de contexto...")
-
     for img_path in valid_images:
         rel_path = img_path.relative_to(project_path)
-
         drive_name = f"ctx_{img_path.name}"
+
         drive_file = api.gdm.find_item_by_name(
             drive_name, parent_id=api.ai_studio_folder
         )
-
         if not drive_file:
             with open(img_path, "rb") as f:
                 content = f.read()
@@ -159,13 +159,8 @@ def sync_images(api, project_path) -> List[ChunksImage]:
                 ChunksText(text=f"Archivo visual: {rel_path}", role="user")
             )
             media_chunks.append(
-                ChunksImage(
-                    driveImage=DriveDocument(id=drive_file["id"]),
-                    role="user",
-                    tokenCount=None,
-                )
+                ChunksImage(driveImage=DriveDocument(id=drive_file["id"]), role="user")
             )
-
     return media_chunks
 
 
@@ -193,7 +188,6 @@ def rebuild_project_context(
     print("Actualizando archivo de contexto en Drive...")
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    media_chunks = sync_images(api, project_path)
     context_chunk = ChunksDocument(
         driveDocument=DriveDocument(id=file_id), role="user", tokenCount=expected_tokens
     )
@@ -205,7 +199,6 @@ def rebuild_project_context(
     # Reconstruimos la lista de chunks desde cero
     new_chunks = []
     new_chunks.append(context_chunk)
-    new_chunks.extend(media_chunks)
     new_chunks.append(prompt_chunk)
     new_chunks.append(model_chunk)
 

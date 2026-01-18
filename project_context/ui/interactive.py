@@ -1,16 +1,54 @@
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
+
+import typer
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
-from project_context.ops import rebuild_project_context, update_context
+from project_context.ops import rebuild_project_context, sync_images, update_context
 from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
+    IMAGE_INSERTION_PROMPT,
+    IMAGE_INSERTION_RESPONSE,
+    extract_image_references,
     get_diff_message,
+    get_potential_media_folders,
     save_project_context_state,
 )
+
+
+def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
+    """Interfaz de usuario para resolver el vacío de la carpeta de imágenes."""
+    typer.secho(
+        "\n[?] Se detectaron referencias tipo WikiLink (Obsidian).",
+        fg=typer.colors.CYAN,
+    )
+    candidates = get_potential_media_folders(project_path)
+
+    typer.echo("¿En qué carpeta debería buscar los archivos adjuntos?")
+    for i, folder in enumerate(candidates, 1):
+        typer.echo(f" {i}) {folder.relative_to(project_path)}")
+    typer.echo(f" n) Escribir ruta manualmente")
+    typer.echo(f" s) Saltar estas imágenes")
+
+    choice = input("Selección: ").strip().lower()
+
+    if choice == "s":
+        return None
+    if choice == "n":
+        manual = input("Ruta desde la raíz del proyecto: ").strip()
+        return project_path / manual
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(candidates):
+            return candidates[idx]
+    except:
+        pass
+    return None
 
 
 def command_help():
@@ -41,6 +79,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
     print(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
 
+    session_media_root = None  # Memoria temporal de la carpeta de imágenes
     while True:
         try:
             command_line = input(">> ")
@@ -200,6 +239,72 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     print("Ve a AI Studio y presiona RUN.")
                 else:
                     print("Error al guardar el archivo en Drive.")
+
+            elif command == "images":
+                if not args:
+                    print("Uso: images <archivo.md>")
+                    continue
+
+                target_file = project_path / args
+                refs = extract_image_references(target_file)
+
+                if not refs:
+                    print(f"No se encontraron imágenes en {args}.")
+                    continue
+
+                resolved_paths = []
+                for ref_text, is_wiki in refs:
+                    path = (target_file.parent / ref_text).resolve()
+
+                    # Si es WikiLink y no se encuentra, usamos resolución asistida
+                    if not path.exists() and is_wiki:
+                        if not session_media_root:
+                            session_media_root = prompt_for_media_folder(project_path)
+
+                        if session_media_root:
+                            path = (session_media_root / ref_text).resolve()
+
+                    if path.exists() and path.is_file():
+                        resolved_paths.append(path)
+                    else:
+                        typer.secho(
+                            f" [!] No se pudo encontrar: {ref_text}",
+                            fg=typer.colors.YELLOW,
+                        )
+
+                if not resolved_paths:
+                    print("No se pudo resolver ninguna ruta de imagen.")
+                    continue
+
+                chat_data = api.get_chat_ia_studio(state["chat_id"])
+                if not chat_data:
+                    print("Error recuperando el chat desde Drive.")
+                    continue
+
+                chat_data.chunkedPrompt.chunks.append(
+                    ChunksText(
+                        text=IMAGE_INSERTION_PROMPT.format(filename=args), role="user"
+                    )
+                )
+
+                new_chunks = sync_images(
+                    api, project_path, specific_files=resolved_paths
+                )
+                chat_data.chunkedPrompt.chunks.extend(new_chunks)
+
+                chat_data.chunkedPrompt.chunks.append(
+                    ChunksText(
+                        text=IMAGE_INSERTION_RESPONSE.format(filename=args),
+                        role="model",
+                    )
+                )
+
+                if api.update_chat_file(state["chat_id"], chat_data):
+                    typer.secho(
+                        f"¡{len(resolved_paths)} imágenes inyectadas!",
+                        fg=typer.colors.GREEN,
+                    )
+
             else:
                 print(f"Comando desconocido: '{command}'")
 
