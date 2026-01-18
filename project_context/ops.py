@@ -167,3 +167,63 @@ def sync_images(api, project_path) -> List[ChunksImage]:
             )
 
     return media_chunks
+
+
+def rebuild_project_context(
+    api: AIStudioDriveManager, project_path: Path, state: Dict
+) -> Dict:
+    """
+    Realiza un Hard Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
+    Actualiza el contenido del context.txt y reconstruye la lista de chunks.
+    """
+    file_id = state.get("file_id")
+    chat_id = state.get("chat_id")
+
+    if not file_id or not chat_id:
+        raise ValueError(
+            "No se encontraron los IDs necesarios en el estado para reconstruir."
+        )
+
+    print(f"Reinciciando chat {chat_id} y actualizando contexto {file_id}...")
+
+    content, expected_tokens = generate_context(project_path)
+    path_context = save_context(project_path, content)
+    current_md5 = compute_md5(path_context)
+
+    print("Actualizando archivo de contexto en Drive...")
+    api.gdm.update_file_from_memory(file_id, content, "text/plain")
+
+    media_chunks = sync_images(api, project_path)
+    context_chunk = ChunksDocument(
+        driveDocument=DriveDocument(id=file_id), role="user", tokenCount=expected_tokens
+    )
+    prompt_chunk = ChunksText(
+        text=resolve_prompt(project_path), role="user", tokenCount=None
+    )
+    model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
+
+    # Reconstruimos la lista de chunks desde cero
+    new_chunks = []
+    new_chunks.append(context_chunk)
+    new_chunks.extend(media_chunks)
+    new_chunks.append(prompt_chunk)
+    new_chunks.append(model_chunk)
+
+    # Descargar el Chat actual
+    chat_data = api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        raise ValueError("No se pudo recuperar el chat de Drive.")
+
+    chat_data.chunkedPrompt.chunks = new_chunks
+    chat_data.chunkedPrompt.pendingInputs = []
+
+    # 6. Guardar el chat actualizado en Drive
+    if api.update_chat_file(chat_id, chat_data):
+        print("¡Hard Reset completado con éxito!")
+    else:
+        raise ValueError("Error al guardar la reconstrucción del chat.")
+
+    state["last_modified"] = project_path.stat().st_mtime
+    state["md5"] = current_md5
+
+    return state

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
-from project_context.ops import update_context
+from project_context.ops import rebuild_project_context, update_context
 from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
@@ -136,22 +136,32 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 print("Puedes reactivar el monitor con 'monitor on'.")
 
             elif command == "reset":
+                if (
+                    input(
+                        "Esto eliminará el historial de mensajes y reconstruirá el contexto (incluyendo imágenes). ¿Seguro? (s/n): "
+                    ).lower()
+                    != "s"
+                ):
+                    continue
+
                 monitor.stop_monitoring()
-                print("Iniciando reinicio...")
+                print("Iniciando reinicio completo...")
+
+                # Snapshot de seguridad
                 date_session_reset = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 monitor.create_named_snapshot(f"ANTES DEL RESET {date_session_reset}")
+
                 try:
-                    state = update_context(api, project_path, state)
+                    state = rebuild_project_context(api, project_path, state)
                     save_project_context_state(project_path, state)
+
                     monitor.state = state
+                    if state.get("monitor_active", False):
+                        monitor.start_monitoring()
+
+                    print("¡Sesión e imágenes sincronizadas y chat reiniciado!")
                 except Exception as e:
-                    print(f"Error: {e}")
-                    continue
-                if api.clear_chat_ia_studio(state["chat_id"]):
-                    print("Chat limpiado.")
-                if state.get("monitor_active", False):
-                    monitor.start_monitoring()
-                print("¡Sesión reiniciada!")
+                    print(f"Error durante el reset: {e}")
 
             elif command == "commit":
                 print("Verificando cambios en Git (Stage)...")
