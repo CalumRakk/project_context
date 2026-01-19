@@ -143,20 +143,6 @@ class SnapshotManager:
 
         self.create_snapshot(mod_time, message=message)
 
-    def list_snapshots(self) -> List[dict]:
-        snaps = []
-        if not self.snapshots_dir.exists():
-            return []
-
-        for d in self.snapshots_dir.iterdir():
-            if d.is_dir() and (d / "info.json").exists():
-                try:
-                    info = json.loads((d / "info.json").read_text())
-                    snaps.append(info)
-                except Exception:
-                    pass
-        return sorted(snaps, key=lambda x: x["timestamp"], reverse=True)
-
     def restore_snapshot(self, timestamp: str) -> bool:
         snap_folder = self.snapshots_dir / timestamp
         if not snap_folder.exists():
@@ -199,3 +185,36 @@ class SnapshotManager:
         self.state["md5"] = context_md5
         print("Restauración completada.")
         return True
+
+    def get_all_snapshot_ids(self) -> List[str]:
+        """Obtiene solo los timestamps (nombres de carpeta) ordenados del más reciente al más antiguo."""
+        if not self.snapshots_dir.exists():
+            return []
+
+        # Las carpetas tienen formato YYYYMMDD_HHMMSS
+        folders = [
+            d.name
+            for d in self.snapshots_dir.iterdir()
+            if d.is_dir() and (d / "info.json").exists()
+        ]
+        return sorted(folders, reverse=True)
+
+    def get_snapshot_info(self, timestamp: str) -> Optional[dict]:
+        """Carga el JSON de un snapshot específico."""
+        info_path = self.snapshots_dir / timestamp / "info.json"
+        if not info_path.exists():
+            return None
+        try:
+            return json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def list_snapshots(self) -> List[dict]:
+        """Devuelve una lista de diccionarios con la información de todos los snapshots."""
+        ids = self.get_all_snapshot_ids()
+        snaps = []
+        for tid in ids:
+            info = self.get_snapshot_info(tid)
+            if info:
+                snaps.append(info)
+        return snaps

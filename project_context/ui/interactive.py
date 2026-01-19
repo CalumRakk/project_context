@@ -127,26 +127,49 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         save_project_context_state(project_path, state)
 
             elif command == "history":
-                snaps = monitor.list_snapshots()
-                if not snaps:
+                all_ids = monitor.get_all_snapshot_ids()
+                if not all_ids:
                     print("No hay historial disponible.")
-                else:
-                    limit = 10
-                    if args.strip():
-                        if args.strip() == "all":
-                            limit = len(snaps)
-                        elif args.strip().isdigit():
-                            limit = int(args.strip())
-                    subset = list(reversed(snaps[:limit]))
-                    print(f"\nMostrando últimos {len(subset)} snapshots:")
-                    print(f"{'TIMESTAMP (ID)':<16} | {'HORA':<20} | {'MENSAJE'}")
-                    print("-" * 70)
-                    for snap in subset:
-                        msg = snap.get("message") or "-"
-                        print(
-                            f" {snap['timestamp']:<16} | {snap['human_time']:<20} | {msg}"
-                        )
-                    print("")
+                    continue
+
+                page_size = 10
+                current_idx = 0
+                total = len(all_ids)
+
+                print(f"\nMostrando historial ({total} snapshots):")
+                print(f"{'TIMESTAMP (ID)':<18} | {'HORA':<20} | {'MENSAJE'}")
+                print("-" * 75)
+
+                while current_idx < total:
+                    end_idx = min(current_idx + page_size, total)
+                    for i in range(current_idx, end_idx):
+                        info = monitor.get_snapshot_info(all_ids[i])
+                        if info:
+                            msg = info.get("message") or "-"
+                            # Truncar mensaje si es muy largo para la tabla
+                            if len(msg) > 35:
+                                msg = msg[:32] + "..."
+                            print(
+                                f" {info['timestamp']:<18} | {info['human_time']:<20} | {msg}"
+                            )
+
+                    current_idx = end_idx
+
+                    if current_idx < total:
+                        prompt = f"-- Más ({current_idx}/{total}). [Enter] para seguir, 'q' para salir --"
+                        try:
+                            choice = input(prompt).strip().lower()
+                            # Borrar la línea del prompt para que el log se vea limpio
+                            # \033[F mueve el cursor arriba, \033[K borra la línea
+                            sys.stdout.write("\033[F\033[K")
+                            if choice == "q":
+                                break
+                        except (KeyboardInterrupt, EOFError):
+                            print("")
+                            break
+                    else:
+                        print("-" * 75)
+                        print("Fin del historial.\n")
 
             elif command == "restore":
                 if not args:
