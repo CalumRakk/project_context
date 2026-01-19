@@ -276,6 +276,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     print("No se pudo resolver ninguna ruta de imagen.")
                     continue
 
+                monitor.stop_monitoring()
+
                 chat_data = api.get_chat_ia_studio(state["chat_id"])
                 if not chat_data:
                     print("Error recuperando el chat desde Drive.")
@@ -304,6 +306,9 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         f"¡{len(resolved_paths)} imágenes inyectadas!",
                         fg=typer.colors.GREEN,
                     )
+
+                if state.get("monitor_active"):
+                    monitor.start_monitoring()
 
             else:
                 print(f"Comando desconocido: '{command}'")
