@@ -10,7 +10,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.schema import ChatIAStudio, ChunksDocument, ChunksImage, ChunksText
-from project_context.utils import profile_manager
+from project_context.utils import UI, profile_manager
 
 
 class GoogleDriveManager:
@@ -27,11 +27,11 @@ class GoogleDriveManager:
         # El token siempre es específico del perfil
         self.token_file = self.working_dir / "token.json"
 
-        print(f"Perfil activo: [{self.profile_name}]")
+        UI.info(f"Perfil activo: [bold]{self.profile_name}[/]")
 
         self.credentials = self._authenticate()
         self.service = build("drive", "v3", credentials=self.credentials)
-        print("Google Drive Manager inicializado con éxito.")
+        UI.success("Google Drive Manager inicializado con éxito.")
 
     def _authenticate(self) -> Credentials:
         """
@@ -45,9 +45,9 @@ class GoogleDriveManager:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    print("Credenciales de Drive refrescadas.")
+                    UI.info("Credenciales de Drive refrescadas.")
                 except Exception as e:
-                    print(f"Error al refrescar: {e}. Se requiere re-autenticación.")
+                    UI.error(f"Error al refrescar: {e}. Se requiere re-autenticación.")
                     creds = None
 
             if not creds:
@@ -59,17 +59,17 @@ class GoogleDriveManager:
                         f"o en la carpeta del perfil actual ({self.working_dir})."
                     )
 
-                print("Iniciando flujo de autenticación de Google Drive...")
+                UI.info("Iniciando flujo de autenticación de Google Drive...")
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.client_secrets_file, self.SCOPES
                 )
                 creds = cast(Credentials, flow.run_local_server(port=0))
-                print("Autenticación completada.")
+                UI.success("Autenticación completada.")
 
             # Guardamos el token en la carpeta del perfil
             with open(self.token_file, "w") as token:
                 token.write(creds.to_json())
-            print(f"Credenciales guardadas en '{self.token_file}'.")
+            UI.info(f"Credenciales guardadas en el perfil.")
 
         return creds
 
@@ -145,10 +145,10 @@ class GoogleDriveManager:
                 )
                 .execute()
             )
-            print(f'Contenido del archivo "{updated_file.get("name")}" actualizado.')
+            UI.success(f"Archivo de contexto actualizado en Drive.")
             return updated_file
         except HttpError as error:
-            print(f"Error al modificar archivo '{file_id}': {error}")
+            UI.error(f"Error al modificar archivo '{file_id}': {error}")
             return None
 
     def create_file_from_memory(

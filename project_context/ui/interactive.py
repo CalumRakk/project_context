@@ -1,10 +1,10 @@
 import signal
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.table import Table
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
@@ -14,6 +14,8 @@ from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
     IMAGE_INSERTION_PROMPT,
     IMAGE_INSERTION_RESPONSE,
+    UI,
+    console,
     extract_image_references,
     get_diff_message,
     get_potential_media_folders,
@@ -53,27 +55,29 @@ def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
 
 
 def command_help():
-    print("\nComandos disponibles:")
-    print("  commit             - [NUEVO] Enviar git diff (staged) al chat.")
-    print("  edit               - Abrir editor visual de historial.")
-    print("  monitor on/off     - Auto-guardado de historial.")
-    print("  save <mensaje>     - Guardar snapshot manual con nombre.")
-    print("  history [N|all]    - Ver puntos de restauración.")
-    print("  restore <id>       - Restaurar chat y contexto.")
-    print("  clear              - Limpiar historial del chat en Drive.")
-    print("  update             - Forzar actualización de contexto.")
-    print("  reset              - Actualiza contexto y limpia el chat.")
-    print("  exit / quit        - Salir.\n")
+    """Muestra la ayuda con un formato más limpio."""
+    console.print("\n[bold cyan]Comandos Disponibles:[/]")
+    help_text = (
+        "  [bold]commit[/]             - Enviar git diff (staged) al chat.\n"
+        "  [bold]edit[/]               - Abrir editor visual de historial.\n"
+        "  [bold]monitor on/off[/]     - Auto-guardado de historial.\n"
+        "  [bold]save <msg>[/]         - Snapshot manual con nombre.\n"
+        "  [bold]history[/]            - Ver puntos de restauración.\n"
+        "  [bold]restore <id>[/]       - Restaurar chat y contexto.\n"
+        "  [bold]clear[/]              - Limpiar historial del chat en Drive.\n"
+        "  [bold]update[/]             - Forzar actualización de contexto.\n"
+        "  [bold]reset[/]              - Reconstrucción total del chat.\n"
+        "  [bold]exit / quit[/]        - Salir de la sesión.\n"
+    )
+    console.print(help_text)
 
 
 def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
-    print("\nOk. Contexto cargado. Sesión interactiva iniciada.")
-    print("\tEscribe 'help' para ver los comandos disponibles.\n")
-
+    UI.info("Sesión interactiva iniciada. Escribe [bold]help[/] para comandos.")
     monitor = SnapshotManager(api, project_path, state)
 
     def handle_exit(sig, frame):
-        print("\n[Signal] Cerrando sesión de forma segura...")
+        UI.info("Cerrando sesión de forma segura...")
         monitor.stop_monitoring()
         sys.exit(0)
 
@@ -82,22 +86,21 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
         signal.signal(signal.SIGTERM, handle_exit)
 
     if state.get("monitor_active", False):
-        print("[Estado guardado] Reactivando monitor automáticamente...")
+        UI.info("Reactivando monitor de historial automáticamente...")
         monitor.start_monitoring()
 
     chat_id = state.get("chat_id")
     consecutive_errors = 0
 
-    print(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
+    UI.info(f"[Chat] Iniciando sesión con chat_id {chat_id}...")
 
     session_media_root = None  # Memoria temporal de la carpeta de imágenes
     while True:
+        consecutive_errors = 0
         try:
-            command_line = input(">> ")
-            consecutive_errors = 0
-            if not command_line.strip():
-                print("Comando vacío.")
-                raise ValueError("Comando vacío.")
+            command_line = console.input("[bold green]>> [/]").strip()
+            if not command_line:
+                continue
 
             parts = command_line.split(" ", 1)
             command = parts[0].lower()
@@ -105,27 +108,26 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
             if command in ["exit", "quit"]:
                 monitor.stop_monitoring()
-                print("Cerrando sesión...")
+                UI.info("Cerrando sesión...")
                 break
-
-            elif command == "help":
-                command_help()
 
             elif command == "edit":
                 monitor.stop_monitoring()
 
                 run_editor_mode(api, state["chat_id"])
-                print("Regresando a la sesión interactiva...")
+                UI.info("Reactivando monitor de historial automático...")
                 command_help()
                 if state.get("monitor_active", False):
                     monitor.start_monitoring()
 
+            elif command == "help":
+                command_help()
+
             elif command == "save":
                 if not args.strip():
-                    print("Por favor, escribe un mensaje para identificar el guardado.")
+                    UI.warn("Debes proveer un mensaje: `save mi_cambio_importante`")
                 else:
                     monitor.create_named_snapshot(args.strip())
-
             elif command == "monitor":
                 if args == "on":
                     monitor.start_monitoring()
@@ -137,69 +139,50 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     if state.get("monitor_active"):
                         state["monitor_active"] = False
                         save_project_context_state(project_path, state)
+                else:
+                    UI.warn("Uso: monitor on | off")
 
             elif command == "history":
                 all_ids = monitor.get_all_snapshot_ids()
                 if not all_ids:
-                    print("No hay historial disponible.")
+                    UI.info("No hay historial disponible aún.")
                     continue
 
-                page_size = 10
-                current_idx = 0
-                total = len(all_ids)
+                table = Table(
+                    title="Historial de Snapshots",
+                    show_header=True,
+                    header_style="bold magenta",
+                )
+                table.add_column("Timestamp (ID)", style="dim")
+                table.add_column("Fecha/Hora")
+                table.add_column("Mensaje", style="cyan")
 
-                print(f"\nMostrando historial ({total} snapshots):")
-                print(f"{'TIMESTAMP (ID)':<18} | {'HORA':<20} | {'MENSAJE'}")
-                print("-" * 75)
+                for tid in all_ids:
+                    info = monitor.get_snapshot_info(tid)
+                    if info:
+                        table.add_row(
+                            info["timestamp"],
+                            info["human_time"],
+                            info.get("message") or "-",
+                        )
 
-                while current_idx < total:
-                    end_idx = min(current_idx + page_size, total)
-                    for i in range(current_idx, end_idx):
-                        info = monitor.get_snapshot_info(all_ids[i])
-                        if info:
-                            msg = info.get("message") or "-"
-                            # Truncar mensaje si es muy largo para la tabla
-                            if len(msg) > 35:
-                                msg = msg[:32] + "..."
-                            print(
-                                f" {info['timestamp']:<18} | {info['human_time']:<20} | {msg}"
-                            )
-
-                    current_idx = end_idx
-
-                    if current_idx < total:
-                        prompt = f"-- Más ({current_idx}/{total}). [Enter] para seguir, 'q' para salir --"
-                        try:
-                            choice = input(prompt).strip().lower()
-                            # Borrar la línea del prompt para que el log se vea limpio
-                            # \033[F mueve el cursor arriba, \033[K borra la línea
-                            sys.stdout.write("\033[F\033[K")
-                            if choice == "q":
-                                break
-                        except (KeyboardInterrupt, EOFError):
-                            print("")
-                            break
-                    else:
-                        print("-" * 75)
-                        print("Fin del historial.\n")
+                console.print(table)
 
             elif command == "restore":
                 if not args:
-                    print("Especifica el TIMESTAMP del comando 'history'.")
+                    UI.warn("Especifica el ID del snapshot.")
                 else:
-                    if (
-                        input(
-                            "ESTO SOBREESCRIBIRA EL CHAT ACTUAL. ¿Seguro? (s/n): "
-                        ).lower()
-                        == "s"
-                    ):
+                    confirm = console.input(
+                        f"[bold red]¿Restaurar snapshot {args}? (s/n): [/]"
+                    )
+                    if confirm.lower() == "s":
                         monitor.stop_monitoring()
                         if monitor.restore_snapshot(args.strip()):
-                            print("Recarga AI Studio para ver los cambios.")
+                            UI.success("Chat restaurado. Recarga AI Studio.")
 
             elif command == "clear":
                 if api.clear_chat_ia_studio(state["chat_id"]):
-                    print("Historial limpiado.")
+                    UI.success("Historial de mensajes limpiado en Drive.")
 
             elif command == "update":
                 monitor.stop_monitoring()
@@ -210,50 +193,28 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 print("Puedes reactivar el monitor con 'monitor on'.")
 
             elif command == "reset":
-                if (
-                    input(
-                        "Esto eliminará el historial de mensajes y reconstruirá el contexto (incluyendo imágenes). ¿Seguro? (s/n): "
-                    ).lower()
-                    != "s"
-                ):
-                    continue
-
-                monitor.stop_monitoring()
-                print("Iniciando reinicio completo...")
-
-                # Snapshot de seguridad
-                date_session_reset = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                monitor.create_named_snapshot(f"ANTES DEL RESET {date_session_reset}")
-
-                try:
+                confirm = console.input(
+                    "[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]"
+                )
+                if confirm.lower() == "s":
+                    monitor.stop_monitoring()
                     state = rebuild_project_context(api, project_path, state)
                     save_project_context_state(project_path, state)
-
-                    monitor.state = state
-                    if state.get("monitor_active", False):
+                    if state.get("monitor_active"):
                         monitor.start_monitoring()
 
-                    print("¡Sesión e imágenes sincronizadas y chat reiniciado!")
-                except Exception as e:
-                    print(f"Error durante el reset: {e}")
-
             elif command == "commit":
-                print("Verificando cambios en Git (Stage)...")
+                UI.info("Obteniendo cambios de Git...")
                 diff_content = get_diff_message(project_path)
-
                 if not diff_content:
-                    print(
-                        "No hay cambios en stage. Ejecuta 'git add <archivos>' primero."
-                    )
+                    UI.warn("No hay cambios en stage. Usa `git add` primero.")
                     continue
 
-                print(
-                    f"Detectados cambios ({len(diff_content)} caracteres). Obteniendo chat..."
-                )
+                UI.success("Sugerencia de commit enviada a AI Studio.")
 
                 chat_data = api.get_chat_ia_studio(state["chat_id"])
                 if not chat_data:
-                    print("Error recuperando el chat desde Drive.")
+                    UI.warn("No se pudo obtener el chat de AI Studio.")
                     continue
 
                 prompt_text = (
@@ -268,23 +229,23 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 new_chunk = ChunksText(text=prompt_text, role="user", tokenCount=None)
                 chat_data.chunkedPrompt.chunks.append(new_chunk)
 
-                print("Enviando prompt a AI Studio...")
+                UI.info("Guardando cambios en Drive...")
                 if api.update_chat_file(state["chat_id"], chat_data):
-                    print("¡Listo! Prompt de commit agregado al final del chat.")
-                    print("Ve a AI Studio y presiona RUN.")
+                    UI.success("¡Listo! Prompt de commit agregado al final del chat.")
+                    UI.info("Ve a AI Studio y presiona RUN.")
                 else:
-                    print("Error al guardar el archivo en Drive.")
+                    UI.error("Error al guardar el archivo en Drive.")
 
             elif command == "images":
                 if not args:
-                    print("Uso: images <archivo.md>")
+                    UI.warn("Uso: images <archivo.md>")
                     continue
 
                 target_file = project_path / args
                 refs = extract_image_references(target_file)
 
                 if not refs:
-                    print(f"No se encontraron imágenes en {args}.")
+                    UI.warn(f"No se encontraron imágenes en {args}.")
                     continue
 
                 resolved_paths = []
@@ -308,7 +269,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         )
 
                 if not resolved_paths:
-                    print("No se pudo resolver ninguna ruta de imagen.")
+                    UI.warn("No se pudo resolver ninguna ruta de imagen.")
                     continue
 
                 monitor.stop_monitoring()
@@ -348,14 +309,15 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             else:
                 print(f"Comando desconocido: '{command}'")
 
-        except EOFError:
-            break
-        except KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
+            UI.info("Saliendo...")
             monitor.stop_monitoring()
             break
         except Exception as e:
+            UI.error(f"Error de ejecución: {e}")
+
             consecutive_errors += 1
-            print(f"Error: {e}")
             if consecutive_errors > 10:
+                UI.error("Demasiados errores consecutivos. Saliendo...")
                 monitor.stop_monitoring()
                 sys.exit(1)

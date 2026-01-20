@@ -1,4 +1,8 @@
+import os
 import shutil
+import sys
+
+sys.path.append(os.getcwd())
 import tempfile
 import unittest
 from pathlib import Path

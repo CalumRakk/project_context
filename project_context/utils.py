@@ -8,9 +8,11 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+import gitingest
 import pathspec
 from git import Optional, Repo, exc  # type: ignore
-from gitingest import ingest
+from rich.console import Console
+from rich.theme import Theme
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,37 @@ Utilízalas como referencia visual para complementar tu comprensión del proyect
 
 IMAGE_INSERTION_RESPONSE = """Entendido. He recibido y procesado las imágenes vinculadas a `{filename}`.
 Ya tengo la referencia visual necesaria para ayudarte con esta parte del proyecto. ¿En qué puedo ayudarte ahora?"""
+
+
+custom_theme = Theme(
+    {
+        "info": "dim cyan",
+        "warning": "magenta",
+        "error": "bold red",
+        "success": "bold green",
+        "progress": "italic blue",
+    }
+)
+
+console = Console(theme=custom_theme)
+
+
+class UI:
+    @staticmethod
+    def info(message: str):
+        console.print(f"[info]i[/] {message}")
+
+    @staticmethod
+    def success(message: str):
+        console.print(f"[success]>[/] {message}")
+
+    @staticmethod
+    def warn(message: str):
+        console.print(f"[warning]![/] {message}")
+
+    @staticmethod
+    def error(message: str):
+        console.print(f"[error]X[/] {message}")
 
 
 def get_app_root_dir() -> Path:
@@ -183,7 +216,7 @@ def generate_context(project_path: Union[str, Path]) -> tuple[str, int]:
 
     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
 
-    summary, tree, content = ingest(
+    summary, tree, content = gitingest.ingest(
         str(project_path), exclude_patterns=set(custom_ignores)
     )
 

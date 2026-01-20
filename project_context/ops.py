@@ -14,6 +14,7 @@ from project_context.schema import (
 )
 from project_context.utils import (
     RESPONSE_TEMPLATE,
+    UI,
     compute_md5,
     generate_context,
     get_filtered_files,
@@ -26,7 +27,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
-    print("Primer uso para este proyecto. Creando contexto inicial...")
+    UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
     # Genera el contexto y las imágenes asociadas
     chunks = []
     context_chunk, content_md5 = sync_context(api, project_path)
@@ -65,6 +66,7 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
         "chat_id": chat_id,
         "file_id": context_chunk.driveDocument.id,
     }
+    UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
     return initial_state
 
 
@@ -74,23 +76,23 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     if not chat_id:
         raise ValueError("No se encontró 'chat_id' en el estado del proyecto.")
 
-    print(f"Revisando si el proyecto en '{project_path}' ha cambiado...")
+    UI.info(f"Escaneando cambios en [blue]{project_path.name}[/]...")
 
     if not has_files_modified_since(last_modified_saved, project_path):
-        print("El proyecto no ha cambiado. No se requiere actualización.")
+        UI.success("El proyecto está actualizado. [dim]No se requieren cambios.[/]")
         return state
 
-    print("El proyecto ha cambiado. Generando nuevo contexto...")
+    UI.info("Cambios detectados. Generando nuevo contexto con Gitingest...")
     content, _ = generate_context(project_path)
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
     if current_md5 == state.get("md5"):
-        print("El contenido es idéntico (cambios irrelevantes).")
+        UI.warn("El contenido es idéntico (cambios en archivos ignorados).")
         state["last_modified"] = project_path.stat().st_mtime
         return state
 
-    print("El contenido ha cambiado. Actualizando en Google Drive...")
+    UI.info("Sincronizando nuevo contexto con Google Drive...")
     file_id = state.get("file_id")
     if not file_id:
         raise ValueError("No se encontró 'file_id' para actualizar.")
@@ -99,7 +101,7 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
 
     state["last_modified"] = project_path.stat().st_mtime
     state["md5"] = current_md5
-    print("Contexto actualizado con Éxito.")
+    UI.success("Sincronización completada con éxito.")
 
     return state
 
@@ -168,24 +170,26 @@ def rebuild_project_context(
     api: AIStudioDriveManager, project_path: Path, state: Dict
 ) -> Dict:
     """
-    Realiza un Hard Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
+    Realiza un Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
     Actualiza el contenido del context.txt y reconstruye la lista de chunks.
     """
     file_id = state.get("file_id")
     chat_id = state.get("chat_id")
+
+    UI.info(f"Iniciando [bold red]Reset[/] del chat [dim]{chat_id}[/]...")
 
     if not file_id or not chat_id:
         raise ValueError(
             "No se encontraron los IDs necesarios en el estado para reconstruir."
         )
 
-    print(f"Reinciciando chat {chat_id} y actualizando contexto {file_id}...")
+    UI.info("Generando nuevo contexto con Gitingest...")
 
     content, expected_tokens = generate_context(project_path)
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
-    print("Actualizando archivo de contexto en Drive...")
+    UI.info("Actualizando archivo de contexto maestro...")
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
     context_chunk = ChunksDocument(
@@ -212,8 +216,9 @@ def rebuild_project_context(
 
     # 6. Guardar el chat actualizado en Drive
     if api.update_chat_file(chat_id, chat_data):
-        print("¡Hard Reset completado con éxito!")
+        UI.success("¡Chat y contexto reconstruido con exito!")
     else:
+        UI.error("Error crítico al guardar la reconstrucción del chat.")
         raise ValueError("Error al guardar la reconstrucción del chat.")
 
     state["last_modified"] = project_path.stat().st_mtime
