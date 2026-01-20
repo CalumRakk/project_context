@@ -305,6 +305,44 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
                 if state.get("monitor_active"):
                     monitor.start_monitoring()
+            elif command in ["fix"]:
+                UI.info("Descargando chat para inspección...")
+                monitor.stop_monitoring()
+
+                chat_data = api.get_chat_ia_studio(state["chat_id"])
+
+                if not chat_data:
+                    UI.error("No se pudo recuperar el chat de Drive.")
+                    continue
+
+                fixed_count = 0
+                chunks = chat_data.chunkedPrompt.chunks
+
+                for chunk in chunks:
+                    if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
+                        if chunk.finishReason != "STOP":
+                            chunk.finishReason = "STOP"
+                            fixed_count += 1
+
+                if fixed_count > 0:
+                    UI.info(
+                        f"Se detectaron {fixed_count} bloques con finishReason inconsistente."
+                    )
+                    if api.update_chat_file(state["chat_id"], chat_data):
+                        UI.success(
+                            f"¡Sanación completada! {fixed_count} bloques marcados como 'STOP'."
+                        )
+                    else:
+                        UI.error(
+                            "Error al intentar guardar el chat corregido en Drive."
+                        )
+                else:
+                    UI.success(
+                        "No se encontraron bloques que requieran corrección. El chat está sano."
+                    )
+
+                if state.get("monitor_active"):
+                    monitor.start_monitoring()
 
             else:
                 print(f"Comando desconocido: '{command}'")
@@ -321,3 +359,6 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 UI.error("Demasiados errores consecutivos. Saliendo...")
                 monitor.stop_monitoring()
                 sys.exit(1)
+
+            if state.get("monitor_active"):
+                monitor.start_monitoring()

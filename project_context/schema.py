@@ -19,7 +19,7 @@ class ChunksText(BaseModel):
     text: str
     role: Literal["user", "model"]
     tokenCount: Optional[int] = None
-    finishReason: Optional[str] = None
+    finishReason: Optional[str] = None  # STOP, PROHIBITED_CONTENT,
     parts: Optional[list[Parts]] = None
     isThought: Optional[bool] = None
     thinkingBudget: Optional[int] = None
