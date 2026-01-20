@@ -148,26 +148,40 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     UI.info("No hay historial disponible aún.")
                     continue
 
-                table = Table(
-                    title="Historial de Snapshots",
-                    show_header=True,
-                    header_style="bold magenta",
-                )
-                table.add_column("Timestamp (ID)", style="dim")
-                table.add_column("Fecha/Hora")
-                table.add_column("Mensaje", style="cyan")
+                page_size = 10
+                total_snapshots = len(all_ids)
 
-                for tid in all_ids:
-                    info = monitor.get_snapshot_info(tid)
-                    if info:
-                        table.add_row(
-                            info["timestamp"],
-                            info["human_time"],
-                            info.get("message") or "-",
-                        )
+                for i in range(0, total_snapshots, page_size):
+                    table = Table(
+                        title=f"Historial de Snapshots ({i+1}-{min(i+page_size, total_snapshots)} de {total_snapshots})",
+                        show_header=True,
+                        header_style="bold magenta",
+                    )
+                    table.add_column("Timestamp (ID)", style="dim", no_wrap=True)
+                    table.add_column("Fecha/Hora", no_wrap=True)
+                    table.add_column("Mensaje", style="cyan")
 
-                console.print(table)
+                    # Obtener el subconjunto de IDs para esta página
+                    current_chunk = all_ids[i : i + page_size]
+                    for tid in current_chunk:
+                        info = monitor.get_snapshot_info(tid)
+                        if info:
+                            table.add_row(
+                                info["timestamp"],
+                                info["human_time"],
+                                info.get("message") or "-",
+                            )
 
+                    console.print(table)
+
+                    # Control de paginación
+                    if i + page_size < total_snapshots:
+                        prompt_msg = f"[bold yellow]-- Presiona ENTER para ver más ({total_snapshots - (i + page_size)} restantes) o 'q' para salir --[/]"
+                        choice = console.input(prompt_msg).strip().lower()
+                        if choice == "q":
+                            break
+                    else:
+                        UI.info("Fin del historial.")
             elif command == "restore":
                 if not args:
                     UI.warn("Especifica el ID del snapshot.")
