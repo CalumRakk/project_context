@@ -1,3 +1,4 @@
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -70,6 +71,16 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     print("\tEscribe 'help' para ver los comandos disponibles.\n")
 
     monitor = SnapshotManager(api, project_path, state)
+
+    def handle_exit(sig, frame):
+        print("\n[Signal] Cerrando sesión de forma segura...")
+        monitor.stop_monitoring()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_exit)  # Ctrl+C
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, handle_exit)
+
     if state.get("monitor_active", False):
         print("[Estado guardado] Reactivando monitor automáticamente...")
         monitor.start_monitoring()
@@ -85,7 +96,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             command_line = input(">> ")
             consecutive_errors = 0
             if not command_line.strip():
-                continue
+                print("Comando vacío.")
+                raise ValueError("Comando vacío.")
 
             parts = command_line.split(" ", 1)
             command = parts[0].lower()
@@ -336,6 +348,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             else:
                 print(f"Comando desconocido: '{command}'")
 
+        except EOFError:
+            break
         except KeyboardInterrupt:
             monitor.stop_monitoring()
             break

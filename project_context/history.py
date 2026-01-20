@@ -42,7 +42,7 @@ class SnapshotManager:
     def stop_monitoring(self):
         try:
             self.running = False
-            if self.thread:
+            if self.thread and self.thread.is_alive():
                 self.thread.join(timeout=1.0)
             print("\n[Auto-Snapshot] Detenido.")
         except Exception as e:
