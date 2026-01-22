@@ -13,6 +13,7 @@ from project_context.schema import (
     SystemInstruction,
 )
 from project_context.utils import (
+    COMMIT_TASK_MARKER,
     RESPONSE_TEMPLATE,
     UI,
     compute_md5,
@@ -225,3 +226,22 @@ def rebuild_project_context(
     state["md5"] = current_md5
 
     return state
+
+
+def find_pending_commit_tasks(chat_data: ChatIAStudio):
+    chunks = chat_data.chunkedPrompt.chunks
+    tasks_found = []
+
+    for i, chunk in enumerate(chunks):
+        if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+            # Hemos encontrado el mensaje enviado por el CLI
+            has_response = False
+            if i + 1 < len(chunks):
+                next_chunk = chunks[i + 1]
+                if getattr(next_chunk, "role", None) == "model":
+                    has_response = True
+
+            tasks_found.append(
+                {"index": i, "has_response": has_response, "chunk": chunk}
+            )
+    return tasks_found

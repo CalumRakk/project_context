@@ -8,7 +8,13 @@ from rich.table import Table
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
-from project_context.ops import rebuild_project_context, sync_images, update_context
+from project_context.ops import (
+    COMMIT_TASK_MARKER,
+    find_pending_commit_tasks,
+    rebuild_project_context,
+    sync_images,
+    update_context,
+)
 from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
@@ -218,20 +224,43 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         monitor.start_monitoring()
 
             elif command == "commit":
+                # Descargar chat una sola vez para todas las comprobaciones
+                chat_data = api.get_chat_ia_studio(state["chat_id"])
+                if not chat_data:
+                    UI.error("No se pudo obtener el chat de AI Studio.")
+                    continue
+
+                subcommand = args.strip().lower()
+
+                # Limpieza
+                if subcommand in ["clean", "clear", "rm"]:
+                    UI.info("Limpiando bloques de commit...")
+                    removed = api.remove_commit_tasks(state["chat_id"])
+                    if removed > 0:
+                        UI.success(f"Se eliminaron {removed} bloques.")
+                    else:
+                        UI.info("Nada que limpiar.")
+                    continue
+
+                # Validación de duplicados
+                pending_tasks = find_pending_commit_tasks(chat_data)
+                if pending_tasks and subcommand != "force":
+                    UI.warn("Ya hay una sugerencia de commit pendiente en el chat.")
+                    UI.info(
+                        "Usa 'commit clean' para borrarla o 'commit force' para ignorar."
+                    )
+                    continue
+
+                # Llegamos aquí si no hay pendientes o es force
                 UI.info("Obteniendo cambios de Git...")
                 diff_content = get_diff_message(project_path)
+
                 if not diff_content:
                     UI.warn("No hay cambios en stage. Usa `git add` primero.")
                     continue
 
-                UI.success("Sugerencia de commit enviada a AI Studio.")
-
-                chat_data = api.get_chat_ia_studio(state["chat_id"])
-                if not chat_data:
-                    UI.warn("No se pudo obtener el chat de AI Studio.")
-                    continue
-
                 prompt_text = (
+                    f"{COMMIT_TASK_MARKER}\n"
                     "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas. El archivo context_project.txt contiene el contexto del proyecto:\n\nHe realizado los siguientes cambios:\n\n"
                     "```diff\n"
                     f"{diff_content}\n"

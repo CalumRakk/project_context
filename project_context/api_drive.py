@@ -10,7 +10,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.schema import ChatIAStudio, ChunksDocument, ChunksImage, ChunksText
-from project_context.utils import UI, profile_manager
+from project_context.utils import COMMIT_TASK_MARKER, UI, profile_manager
 
 
 class GoogleDriveManager:
@@ -329,3 +329,41 @@ class AIStudioDriveManager:
         except Exception as e:
             print(f"Error actualizando chat: {e}")
             return False
+
+    def remove_commit_tasks(self, chat_id: str) -> int:
+        """
+        Busca y elimina los bloques de commit (user) y sus respuestas (model).
+        Retorna la cantidad de bloques eliminados.
+        """
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat:
+            return 0
+
+        original_chunks = chat.chunkedPrompt.chunks
+        new_chunks = []
+        skip_next = False
+        removed_count = 0
+
+        for i, chunk in enumerate(original_chunks):
+            if skip_next:
+                skip_next = False
+                removed_count += 1
+                continue
+
+            # Detectar nuestro marcador
+            if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+                removed_count += 1
+                # Si el siguiente bloque es la respuesta del modelo, marcar para saltar
+                if i + 1 < len(original_chunks):
+                    next_chunk = original_chunks[i + 1]
+                    if getattr(next_chunk, "role", None) == "model":
+                        skip_next = True
+                continue
+
+            new_chunks.append(chunk)
+
+        if removed_count > 0:
+            chat.chunkedPrompt.chunks = new_chunks
+            self.update_chat_file(chat_id, chat)
+
+        return removed_count

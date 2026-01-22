@@ -16,6 +16,8 @@ from rich.theme import Theme
 
 logger = logging.getLogger(__name__)
 
+COMMIT_TASK_MARKER = "<!-- TASK:COMMIT_SUGGESTION -->"
+
 PROMPT_TEMPLATE = """Eres un ingeniero de software senior y experto en análisis de código completo.
 
 A continuación te paso **todo el código fuente de mi proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest).
