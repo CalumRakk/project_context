@@ -32,7 +32,6 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     # Genera el contexto y las imágenes asociadas
     chunks = []
     context_chunk, content_md5 = sync_context(api, project_path)
-    media_chunks = sync_images(api, project_path)
 
     prompt_chunk = ChunksText(
         text=resolve_prompt(project_path), role="user", tokenCount=None
@@ -40,7 +39,6 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
 
     chunks.append(context_chunk)
-    chunks.extend(media_chunks)
     chunks.append(prompt_chunk)
     chunks.append(model_chunk)
 
@@ -77,32 +75,55 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     if not chat_id:
         raise ValueError("No se encontró 'chat_id' en el estado del proyecto.")
 
-    UI.info(f"Escaneando cambios en [blue]{project_path.name}[/]...")
+    context_scope = state.get("context_scope")
+    target_path = project_path / context_scope if context_scope else project_path
+    scope_name = context_scope if context_scope else "Raíz del proyecto"
 
-    if not has_files_modified_since(last_modified_saved, project_path):
-        UI.success("El proyecto está actualizado. [dim]No se requieren cambios.[/]")
+    UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
+
+    if not has_files_modified_since(last_modified_saved, target_path):
+        UI.success(f"El contexto ({scope_name}) está actualizado.")
         return state
 
-    UI.info("Cambios detectados. Generando nuevo contexto con Gitingest...")
-    content, _ = generate_context(project_path)
+    UI.info(f"Cambios detectados. Generando nuevo contexto y calculando tokens...")
+
+    content, new_tokens = generate_context(project_path, target_path=target_path)
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
     if current_md5 == state.get("md5"):
-        UI.warn("El contenido es idéntico (cambios en archivos ignorados).")
-        state["last_modified"] = project_path.stat().st_mtime
+        UI.warn("El contenido es idéntico.")
+        state["last_modified"] = target_path.stat().st_mtime
         return state
 
-    UI.info("Sincronizando nuevo contexto con Google Drive...")
+    UI.info("Sincronizando archivo de texto en Drive...")
     file_id = state.get("file_id")
-    if not file_id:
-        raise ValueError("No se encontró 'file_id' para actualizar.")
-
+    assert file_id is not None
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    state["last_modified"] = project_path.stat().st_mtime
+    # ACTUALIZAR METADATOS EN EL CHAT (Tokens y Referencia)
+    UI.info("Actualizando metadatos del chat (Token Count)...")
+    chat_data = api.get_chat_ia_studio(chat_id)
+    if chat_data:
+        updated_metadata = False
+        # TODO: Mejorar la forma de encontrar el chunk o centralizarla.
+        for chunk in chat_data.chunkedPrompt.chunks:
+            if hasattr(chunk, "driveDocument") and chunk.driveDocument.id == file_id:  # type: ignore
+                chunk.tokenCount = new_tokens
+                updated_metadata = True
+                break
+
+        if updated_metadata:
+            api.update_chat_file(chat_id, chat_data)
+            UI.info(f"Metadatos actualizados: [bold]{new_tokens}[/] tokens.")
+        else:
+            UI.warn(
+                "No se pudo encontrar el bloque de contexto en el chat para actualizar tokens."
+            )
+
+    state["last_modified"] = target_path.stat().st_mtime
     state["md5"] = current_md5
-    UI.success("Sincronización completada con éxito.")
+    UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
 
     return state
 

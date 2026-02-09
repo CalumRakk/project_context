@@ -386,7 +386,28 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
                 if state.get("monitor_active"):
                     monitor.start_monitoring()
+            elif command == "context":
+                if not args or args.strip().lower() == "reset":
+                    UI.info("Restableciendo contexto a todo el proyecto...")
+                    state["context_scope"] = None
 
+                    state = update_context(api, project_path, state)
+                    save_project_context_state(project_path, state)
+                else:
+                    target_rel_path = args.strip()
+                    full_target_path = project_path / target_rel_path
+
+                    if not full_target_path.exists():
+                        UI.error(
+                            f"La ruta '{target_rel_path}' no existe en el proyecto."
+                        )
+                        continue
+
+                    UI.info(f"Enfocando contexto en: [bold]{target_rel_path}[/]")
+                    state["context_scope"] = target_rel_path
+                    state = update_context(api, project_path, state)
+                    save_project_context_state(project_path, state)
+                    UI.success(f"Ahora el modelo solo ve '{target_rel_path}'.")
             else:
                 print(f"Comando desconocido: '{command}'")
 

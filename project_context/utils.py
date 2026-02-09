@@ -213,13 +213,19 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
     return []
 
 
-def generate_context(project_path: Union[str, Path]) -> tuple[str, int]:
+def generate_context(
+    project_path: Union[str, Path], target_path: Optional[Path] = None
+) -> tuple[str, int]:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
+
+    # Si hay un target_path (archivo o carpeta), usamos ese para el ingest
+    # Si no, usamos la raíz del proyecto
+    ingest_path = target_path if target_path else project_path
 
     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
 
     summary, tree, content = gitingest.ingest(
-        str(project_path), exclude_patterns=set(custom_ignores)
+        str(ingest_path), exclude_patterns=set(custom_ignores)
     )
 
     estimated_tokens = human_to_int(summary.split()[-1])
@@ -265,9 +271,12 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
     return json.loads(content)
 
 
-def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> bool:
+def has_files_modified_since(
+    st_mtime: float, target_path: Path | str, gitignore=True
+) -> bool:
+    target_path = Path(target_path)
     if gitignore:
-        path_gitignore = folder / ".gitignore"
+        path_gitignore = target_path / ".gitignore"
         if path_gitignore.exists():
             ignore = [
                 i.strip()
@@ -277,18 +286,24 @@ def has_files_modified_since(st_mtime: float, folder: Path, gitignore=True) -> b
         else:
             ignore = []
 
-    folder = Path(folder)
-    for file in folder.rglob("*"):
-        if not file.is_file():
-            continue
-        ruta_rel = str(file.relative_to(folder))
-        if gitignore is True:
-            if any(fnmatch(ruta_rel, patron) for patron in ignore):  # type: ignore
-                continue
-        fecha_mod = file.stat().st_mtime
+    if target_path.is_file():
+        fecha_mod = target_path.stat().st_mtime
         if fecha_mod > st_mtime:
             return True
-    return False
+        return False
+    elif target_path.is_dir():
+        for file in target_path.rglob("*"):
+            if not file.is_file():
+                continue
+            ruta_rel = str(file.relative_to(target_path))
+            if gitignore is True:
+                if any(fnmatch(ruta_rel, patron) for patron in ignore):  # type: ignore
+                    continue
+            fecha_mod = file.stat().st_mtime
+            if fecha_mod > st_mtime:
+                return True
+        return False
+    raise Exception("No se encontraron archivos modificados")
 
 
 def resolve_prompt(project_path: Union[str, Path]) -> str:

@@ -1,8 +1,10 @@
 from setuptools import setup
 
+from project_context import __version__
+
 setup(
     name="project-context-cli",
-    version="0.2.0",
+    version=__version__,
     author="CalumRakk",
     author_email="leocasti2@gmail.com",
     description="A CLI tool for managing project context with Google AI Studio",
