@@ -104,7 +104,10 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
 
     UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
 
-    if not has_files_modified_since(last_modified_saved, target_path):
+    if (
+        not has_files_modified_since(last_modified_saved, target_path)
+        and context_scope is None
+    ):
         UI.success(f"El contexto ({scope_name}) está actualizado.")
         return state
 
