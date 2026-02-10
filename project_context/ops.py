@@ -128,25 +128,27 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     assert file_id is not None
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    # ACTUALIZAR METADATOS EN EL CHAT (Tokens y Referencia)
     UI.info("Actualizando metadatos del chat (Token Count)...")
-    chat_data = api.get_chat_ia_studio(chat_id)
-    if chat_data:
-        updated_metadata = False
-        # TODO: Mejorar la forma de encontrar el chunk o centralizarla.
-        for chunk in chat_data.chunkedPrompt.chunks:
-            if hasattr(chunk, "driveDocument") and chunk.driveDocument.id == file_id:  # type: ignore
-                chunk.tokenCount = new_tokens
-                updated_metadata = True
-                break
+    try:
+        with api.modify_chat(chat_id) as chat_data:
+            updated_metadata = False
+            for chunk in chat_data.chunkedPrompt.chunks:
+                if (
+                    isinstance(chunk, ChunksDocument)
+                    and chunk.driveDocument.id == file_id
+                ):
+                    chunk.tokenCount = new_tokens
+                    updated_metadata = True
+                    break
 
-        if updated_metadata:
-            api.update_chat_file(chat_id, chat_data)
-            UI.info(f"Metadatos actualizados: [bold]{new_tokens}[/] tokens.")
-        else:
-            UI.warn(
-                "No se pudo encontrar el bloque de contexto en el chat para actualizar tokens."
-            )
+            if updated_metadata:
+                UI.info(f"Metadatos actualizados: [bold]{new_tokens}[/] tokens.")
+            else:
+                UI.warn(
+                    "No se pudo encontrar el bloque de contexto en el chat para actualizar tokens."
+                )
+    except Exception as e:
+        UI.error(f"Fallo al actualizar los tokens en el chat: {e}")
 
     state["last_modified"] = target_path.stat().st_mtime
     state["md5"] = current_md5
@@ -249,25 +251,19 @@ def rebuild_project_context(
     )
     model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
 
-    # Reconstruimos la lista de chunks desde cero
     new_chunks = []
     new_chunks.append(context_chunk)
     new_chunks.append(prompt_chunk)
     new_chunks.append(model_chunk)
 
-    # Descargar el Chat actual
-    chat_data = api.get_chat_ia_studio(chat_id)
-    if not chat_data:
-        raise ValueError("No se pudo recuperar el chat de Drive.")
+    try:
+        with api.modify_chat(chat_id) as chat_data:
+            chat_data.chunkedPrompt.chunks = new_chunks
+            chat_data.chunkedPrompt.pendingInputs = []
 
-    chat_data.chunkedPrompt.chunks = new_chunks
-    chat_data.chunkedPrompt.pendingInputs = []
-
-    # 6. Guardar el chat actualizado en Drive
-    if api.update_chat_file(chat_id, chat_data):
         UI.success("¡Chat y contexto reconstruido con exito!")
-    else:
-        UI.error("Error crítico al guardar la reconstrucción del chat.")
+    except Exception as e:
+        UI.error(f"Error crítico al guardar la reconstrucción del chat: {e}")
         raise ValueError("Error al guardar la reconstrucción del chat.")
 
     state["last_modified"] = project_path.stat().st_mtime
