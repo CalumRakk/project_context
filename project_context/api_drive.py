@@ -16,9 +16,30 @@ from project_context.schema import (
     ChunksDocument,
     ChunksImage,
     ChunksText,
+    DriveDocument,
     Role,
 )
 from project_context.utils import COMMIT_TASK_MARKER, UI, profile_manager
+
+
+class ChunkFactory:
+    """Centraliza la creación de bloques de mensaje para el Chat."""
+
+    @staticmethod
+    def create_text(text: str, role: Role = "user") -> ChunksText:
+        return ChunksText(text=text, role=role)
+
+    @staticmethod
+    def create_file(
+        file_id: str, role: Role = "user", tokens: int = 0
+    ) -> ChunksDocument:
+        return ChunksDocument(
+            driveDocument=DriveDocument(id=file_id), role=role, tokenCount=tokens
+        )
+
+    @staticmethod
+    def create_image(file_id: str, role: Role = "user") -> ChunksImage:
+        return ChunksImage(driveImage=DriveDocument(id=file_id), role=role)
 
 
 class GoogleDriveManager:
@@ -380,7 +401,7 @@ class AIStudioDriveManager:
         """
         try:
             with self.modify_chat(chat_id) as chat:
-                new_chunk = ChunksText(text=text, role=role)
+                new_chunk = ChunkFactory.create_text(text, role=role)
                 chat.chunkedPrompt.chunks.append(new_chunk)
             return True
         except Exception:

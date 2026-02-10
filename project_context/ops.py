@@ -1,14 +1,12 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from project_context.api_drive import AIStudioDriveManager
+from project_context.api_drive import AIStudioDriveManager, ChunkFactory
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
-    ChunksImage,
     ChunksText,
-    DriveDocument,
     RunSettings,
     SystemInstruction,
 )
@@ -60,10 +58,8 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     chunks = []
     context_chunk, content_md5 = sync_context(api, project_path)
 
-    prompt_chunk = ChunksText(
-        text=resolve_prompt(project_path), role="user", tokenCount=None
-    )
-    model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
+    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
+    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
 
     chunks.append(context_chunk)
     chunks.append(prompt_chunk)
@@ -175,9 +171,9 @@ def sync_context(
     )
     if not document or "id" not in document:
         raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
-    drive_document = DriveDocument(id=document["id"])
-    chat_file = ChunksDocument(
-        driveDocument=drive_document, role="user", tokenCount=expected_tokens
+
+    chat_file = ChunkFactory.create_file(
+        file_id=document["id"], role="user", tokens=expected_tokens
     )
     return chat_file, content_md5
 
@@ -208,12 +204,12 @@ def sync_images(
                 )
 
         if drive_file:
-            media_chunks.append(
-                ChunksText(text=f"Archivo visual: {rel_path}", role="user")
+            prompt = ChunkFactory.create_text(
+                f"Archivo visual: {rel_path}", role="user"
             )
-            media_chunks.append(
-                ChunksImage(driveImage=DriveDocument(id=drive_file["id"]), role="user")
-            )
+            image = ChunkFactory.create_image(drive_file["id"], role="user")
+            media_chunks.append(prompt)
+            media_chunks.append(image)
     return media_chunks
 
 
@@ -243,13 +239,11 @@ def rebuild_project_context(
     UI.info("Actualizando archivo de contexto maestro...")
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    context_chunk = ChunksDocument(
-        driveDocument=DriveDocument(id=file_id), role="user", tokenCount=expected_tokens
+    context_chunk = ChunkFactory.create_file(
+        file_id, role="user", tokens=expected_tokens
     )
-    prompt_chunk = ChunksText(
-        text=resolve_prompt(project_path), role="user", tokenCount=None
-    )
-    model_chunk = ChunksText(text=RESPONSE_TEMPLATE, role="model", tokenCount=None)
+    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
+    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
 
     new_chunks = []
     new_chunks.append(context_chunk)
