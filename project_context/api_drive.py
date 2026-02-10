@@ -1,6 +1,7 @@
 import io
 import json
-from typing import List, Optional, cast
+from contextlib import contextmanager
+from typing import Generator, List, Optional, cast
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -27,11 +28,7 @@ class GoogleDriveManager:
         """Inicializa el cliente de Drive y se autentica usando el perfil activo."""
         self.profile_name = profile_manager.get_active_profile_name()
         self.working_dir = profile_manager.get_working_dir()
-
-        # Estrategia de Cascada para Secretos
         self.client_secrets_file, source_type = profile_manager.resolve_secrets_file()
-
-        # El token siempre es específico del perfil
         self.token_file = self.working_dir / "token.json"
 
         UI.info(f"Perfil activo: [bold]{self.profile_name}[/]")
@@ -41,9 +38,6 @@ class GoogleDriveManager:
         UI.success("Google Drive Manager inicializado con éxito.")
 
     def _authenticate(self) -> Credentials:
-        """
-        Gestiona el proceso de autenticación de OAuth 2.0.
-        """
         creds: Optional[Credentials] = None
         if self.token_file.exists():
             creds = Credentials.from_authorized_user_file(self.token_file, self.SCOPES)
@@ -61,9 +55,7 @@ class GoogleDriveManager:
                 if not self.client_secrets_file.exists():
                     raise FileNotFoundError(
                         f"No se encontró 'client_secrets.json'.\n"
-                        f"Ruta esperada: {self.client_secrets_file}\n"
-                        f"Por favor, coloca el archivo JSON en la carpeta global ({profile_manager.root_dir})\n"
-                        f"o en la carpeta del perfil actual ({self.working_dir})."
+                        f"Ruta esperada: {self.client_secrets_file}"
                     )
 
                 UI.info("Iniciando flujo de autenticación de Google Drive...")
@@ -73,7 +65,6 @@ class GoogleDriveManager:
                 creds = cast(Credentials, flow.run_local_server(port=0))
                 UI.success("Autenticación completada.")
 
-            # Guardamos el token en la carpeta del perfil
             with open(self.token_file, "w") as token:
                 token.write(creds.to_json())
             UI.info(f"Credenciales guardadas en el perfil.")
@@ -129,7 +120,6 @@ class GoogleDriveManager:
             done = False
             while not done:
                 status, done = downloader.next_chunk()
-                # print(f"Descargando... {int(status.progress() * 100)}%")
             return file_stream.getvalue()
         except HttpError as error:
             print(f"Error HTTP al descargar archivo '{file_id}': {error}")
@@ -152,7 +142,7 @@ class GoogleDriveManager:
                 )
                 .execute()
             )
-            UI.success(f"Archivo de contexto actualizado en Drive.")
+            UI.success(f"Archivo actualizado en Drive.")
             return updated_file
         except HttpError as error:
             UI.error(f"Error al modificar archivo '{file_id}': {error}")
@@ -196,7 +186,6 @@ class GoogleDriveManager:
     def upload_binary_to_drive(
         self, folder_id: str, file_name: str, content: bytes, mime_type: str
     ) -> Optional[dict]:
-        """Sube cualquier archivo binario (como imágenes)."""
         file_metadata = {
             "name": file_name,
             "parents": [folder_id],
@@ -220,6 +209,7 @@ class GoogleDriveManager:
 
 class AIStudioDriveManager:
     AI_STUDIO_FOLDER_NAME = "Google AI Studio"
+    MIME_PROMPT = "application/vnd.google-makersuite.prompt"
 
     def __init__(self):
         self.gdm = GoogleDriveManager()
@@ -230,13 +220,10 @@ class AIStudioDriveManager:
             )
 
     def _find_ai_studio_folder(self) -> Optional[str]:
-        # print(f"Buscando la carpeta '{self.AI_STUDIO_FOLDER_NAME}'...")
         folder = self.gdm.find_item_by_name(self.AI_STUDIO_FOLDER_NAME)
         if not folder:
             print(f"La carpeta '{self.AI_STUDIO_FOLDER_NAME}' no fue encontrada.")
-            raise FileNotFoundError(
-                f"La carpeta '{self.AI_STUDIO_FOLDER_NAME}' no fue encontrada en Google Drive."
-            )
+            return None
         return folder.get("id")
 
     def get_chat_ia_studio(self, chat_id: str) -> Optional[ChatIAStudio]:
@@ -251,63 +238,6 @@ class AIStudioDriveManager:
             print(f"Error al decodificar el JSON del chat '{chat_id}': {e}")
             return None
 
-    def clear_chat_ia_studio(self, chat_id: str) -> bool:
-        print(f"Analizando estructura del chat para limpieza...")
-        chat = self.get_chat_ia_studio(chat_id)
-        if not chat:
-            return False
-
-        chunks = chat.chunkedPrompt.chunks
-        if not chunks:
-            print("El chat ya está vacío.")
-            return True
-
-        cut_idx = -1  # Primera respuesta del modelo
-        for i, chunk in enumerate(chunks):
-            if chunk.role == "model":
-                cut_idx = i
-                break
-
-        # No se encontro respuesta del modelo
-        if cut_idx == -1:
-            print("Aviso: No se encontró respuesta del modelo para anclar la limpieza.")
-            doc_idx = -1
-            for i, chunk in enumerate(chunks):
-                if isinstance(chunk, (ChunksDocument, ChunksImage)) or hasattr(
-                    chunk, "driveDocument"
-                ):
-                    doc_idx = i
-
-            if doc_idx != -1:
-                if len(chunks) > doc_idx + 1 and isinstance(
-                    chunks[doc_idx + 1], ChunksText
-                ):
-                    cut_idx = doc_idx + 1
-                else:
-                    cut_idx = doc_idx
-            else:
-                print("Error: No se detectó una estructura de contexto válida.")
-                print("Usa el comando 'reset' para reconstruir el chat desde cero.")
-                return False
-
-        original_count = len(chunks)
-        new_chunks = chunks[: cut_idx + 1]
-
-        if len(new_chunks) == original_count:
-            print("El chat ya está limpio (solo contiene el contexto inicial).")
-            return True
-
-        chat.chunkedPrompt.chunks = new_chunks
-
-        if self.update_chat_file(chat_id, chat):
-            print(
-                f"Limpieza completada. Se conservaron los primeros {len(new_chunks)} bloques (Setup)."
-            )
-            print(f"Mensajes eliminados: {original_count - len(new_chunks)}")
-            return True
-
-        return False
-
     def create_chat_file(
         self, file_name: str, chat_data: ChatIAStudio
     ) -> Optional[str]:
@@ -316,115 +246,177 @@ class AIStudioDriveManager:
             folder_id=self.ai_studio_folder,
             file_name=file_name,
             content=content_json,
-            mime_type="application/vnd.google-makersuite.prompt",
+            mime_type=self.MIME_PROMPT,
         )
         return result.get("id") if result else None
 
     def update_chat_file(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
         """
         Serializa y actualiza un objeto chat directamente en Drive.
-        Encapsula el MIME type y la serialización JSON.
         """
         try:
             content_json = chat_data.model_dump_json()
             result = self.gdm.update_file_from_memory(
                 file_id=chat_id,
                 content=content_json,
-                mime_type="application/vnd.google-makersuite.prompt",
+                mime_type=self.MIME_PROMPT,
             )
             return bool(result)
         except Exception as e:
             print(f"Error actualizando chat: {e}")
             return False
 
-    def remove_commit_tasks(self, chat_id: str) -> int:
+    @contextmanager
+    def modify_chat(self, chat_id: str) -> Generator[ChatIAStudio, None, None]:
         """
-        Busca y elimina los bloques de commit (user) y sus respuestas (model).
-        Retorna la cantidad de bloques eliminados.
+        Context Manager para realizar modificaciones atómicas en un Chat.
+        Encapsula el ciclo: Obtener -> Modificar -> Guardar.
+        Si ocurre un error dentro del 'with', NO guarda los cambios.
         """
         chat = self.get_chat_ia_studio(chat_id)
         if not chat:
-            return 0
+            raise FileNotFoundError(f"Chat {chat_id} no encontrado o inaccesible.")
 
-        original_chunks = chat.chunkedPrompt.chunks
-        new_chunks = []
-        skip_next = False
+        try:
+            yield chat
+        except Exception as e:
+            UI.error(f"Error procesando chat (cambios descartados): {e}")
+            raise e
+        else:
+            # Solo guardamos si no hubo excepciones
+            if not self.update_chat_file(chat_id, chat):
+                raise IOError("Falló la escritura del chat en Google Drive.")
+
+    def clear_chat_ia_studio(self, chat_id: str) -> bool:
+        """
+        Limpia el historial manteniendo el contexto inicial.
+        """
+        try:
+            with self.modify_chat(chat_id) as chat:
+                chunks = chat.chunkedPrompt.chunks
+                if not chunks:
+                    print("El chat ya está vacío.")
+                    return True
+
+                cut_idx = -1
+                for i, chunk in enumerate(chunks):
+                    if chunk.role == "model":
+                        cut_idx = i
+                        break
+
+                if cut_idx == -1:
+                    doc_idx = -1
+                    for i, chunk in enumerate(chunks):
+                        if isinstance(chunk, (ChunksDocument, ChunksImage)) or hasattr(
+                            chunk, "driveDocument"
+                        ):
+                            doc_idx = i
+
+                    if doc_idx != -1:
+                        if len(chunks) > doc_idx + 1 and isinstance(
+                            chunks[doc_idx + 1], ChunksText
+                        ):
+                            cut_idx = doc_idx + 1
+                        else:
+                            cut_idx = doc_idx
+                    else:
+                        print("Error: Estructura de contexto inválida.")
+                        return False
+
+                original_count = len(chunks)
+                new_chunks = chunks[: cut_idx + 1]
+
+                if len(new_chunks) == original_count:
+                    print("El chat ya está limpio.")
+                    return True
+
+                chat.chunkedPrompt.chunks = new_chunks
+                print(
+                    f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
+                )
+            return True
+        except Exception:
+            return False
+
+    def remove_commit_tasks(self, chat_id: str) -> int:
+        """
+        Busca y elimina los bloques de commit (user) y sus respuestas (model).
+        """
         removed_count = 0
-
-        for i, chunk in enumerate(original_chunks):
-            if skip_next:
+        try:
+            with self.modify_chat(chat_id) as chat:
+                original_chunks = chat.chunkedPrompt.chunks
+                new_chunks = []
                 skip_next = False
-                removed_count += 1
-                continue
 
-            # Detectar nuestro marcador
-            if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
-                removed_count += 1
-                # Si el siguiente bloque es la respuesta del modelo, marcar para saltar
-                if i + 1 < len(original_chunks):
-                    next_chunk = original_chunks[i + 1]
-                    if getattr(next_chunk, "role", None) == "model":
-                        skip_next = True
-                continue
+                for i, chunk in enumerate(original_chunks):
+                    if skip_next:
+                        skip_next = False
+                        removed_count += 1
+                        continue
 
-            new_chunks.append(chunk)
+                    if (
+                        isinstance(chunk, ChunksText)
+                        and COMMIT_TASK_MARKER in chunk.text
+                    ):
+                        removed_count += 1
+                        if i + 1 < len(original_chunks):
+                            next_chunk = original_chunks[i + 1]
+                            if getattr(next_chunk, "role", None) == "model":
+                                skip_next = True
+                        continue
 
-        if removed_count > 0:
-            chat.chunkedPrompt.chunks = new_chunks
-            self.update_chat_file(chat_id, chat)
+                    new_chunks.append(chunk)
 
-        return removed_count
+                if removed_count > 0:
+                    chat.chunkedPrompt.chunks = new_chunks
+            return removed_count
+        except Exception:
+            return 0
 
     def append_message(self, chat_id: str, text: str, role: Role = "user") -> bool:
         """
         Agrega un mensaje de texto simple al chat y lo guarda en Drive.
         """
-        chat = self.get_chat_ia_studio(chat_id)
-        if not chat:
+        try:
+            with self.modify_chat(chat_id) as chat:
+                new_chunk = ChunksText(text=text, role=role)
+                chat.chunkedPrompt.chunks.append(new_chunk)
+            return True
+        except Exception:
             return False
-
-        new_chunk = ChunksText(text=text, role=role)
-        chat.chunkedPrompt.chunks.append(new_chunk)
-
-        return self.update_chat_file(chat_id, chat)
 
     def append_chunks(self, chat_id: str, chunks: List[Chunk]) -> bool:
         """
         Agrega una lista de chunks (texto, imágenes, archivos) al chat.
         """
-        chat = self.get_chat_ia_studio(chat_id)
-        if not chat:
+        try:
+            with self.modify_chat(chat_id) as chat:
+                chat.chunkedPrompt.chunks.extend(chunks)
+            return True
+        except Exception:
             return False
-
-        chat.chunkedPrompt.chunks.extend(chunks)
-        return self.update_chat_file(chat_id, chat)
 
     def repair_chat_structure(self, chat_id: str) -> int:
         """
         Corrige inconsistencias en el chat (ej: finishReason).
         Retorna la cantidad de bloques corregidos.
         """
-        chat = self.get_chat_ia_studio(chat_id)
-        if not chat:
-            return 0
-
         fixed_count = 0
-        for chunk in chat.chunkedPrompt.chunks:
-            if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
-                if chunk.finishReason != "STOP":
-                    chunk.finishReason = "STOP"
-                    fixed_count += 1
-
-        if fixed_count > 0:
-            if not self.update_chat_file(chat_id, chat):
-                return 0  # Falló el guardado
-
-        return fixed_count
+        try:
+            with self.modify_chat(chat_id) as chat:
+                for chunk in chat.chunkedPrompt.chunks:
+                    if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
+                        if chunk.finishReason != "STOP":
+                            chunk.finishReason = "STOP"
+                            fixed_count += 1
+            return fixed_count
+        except Exception:
+            return 0
 
     def has_pending_commit_suggestion(self, chat_id: str) -> bool:
         """
-        Verifica si ya existe una sugerencia de commit (User) sin respuesta (Model)
-        o si simplemente existe el marcador en el chat.
+        Verifica si existe una sugerencia de commit pendiente.r
         """
         chat = self.get_chat_ia_studio(chat_id)
         if not chat:
@@ -439,5 +431,4 @@ class AIStudioDriveManager:
                     if getattr(next_chunk, "role", "") == "model":
                         return False
                 return True
-
         return False
