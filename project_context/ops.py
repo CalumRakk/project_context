@@ -18,6 +18,7 @@ from project_context.utils import (
     UI,
     compute_md5,
     generate_context,
+    get_diff_message,
     get_filtered_files,
     has_files_modified_since,
     resolve_prompt,
@@ -25,6 +26,31 @@ from project_context.utils import (
 )
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
+    """
+    Genera el prompt completo para la tarea de commit.
+    Retorna None si no hay cambios en stage.
+    """
+    diff_content = get_diff_message(project_path)
+
+    if not diff_content:
+        return None
+
+    prompt_text = (
+        f"{COMMIT_TASK_MARKER}\n"
+        "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas. "
+        "El archivo context_project.txt contiene el contexto del proyecto:\n\n"
+        "He realizado los siguientes cambios (git diff --cached):\n\n"
+        "```diff\n"
+        f"{diff_content}\n"
+        "```\n\n"
+        "Con base en esos cambios, sugiéreme un mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. "
+        "El mensaje debe ocupar un solo párrafo y reflejar la intención del cambio sin omitir detalles importantes.\n\n"
+        "Formato deseado: <tipo>(<alcance>): <descripción>"
+    )
+    return prompt_text
 
 
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:

@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -15,9 +15,12 @@ class Parts(BaseModel):
     text: str
 
 
+Role = Literal["user", "model"]
+
+
 class ChunksText(BaseModel):
     text: str
-    role: Literal["user", "model"]
+    role: Role
     tokenCount: Optional[int] = None
     finishReason: Optional[str] = None  # STOP, PROHIBITED_CONTENT,
     parts: Optional[list[Parts]] = None
@@ -31,24 +34,27 @@ class DriveDocument(BaseModel):
 
 class ChunksDocument(BaseModel):
     driveDocument: DriveDocument
-    role: Literal["user", "model"]
+    role: Role
     tokenCount: int
 
 
 class ChunksImage(BaseModel):
     driveImage: DriveDocument
-    role: Literal["user", "model"]
+    role: Role
     tokenCount: Optional[int] = None
 
 
 class PendingInputs(BaseModel):
     text: str
-    role: Literal["user", "model"] = "user"
+    role: Role = "user"
+
+
+Chunk = Union[ChunksText, ChunksDocument, ChunksImage]
 
 
 class ChunkedPrompt(BaseModel):
-    chunks: list[Union[ChunksText, ChunksDocument, ChunksImage]] = []
-    pendingInputs: list[PendingInputs] = []
+    chunks: List[Chunk] = Field(default_factory=list)
+    pendingInputs: list[PendingInputs] = Field(default_factory=list)
 
 
 class runSettings_safetySettings(BaseModel):

@@ -1,6 +1,6 @@
 import io
 import json
-from typing import Optional, cast
+from typing import List, Optional, cast
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -9,7 +9,14 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-from project_context.schema import ChatIAStudio, ChunksDocument, ChunksImage, ChunksText
+from project_context.schema import (
+    ChatIAStudio,
+    Chunk,
+    ChunksDocument,
+    ChunksImage,
+    ChunksText,
+    Role,
+)
 from project_context.utils import COMMIT_TASK_MARKER, UI, profile_manager
 
 
@@ -367,3 +374,49 @@ class AIStudioDriveManager:
             self.update_chat_file(chat_id, chat)
 
         return removed_count
+
+    def append_message(self, chat_id: str, text: str, role: Role = "user") -> bool:
+        """
+        Agrega un mensaje de texto simple al chat y lo guarda en Drive.
+        """
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat:
+            return False
+
+        new_chunk = ChunksText(text=text, role=role)
+        chat.chunkedPrompt.chunks.append(new_chunk)
+
+        return self.update_chat_file(chat_id, chat)
+
+    def append_chunks(self, chat_id: str, chunks: List[Chunk]) -> bool:
+        """
+        Agrega una lista de chunks (texto, imágenes, archivos) al chat.
+        """
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat:
+            return False
+
+        chat.chunkedPrompt.chunks.extend(chunks)
+        return self.update_chat_file(chat_id, chat)
+
+    def repair_chat_structure(self, chat_id: str) -> int:
+        """
+        Corrige inconsistencias en el chat (ej: finishReason).
+        Retorna la cantidad de bloques corregidos.
+        """
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat:
+            return 0
+
+        fixed_count = 0
+        for chunk in chat.chunkedPrompt.chunks:
+            if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
+                if chunk.finishReason != "STOP":
+                    chunk.finishReason = "STOP"
+                    fixed_count += 1
+
+        if fixed_count > 0:
+            if not self.update_chat_file(chat_id, chat):
+                return 0  # Falló el guardado
+
+        return fixed_count

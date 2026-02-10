@@ -9,8 +9,8 @@ from rich.table import Table
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
 from project_context.ops import (
-    COMMIT_TASK_MARKER,
     find_pending_commit_tasks,
+    generate_commit_prompt_text,
     rebuild_project_context,
     sync_images,
     update_context,
@@ -23,7 +23,6 @@ from project_context.utils import (
     UI,
     console,
     extract_image_references,
-    get_diff_message,
     get_potential_media_folders,
     save_project_context_state,
 )
@@ -224,15 +223,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         monitor.start_monitoring()
 
             elif command == "commit":
-                # Descargar chat una sola vez para todas las comprobaciones
-                chat_data = api.get_chat_ia_studio(state["chat_id"])
-                if not chat_data:
-                    UI.error("No se pudo obtener el chat de AI Studio.")
-                    continue
-
                 subcommand = args.strip().lower()
 
-                # Limpieza
                 if subcommand in ["clean", "clear", "rm"]:
                     UI.info("Limpiando bloques de commit...")
                     removed = api.remove_commit_tasks(state["chat_id"])
@@ -242,7 +234,11 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         UI.info("Nada que limpiar.")
                     continue
 
-                # Validación de duplicados
+                chat_data = api.get_chat_ia_studio(state["chat_id"])
+                if not chat_data:
+                    UI.error("Error de conexión con Drive.")
+                    continue
+
                 pending_tasks = find_pending_commit_tasks(chat_data)
                 if pending_tasks and subcommand != "force":
                     UI.warn("Ya hay una sugerencia de commit pendiente en el chat.")
@@ -251,34 +247,20 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     )
                     continue
 
-                # Llegamos aquí si no hay pendientes o es force
                 UI.info("Obteniendo cambios de Git...")
-                diff_content = get_diff_message(project_path)
+                prompt_text = generate_commit_prompt_text(project_path)
 
-                if not diff_content:
+                if not prompt_text:
                     UI.warn("No hay cambios en stage. Usa `git add` primero.")
                     continue
 
-                prompt_text = (
-                    f"{COMMIT_TASK_MARKER}\n"
-                    "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas. El archivo context_project.txt contiene el contexto del proyecto:\n\nHe realizado los siguientes cambios:\n\n"
-                    "```diff\n"
-                    f"{diff_content}\n"
-                    "```\n\n"
-                    "Con base en esos cambios, sugiéreme un mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. El mensaje debe ocupar un solo párrafo y reflejar la intención del cambio sin omitir detalles importantes.\n\n"
-                    "Formato: <tipo>(<alcance>): <descripción>"
-                )
-
-                new_chunk = ChunksText(text=prompt_text, role="user", tokenCount=None)
-                chat_data.chunkedPrompt.chunks.append(new_chunk)
-
-                UI.info("Guardando cambios en Drive...")
-                if api.update_chat_file(state["chat_id"], chat_data):
-                    UI.success("¡Listo! Prompt de commit agregado al final del chat.")
-                    UI.info("Ve a AI Studio y presiona RUN.")
+                UI.info("Enviando prompt a Drive...")
+                if api.append_message(state["chat_id"], prompt_text, role="user"):
+                    UI.success(
+                        "¡Listo! Prompt de commit agregado. Ve a AI Studio y presiona RUN."
+                    )
                 else:
-                    UI.error("Error al guardar el archivo en Drive.")
-
+                    UI.error("Error al guardar en Drive.")
             elif command == "images":
                 if not args:
                     UI.warn("Uso: images <archivo.md>")
@@ -317,75 +299,51 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
                 monitor.stop_monitoring()
 
-                chat_data = api.get_chat_ia_studio(state["chat_id"])
-                if not chat_data:
-                    print("Error recuperando el chat desde Drive.")
-                    continue
+                chunks_to_add = []
 
-                chat_data.chunkedPrompt.chunks.append(
+                chunks_to_add.append(
                     ChunksText(
                         text=IMAGE_INSERTION_PROMPT.format(filename=args), role="user"
                     )
                 )
 
-                new_chunks = sync_images(
+                image_chunks = sync_images(
                     api, project_path, specific_files=resolved_paths
                 )
-                chat_data.chunkedPrompt.chunks.extend(new_chunks)
-
-                chat_data.chunkedPrompt.chunks.append(
+                chunks_to_add.extend(image_chunks)
+                chunks_to_add.append(
                     ChunksText(
                         text=IMAGE_INSERTION_RESPONSE.format(filename=args),
                         role="model",
                     )
                 )
 
-                if api.update_chat_file(state["chat_id"], chat_data):
+                if api.append_chunks(state["chat_id"], chunks_to_add):
                     typer.secho(
                         f"¡{len(resolved_paths)} imágenes inyectadas!",
                         fg=typer.colors.GREEN,
                     )
+                else:
+                    UI.error("Error al subir imágenes al chat.")
 
                 if state.get("monitor_active"):
                     monitor.start_monitoring()
             elif command in ["fix"]:
-                UI.info("Descargando chat para inspección...")
+                UI.info("Analizando chat...")
                 monitor.stop_monitoring()
 
-                chat_data = api.get_chat_ia_studio(state["chat_id"])
-
-                if not chat_data:
-                    UI.error("No se pudo recuperar el chat de Drive.")
-                    continue
-
-                fixed_count = 0
-                chunks = chat_data.chunkedPrompt.chunks
-
-                for chunk in chunks:
-                    if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
-                        if chunk.finishReason != "STOP":
-                            chunk.finishReason = "STOP"
-                            fixed_count += 1
+                fixed_count = api.repair_chat_structure(state["chat_id"])
 
                 if fixed_count > 0:
-                    UI.info(
-                        f"Se detectaron {fixed_count} bloques con finishReason inconsistente."
-                    )
-                    if api.update_chat_file(state["chat_id"], chat_data):
-                        UI.success(
-                            f"¡Sanación completada! {fixed_count} bloques marcados como 'STOP'."
-                        )
-                    else:
-                        UI.error(
-                            "Error al intentar guardar el chat corregido en Drive."
-                        )
-                else:
                     UI.success(
-                        "No se encontraron bloques que requieran corrección. El chat está sano."
+                        f"¡Sanación completada! {fixed_count} bloques corregidos."
                     )
+                else:
+                    UI.success("El chat está sano o no se pudo acceder.")
 
                 if state.get("monitor_active"):
                     monitor.start_monitoring()
+
             elif command == "context":
                 if not args or args.strip().lower() == "reset":
                     UI.info("Restableciendo contexto a todo el proyecto...")
