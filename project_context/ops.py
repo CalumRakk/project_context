@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import (
@@ -17,6 +17,7 @@ from project_context.utils import (
     RESPONSE_TEMPLATE,
     UI,
     compute_md5,
+    extract_image_references,
     generate_context,
     get_diff_message,
     get_filtered_files,
@@ -292,3 +293,45 @@ def find_pending_commit_tasks(chat_data: ChatIAStudio):
                 {"index": i, "has_response": has_response, "chunk": chunk}
             )
     return tasks_found
+
+
+def resolve_image_paths(
+    project_path: Path,
+    source_file_rel_path: str,
+    media_root_hint: Optional[Path] = None,
+) -> Tuple[List[Path], List[str]]:
+    """
+    Dada una ruta de archivo fuente (ej: README.md), extrae referencias a imágenes
+    e intenta resolver sus rutas absolutas.
+
+    Retorna:
+        - List[Path]: Lista de imágenes encontradas y existentes.
+        - List[str]: Lista de nombres/referencias que NO se pudieron encontrar.
+    """
+    target_file = project_path / source_file_rel_path
+    if not target_file.exists():
+        raise FileNotFoundError(f"El archivo {source_file_rel_path} no existe.")
+
+    refs = extract_image_references(target_file)
+    if not refs:
+        return [], []
+
+    found_paths = []
+    missing_refs = []
+
+    for ref_text, is_wiki in refs:
+        # Relativo al archivo fuente
+        candidate = (target_file.parent / ref_text).resolve()
+
+        # Si es WikiLink y falló, probar con el hint (carpeta de medios)
+        if not candidate.exists() and is_wiki and media_root_hint:
+            candidate = (media_root_hint / ref_text).resolve()
+
+        # Validación final
+        if candidate.exists() and candidate.is_file():
+            if candidate not in found_paths:
+                found_paths.append(candidate)
+        else:
+            missing_refs.append(ref_text)
+
+    return found_paths, missing_refs

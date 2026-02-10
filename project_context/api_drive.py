@@ -420,3 +420,24 @@ class AIStudioDriveManager:
                 return 0  # Falló el guardado
 
         return fixed_count
+
+    def has_pending_commit_suggestion(self, chat_id: str) -> bool:
+        """
+        Verifica si ya existe una sugerencia de commit (User) sin respuesta (Model)
+        o si simplemente existe el marcador en el chat.
+        """
+        chat = self.get_chat_ia_studio(chat_id)
+        if not chat:
+            return False
+
+        chunks = chat.chunkedPrompt.chunks
+        for i in range(len(chunks) - 1, -1, -1):
+            chunk = chunks[i]
+            if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+                if i + 1 < len(chunks):
+                    next_chunk = chunks[i + 1]
+                    if getattr(next_chunk, "role", "") == "model":
+                        return False
+                return True
+
+        return False

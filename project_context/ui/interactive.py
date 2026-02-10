@@ -9,9 +9,9 @@ from rich.table import Table
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
 from project_context.ops import (
-    find_pending_commit_tasks,
     generate_commit_prompt_text,
     rebuild_project_context,
+    resolve_image_paths,
     sync_images,
     update_context,
 )
@@ -22,7 +22,6 @@ from project_context.utils import (
     IMAGE_INSERTION_RESPONSE,
     UI,
     console,
-    extract_image_references,
     get_potential_media_folders,
     save_project_context_state,
 )
@@ -234,13 +233,8 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                         UI.info("Nada que limpiar.")
                     continue
 
-                chat_data = api.get_chat_ia_studio(state["chat_id"])
-                if not chat_data:
-                    UI.error("Error de conexión con Drive.")
-                    continue
-
-                pending_tasks = find_pending_commit_tasks(chat_data)
-                if pending_tasks and subcommand != "force":
+                has_pending = api.has_pending_commit_suggestion(state["chat_id"])
+                if has_pending and subcommand != "force":
                     UI.warn("Ya hay una sugerencia de commit pendiente en el chat.")
                     UI.info(
                         "Usa 'commit clean' para borrarla o 'commit force' para ignorar."
@@ -266,68 +260,65 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                     UI.warn("Uso: images <archivo.md>")
                     continue
 
-                target_file = project_path / args
-                refs = extract_image_references(target_file)
-
-                if not refs:
-                    UI.warn(f"No se encontraron imágenes en {args}.")
-                    continue
-
-                resolved_paths = []
-                for ref_text, is_wiki in refs:
-                    path = (target_file.parent / ref_text).resolve()
-
-                    # Si es WikiLink y no se encuentra, usamos resolución asistida
-                    if not path.exists() and is_wiki:
-                        if not session_media_root:
-                            session_media_root = prompt_for_media_folder(project_path)
+                try:
+                    found_paths, missing = resolve_image_paths(
+                        project_path, args, session_media_root
+                    )
+                    if missing and not session_media_root:
+                        UI.warn(f"No se encontraron: {', '.join(missing[:3])}...")
+                        session_media_root = prompt_for_media_folder(project_path)
 
                         if session_media_root:
-                            path = (session_media_root / ref_text).resolve()
+                            found_paths_2, missing_2 = resolve_image_paths(
+                                project_path, args, session_media_root
+                            )
+                            found_paths = list(set(found_paths + found_paths_2))
+                            missing = missing_2
 
-                    if path.exists() and path.is_file():
-                        resolved_paths.append(path)
-                    else:
-                        typer.secho(
-                            f" [!] No se pudo encontrar: {ref_text}",
-                            fg=typer.colors.YELLOW,
+                    if not found_paths:
+                        UI.warn("No se pudo resolver ninguna ruta de imagen válida.")
+                        if missing:
+                            UI.info(f"Faltantes: {missing}")
+                        continue
+
+                    monitor.stop_monitoring()
+
+                    chunks_to_add = []
+                    chunks_to_add.append(
+                        ChunksText(
+                            text=IMAGE_INSERTION_PROMPT.format(filename=args),
+                            role="user",
                         )
-
-                if not resolved_paths:
-                    UI.warn("No se pudo resolver ninguna ruta de imagen.")
-                    continue
-
-                monitor.stop_monitoring()
-
-                chunks_to_add = []
-
-                chunks_to_add.append(
-                    ChunksText(
-                        text=IMAGE_INSERTION_PROMPT.format(filename=args), role="user"
                     )
-                )
 
-                image_chunks = sync_images(
-                    api, project_path, specific_files=resolved_paths
-                )
-                chunks_to_add.extend(image_chunks)
-                chunks_to_add.append(
-                    ChunksText(
-                        text=IMAGE_INSERTION_RESPONSE.format(filename=args),
-                        role="model",
+                    image_chunks = sync_images(
+                        api, project_path, specific_files=found_paths
                     )
-                )
+                    chunks_to_add.extend(image_chunks)
 
-                if api.append_chunks(state["chat_id"], chunks_to_add):
-                    typer.secho(
-                        f"¡{len(resolved_paths)} imágenes inyectadas!",
-                        fg=typer.colors.GREEN,
+                    chunks_to_add.append(
+                        ChunksText(
+                            text=IMAGE_INSERTION_RESPONSE.format(filename=args),
+                            role="model",
+                        )
                     )
-                else:
-                    UI.error("Error al subir imágenes al chat.")
 
-                if state.get("monitor_active"):
-                    monitor.start_monitoring()
+                    if api.append_chunks(state["chat_id"], chunks_to_add):
+                        typer.secho(
+                            f"¡{len(found_paths)} imágenes inyectadas!",
+                            fg=typer.colors.GREEN,
+                        )
+                    else:
+                        UI.error("Error al subir imágenes al chat.")
+
+                    if state.get("monitor_active"):
+                        monitor.start_monitoring()
+
+                except FileNotFoundError:
+                    UI.error(f"El archivo '{args}' no existe en el proyecto.")
+                except Exception as e:
+                    UI.error(f"Error procesando imágenes: {e}")
+
             elif command in ["fix"]:
                 UI.info("Analizando chat...")
                 monitor.stop_monitoring()
