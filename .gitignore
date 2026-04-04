@@ -8,3 +8,5 @@ token.json
 *.egg-info
 script.py
 build/
+
+identity.py

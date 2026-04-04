@@ -23,9 +23,9 @@ class ChunksText(BaseModel):
     role: Role
     tokenCount: Optional[int] = None
     finishReason: Optional[str] = None  # STOP, PROHIBITED_CONTENT,
-    parts: Optional[list[Parts]] = None
     isThought: Optional[bool] = None
-    thinkingBudget: Optional[int] = None
+    thinkingBudget: Optional[int] = -1
+    parts: Optional[list[Parts]] = None
 
 
 class DriveDocument(BaseModel):
@@ -69,14 +69,31 @@ class runSettings_safetySettings(BaseModel):
     )
     threshold: str = Field(
         description="Threshold level for the safety setting.",
-        examples=["BLOCK_NONE", "BLOCK_LOW", "BLOCK_MEDIUM", "BLOCK_HIGH", "OFF"],
+        examples=[
+            "BLOCK_NONE",
+            "BLOCK_ONLY_HIGH",
+            "BLOCK_MEDIUM_AND_ABOVE",
+            "BLOCK_LOW_AND_ABOVE",
+            "OFF",
+        ],
     )
+
+
+MediaResolution = Literal[
+    "MEDIA_RESOLUTION_UNSPECIFIED",
+    "MEDIA_RESOLUTION_LOW",
+    "MEDIA_RESOLUTION_MEDIUM",
+    "MEDIA_RESOLUTION_HIGH",
+]
+ThinkingLevel = Literal[
+    "THINKING_MINIMAL", "THINKING_LOW", "THINKING_MEDIUM", "THINKING_HIGH"
+]
 
 
 class RunSettings(BaseModel):
     temperature: float = 1.0
     model: str = Field(
-        default="models/gemini-2.5-pro",
+        default="models/gemini-3-flash-preview",
         description="Model name used in the chat.",
         examples=["models/gemini-2.5-flash", "models/gemini-2.5-pro"],
     )
@@ -97,13 +114,21 @@ class RunSettings(BaseModel):
             category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"
         ),
     ]
+    responseMimeType: Optional[str] = None  # application/json
     enableCodeExecution: bool = False
+    responseSchema: dict = {}
     enableSearchAsATool: bool = True
     enableBrowseAsATool: bool = False
-    enableAutoFunctionResponses: bool = False
-    thinkingBudget: int = -1
-    googleSearch: dict = {}
+    enableAutoFunctionResponse: bool = False
+    thinkingBudget: int = 0
+    mediaResolution: MediaResolution = "MEDIA_RESOLUTION_UNSPECIFIED"
     outputResolution: str = "1K"
+    thinkingLevel: Optional[ThinkingLevel] = None
+    enableImageSearch: bool = False
+    enableGoogleMaps: bool = False
+    enableAgentThinkingSummariesControl: bool = False
+    enableAgentVisualizationControl: bool = False
+    enableAgentCollaborativePlanningControl: bool = False
 
 
 class SystemInstruction(BaseModel):

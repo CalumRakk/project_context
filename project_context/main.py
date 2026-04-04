@@ -91,7 +91,3 @@ app.command(name="run")(run.run_command)
 
 def main():
     app()
-
-
-if __name__ == "__main__":
-    main()
