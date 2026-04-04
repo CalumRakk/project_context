@@ -1,8 +1,11 @@
 import os
 import sys
 import warnings
+from typing import Annotated, Optional
 
 import typer
+
+from project_context import __version__
 
 os.environ["LOG_LEVEL"] = "CRITICAL"
 
@@ -58,6 +61,29 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+
+def version_callback(value: bool):
+    if value:
+        typer.echo(f"project-context v{__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def global_options(
+    version: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--version",
+            "-v",
+            callback=version_callback,
+            is_eager=True,
+            help="Muestra la versión actual de la herramienta y sale.",
+        ),
+    ] = None,
+):
+    pass
+
 
 app.add_typer(profile.app, name="profile")
 app.command(name="run")(run.run_command)
