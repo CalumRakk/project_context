@@ -19,7 +19,6 @@ from project_context.utils import (
     generate_context,
     get_diff_message,
     get_filtered_files,
-    has_files_modified_since,
     resolve_prompt,
     save_context,
 )
@@ -92,36 +91,31 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
 
 
 def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -> Dict:
-    last_modified_saved = state.get("last_modified", 0)
     chat_id = state.get("chat_id")
     if not chat_id:
         raise ValueError("No se encontró 'chat_id' en el estado del proyecto.")
 
-    context_scope = state.get("context_scope")
-    target_path = project_path / context_scope if context_scope else project_path
-    scope_name = context_scope if context_scope else "Raíz del proyecto"
+    # Obtenemos los items seleccionados
+    context_items = state.get("context_items", {"files": [], "folders": []})
+    has_custom_focus = bool(context_items.get("files") or context_items.get("folders"))
+
+    scope_name = "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
 
     UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
 
-    if (
-        not has_files_modified_since(last_modified_saved, target_path)
-        and context_scope is None
-    ):
-        UI.success(f"El contexto ({scope_name}) está actualizado.")
-        return state
-
-    UI.info("Cambios detectados. Generando nuevo contexto y calculando tokens...")
-
-    content, new_tokens = generate_context(project_path, target_path=target_path)
+    # Generamos el contexto usando la lógica Híbrida
+    content, new_tokens = generate_context(project_path, context_items=context_items)
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
+    # Si el MD5 es igual al guardado, no enviamos nada a Drive para ahorrar ancho de banda
     if current_md5 == state.get("md5"):
-        UI.warn("El contenido es idéntico.")
-        state["last_modified"] = target_path.stat().st_mtime
+        UI.warn("El contenido del contexto es idéntico al actual en Drive.")
+        state["last_modified"] = project_path.stat().st_mtime
         return state
 
-    UI.info("Sincronizando archivo de texto en Drive...")
+    UI.info("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
+
     file_id = state.get("file_id")
     assert file_id is not None
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
@@ -148,13 +142,11 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     except Exception as e:
         UI.error(f"Fallo al actualizar los tokens en el chat: {e}")
 
-    state["last_modified"] = target_path.stat().st_mtime
+    state["last_modified"] = project_path.stat().st_mtime
     state["md5"] = current_md5
     UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
 
     return state
-
-
 def sync_context(
     api: AIStudioDriveManager, project_path: Path
 ) -> Tuple[ChunksDocument, str]:

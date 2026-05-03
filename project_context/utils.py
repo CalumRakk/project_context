@@ -213,23 +213,60 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
 
 
 def generate_context(
-    project_path: Union[str, Path], target_path: Optional[Path] = None
+    project_path: Union[str, Path], context_items: Optional[dict] = None
 ) -> tuple[str, int]:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    # Si hay un target_path (archivo o carpeta), usamos ese para el ingest
-    # Si no, usamos la raíz del proyecto
-    ingest_path = target_path if target_path else project_path
+    if not context_items or (not context_items.get("files") and not context_items.get("folders")):
+        custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+        summary, tree, content = gitingest.ingest(
+            str(project_path), exclude_patterns=set(custom_ignores)
+        )
+        estimated_tokens = human_to_int(summary.split()[-1])
+        return tree + "\n\n" + content, estimated_tokens
 
     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
 
-    summary, tree, content = gitingest.ingest(
-        str(ingest_path), exclude_patterns=set(custom_ignores)
-    )
+    final_tree = "Directory structure (Custom Focus):\n"
+    final_content = ""
+    total_tokens = 0
 
-    estimated_tokens = human_to_int(summary.split()[-1])
-    context = tree + "\n\n" + content
-    return context, estimated_tokens
+    # -- Procesa Archivos Explícitos --
+    files = context_items.get("files", [])
+    if files:
+        final_tree += "└── [Archivos Específicos Añadidos]\n"
+        for idx, f_path in enumerate(files):
+            real_path = project_path / f_path
+            prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+            final_tree += f"{prefix}{f_path}\n"
+
+            if real_path.exists() and real_path.is_file():
+                try:
+                    text = real_path.read_text(encoding="utf-8")
+                    final_content += f"================================================\nFILE: {f_path}\n================================================\n{text}\n\n"
+                    total_tokens += len(text) // 4  # Estimación rápida de tokens
+                except Exception as e:
+                    final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
+
+    folders = context_items.get("folders", [])
+    if folders:
+        final_tree += "└── [Carpetas Específicas Añadidas]\n"
+        for folder in folders:
+            real_folder = project_path / folder
+            if real_folder.exists() and real_folder.is_dir():
+                summary, tree, content = gitingest.ingest(
+                    str(real_folder), exclude_patterns=set(custom_ignores)
+                )
+
+                # Ajustamos la indentación del árbol para que encaje visualmente
+                indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
+                final_tree += f"{indented_tree}\n"
+
+                final_content += f"{content}\n"
+                total_tokens += human_to_int(summary.split()[-1])
+
+    full_context = final_tree + "\n" + final_content
+    return full_context, total_tokens
 
 
 def save_context(project_path: Union[str, Path], context: str) -> Path:

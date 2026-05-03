@@ -435,21 +435,106 @@ def cmd_fix(ctx: SessionContext, args: str):
 
 @registry.register("context")
 def cmd_context(ctx: SessionContext, args: str):
-    if not args or args.strip().lower() == "reset":
-        UI.info("Restableciendo contexto a todo el proyecto...")
-        ctx.state["context_scope"] = None
-        new_state = update_context(ctx.api, ctx.project_path, ctx.state)
-        ctx.update_state(new_state)
-    else:
-        target_rel_path = args.strip()
-        full_target_path = ctx.project_path / target_rel_path
+    if "context_items" not in ctx.state:
+        ctx.state["context_items"] = {"files": [], "folders": []}
 
-        if not full_target_path.exists():
-            UI.error(f"La ruta '{target_rel_path}' no existe en el proyecto.")
+    parts = args.strip().split()
+    if not parts:
+        UI.warn("Uso: context <add|rm|ls|reset> [rutas...]")
+        return
+
+    subcmd = parts[0].lower()
+    targets = parts[1:]
+
+    items = ctx.state["context_items"]
+
+    if subcmd == "add":
+        if not targets:
+            UI.warn("Especifica al menos una ruta. Ej: context add src/main.py docs/")
             return
 
-        UI.info(f"Enfocando contexto en: [bold]{target_rel_path}[/]")
-        ctx.state["context_scope"] = target_rel_path
-        new_state = update_context(ctx.api, ctx.project_path, ctx.state)
-        ctx.update_state(new_state)
-        UI.success(f"Ahora el modelo solo ve '{target_rel_path}'.")
+        added_count = 0
+        for target in targets:
+            full_path = ctx.project_path / target
+            if not full_path.exists():
+                UI.warn(f"Ignorado: '{target}' no existe.")
+                continue
+
+            # Normalizamos la ruta para evitar duplicados como './src' y 'src'
+            rel_path = str(full_path.relative_to(ctx.project_path).as_posix())
+
+            if full_path.is_file():
+                if rel_path not in items["files"]:
+                    items["files"].append(rel_path)
+                    added_count += 1
+            elif full_path.is_dir():
+                if rel_path not in items["folders"]:
+                    items["folders"].append(rel_path)
+                    added_count += 1
+
+        if added_count > 0:
+            ctx.update_state(ctx.state)
+            UI.success(f"Se añadieron {added_count} elementos al contexto.")
+            UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
+        else:
+            UI.info("No se añadieron elementos nuevos.")
+
+    elif subcmd in ["rm", "remove"]:
+        if not targets:
+            UI.warn("Especifica qué quieres eliminar. Ej: context rm src/main.py")
+            return
+
+        removed = 0
+        for target in targets:
+            # Intentar limpiar la ruta para hacer match
+            try:
+                full_path = ctx.project_path / target
+                rel_path = str(full_path.relative_to(ctx.project_path).as_posix())
+            except ValueError:
+                rel_path = target  # Por si pasan una ruta ya relativa
+
+            if rel_path in items["files"]:
+                items["files"].remove(rel_path)
+                removed += 1
+            if rel_path in items["folders"]:
+                items["folders"].remove(rel_path)
+                removed += 1
+
+        if removed > 0:
+            ctx.update_state(ctx.state)
+            UI.success(f"Se eliminaron {removed} elementos del contexto.")
+            UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
+        else:
+            UI.info("No se encontraron esos elementos en el contexto actual.")
+
+    elif subcmd in ["ls", "list"]:
+        has_files = len(items["files"]) > 0
+        has_folders = len(items["folders"]) > 0
+
+        if not has_files and not has_folders:
+            UI.info("Contexto actual: [bold green]Proyecto Completo[/] (No hay filtros específicos).")
+            return
+
+        console.print("\n[bold cyan]Contexto Específico (Stage):[/]")
+        if has_files:
+            console.print("  [bold]Archivos:[/]")
+            for f in items["files"]:
+                console.print(f"    - {f}")
+        if has_folders:
+            console.print("  [bold]Carpetas:[/]")
+            for d in items["folders"]:
+                console.print(f"    - {d}/")
+        print("") # Salto de línea
+
+    elif subcmd == "reset":
+        ctx.state["context_items"] = {"files": [], "folders": []}
+        # Limpiamos el legacy config por si acaso
+        if "context_scope" in ctx.state:
+            ctx.state["context_scope"] = None
+
+        ctx.update_state(ctx.state)
+        UI.success("Contexto restablecido. Ahora el modelo verá todo el proyecto.")
+        UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
+
+    else:
+        UI.warn("Subcomando desconocido. Usa: add, rm, ls, reset.")
