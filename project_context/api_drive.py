@@ -88,7 +88,7 @@ class GoogleDriveManager:
 
             with open(self.token_file, "w") as token:
                 token.write(creds.to_json())
-            UI.info(f"Credenciales guardadas en el perfil.")
+            UI.info("Credenciales guardadas en el perfil.")
 
         return creds
 
@@ -163,7 +163,7 @@ class GoogleDriveManager:
                 )
                 .execute()
             )
-            UI.success(f"Archivo actualizado en Drive.")
+            UI.success("Archivo actualizado en Drive.")
             return updated_file
         except HttpError as error:
             UI.error(f"Error al modificar archivo '{file_id}': {error}")

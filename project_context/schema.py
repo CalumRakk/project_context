@@ -1,7 +1,28 @@
-from typing import List, Literal, Optional, Union
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+if TYPE_CHECKING:
+    from project_context.api_drive import AIStudioDriveManager
+    from project_context.history import SnapshotManager
+
+
+@dataclass
+class SessionContext:
+    api: "AIStudioDriveManager"
+    state: dict
+    project_path: Path
+    monitor: "SnapshotManager"
+    session_media_root: Optional[Path] = None
+
+    def stop_monitor(self):
+        self.monitor.stop_monitoring()
+
+    def start_monitor(self):
+        if self.state.get("monitor_active"):
+            self.monitor.start_monitoring()
 
 class FileDrive(BaseModel):
     id: str
