@@ -10,7 +10,7 @@ from typing import List, Optional, Tuple, Union, cast
 
 import gitingest
 import pathspec
-from git import Optional, Repo, exc  # type: ignore
+from git import Repo, exc
 from rich.console import Console
 from rich.theme import Theme
 
@@ -136,11 +136,10 @@ class ProfileManager:
 
         if not self.config_file.exists():
             return "default"
-        try:
-            config = json.loads(self.config_file.read_text())
-            return config.get("current_profile", "default")
-        except:
-            return "default"
+
+        config = json.loads(self.config_file.read_text())
+        return config.get("current_profile", "default")
+
 
     def set_active_profile(self, profile_name: str):
         config = {"current_profile": profile_name}
@@ -239,7 +238,7 @@ def save_context(project_path: Union[str, Path], context: str) -> Path:
 
     # USAMOS EL DIRECTORIO DEL PERFIL
     base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / f"project_context.txt"
+    output = base_dir / inodo / "project_context.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(context, encoding="utf-8")
     return output
@@ -252,7 +251,7 @@ def save_project_context_state(
     inodo = generate_unique_id(project_path)
 
     base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / f"project_context_state.json"
+    output = base_dir / inodo / "project_context_state.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(project_context_state), encoding="utf-8")
 
@@ -264,7 +263,7 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
     inodo = generate_unique_id(project_path)
 
     base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / f"project_context_state.json"
+    input_path = base_dir / inodo / "project_context_state.json"
     if not input_path.exists():
         return None
     content = input_path.read_text(encoding="utf-8")
@@ -274,6 +273,7 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
 def has_files_modified_since(
     st_mtime: float, target_path: Path | str, gitignore=True
 ) -> bool:
+    ignore = []
     target_path = Path(target_path)
     if gitignore:
         path_gitignore = target_path / ".gitignore"
@@ -283,8 +283,8 @@ def has_files_modified_since(
                 for i in path_gitignore.read_text(encoding="utf-8").splitlines()
                 if i.strip() and not i.strip().startswith("#")
             ]
-        else:
-            ignore = []
+
+
 
     if target_path.is_file():
         fecha_mod = target_path.stat().st_mtime
@@ -297,7 +297,7 @@ def has_files_modified_since(
                 continue
             ruta_rel = str(file.relative_to(target_path))
             if gitignore is True:
-                if any(fnmatch(ruta_rel, patron) for patron in ignore):  # type: ignore
+                if any(fnmatch(ruta_rel, patron) for patron in ignore):
                     continue
             fecha_mod = file.stat().st_mtime
             if fecha_mod > st_mtime:
@@ -437,3 +437,60 @@ def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
     )
 
     return list(dict.fromkeys(results))
+
+
+# ==========================================
+# UTILIDADES DE GIT
+# ==========================================
+
+def has_unstaged_changes(project_path: Path) -> bool:
+    """Verifica si hay archivos modificados o untracked que no están en stage."""
+    try:
+        repo = Repo(project_path, search_parent_directories=True)
+        # is_dirty(untracked_files=True) devuelve True si hay cambios sin commit/stage
+        # Pero queremos saber si hay algo fuera del stage específicamente.
+        # repo.untracked_files nos da los nuevos.
+        # repo.index.diff(None) nos da los modificados sin stage.
+        if repo.untracked_files or repo.index.diff(None):
+            return True
+        return False
+    except exc.InvalidGitRepositoryError:
+        return False
+
+def stage_all_changes(project_path: Path):
+    """Ejecuta git add . en el repositorio."""
+    try:
+        repo = Repo(project_path, search_parent_directories=True)
+        repo.git.add(A=True)
+    except Exception as e:
+        UI.error(f"Error al hacer git add: {e}")
+
+
+
+def save_chat_stash(project_path: Union[str, Path], chat_json: str):
+    """Guarda una copia de seguridad del chat actual en disco."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    output = base_dir / inodo / "chat_stash.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(chat_json, encoding="utf-8")
+
+def load_chat_stash(project_path: Union[str, Path]) -> Optional[str]:
+    """Recupera la copia de seguridad del chat desde el disco."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    input_path = base_dir / inodo / "chat_stash.json"
+    if not input_path.exists():
+        return None
+    return input_path.read_text(encoding="utf-8")
+
+def clear_chat_stash(project_path: Union[str, Path]):
+    """Elimina el archivo de copia de seguridad."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    input_path = base_dir / inodo / "chat_stash.json"
+    if input_path.exists():
+        input_path.unlink()

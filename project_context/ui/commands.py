@@ -14,15 +14,20 @@ from project_context.ops import (
     sync_images,
     update_context,
 )
-from project_context.schema import ChunksText
+from project_context.schema import ChunksDocument, ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
     IMAGE_INSERTION_PROMPT,
     IMAGE_INSERTION_RESPONSE,
     UI,
+    clear_chat_stash,
     console,
     get_potential_media_folders,
+    has_unstaged_changes,
+    load_chat_stash,
+    save_chat_stash,
     save_project_context_state,
+    stage_all_changes,
 )
 
 
@@ -230,33 +235,128 @@ def cmd_reset(ctx: SessionContext, args: str):
 def cmd_commit(ctx: SessionContext, args: str):
     subcommand = args.strip().lower()
 
-    if subcommand in ["clean", "clear", "rm"]:
-        UI.info("Limpiando bloques de commit...")
-        removed = ctx.api.remove_commit_tasks(ctx.state["chat_id"])
-        if removed > 0:
-            UI.success(f"Se eliminaron {removed} bloques.")
-        else:
-            UI.info("Nada que limpiar.")
+    # Comprobar si ya estamos en "Modo Commit"
+    is_commit_mode = ctx.state.get("commit_mode", False)
+
+    if subcommand in ["clear", "done", "restore", "rm"]:
+        if not is_commit_mode:
+            UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
+            return
+
+        UI.info("Restaurando chat original desde copia de seguridad...")
+        stashed_json = load_chat_stash(ctx.project_path)
+
+        if not stashed_json:
+            UI.error("No se encontró el respaldo del chat. ¿Se borró accidentalmente?")
+            ctx.state["commit_mode"] = False
+            ctx.update_state(ctx.state)
+            return
+
+        ctx.stop_monitor()
+        # Subimos el JSON original directamente a Drive, sobreescribiendo el rápido
+        ctx.api.gdm.update_file_from_memory(
+            file_id=ctx.state["chat_id"],
+            content=stashed_json,
+            mime_type=ctx.api.MIME_PROMPT
+        )
+
+        clear_chat_stash(ctx.project_path)
+        ctx.state["commit_mode"] = False
+        ctx.update_state(ctx.state)
+        ctx.start_monitor()
+
+        UI.success("¡Chat original restaurado!")
+        UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
         return
 
-    has_pending = ctx.api.has_pending_commit_suggestion(ctx.state["chat_id"])
-    if has_pending and subcommand != "force":
-        UI.warn("Ya hay una sugerencia de commit pendiente en el chat.")
-        UI.info("Usa 'commit clean' para borrarla o 'commit force' para ignorar.")
+    # Si ya estamos en modo commit y trata de lanzar otro:
+    if is_commit_mode:
+        UI.warn("Ya estás en modo commit. Ve a AI Studio, presiona RUN para obtener tu commit.")
+        UI.info("Cuando termines, usa [bold cyan]commit done[/] para regresar a tu chat original.")
         return
+
+    # ==========================================
+    # FLUJO DE ENTRADA: Secuestrar chat y poner modelo rápido
+    # ==========================================
+    ctx.stop_monitor()
+
+    # ¿Pusieron el flag de añadir todo?
+    if subcommand in ["-a", "--all", "all"]:
+        UI.info("Añadiendo todos los cambios al stage (git add -A)...")
+        stage_all_changes(ctx.project_path)
+        subcommand = ""
 
     UI.info("Obteniendo cambios de Git...")
     prompt_text = generate_commit_prompt_text(ctx.project_path)
 
+    # Inteligencia de UX: Sugerir hacer add si olvidó hacerlo
     if not prompt_text:
-        UI.warn("No hay cambios en stage. Usa `git add` primero.")
+        if has_unstaged_changes(ctx.project_path):
+            UI.warn("No hay archivos en stage (git add), PERO tienes archivos modificados.")
+            confirm = console.input("[bold yellow]¿Quieres añadirlos todos al stage (git add .) ahora? (s/n): [/]")
+            if confirm.lower() == "s":
+                stage_all_changes(ctx.project_path)
+                prompt_text = generate_commit_prompt_text(ctx.project_path)
+                if not prompt_text:
+                    UI.error("No se pudo generar el diff incluso después de hacer git add.")
+                    ctx.start_monitor()
+                    return
+            else:
+                UI.info("Operación cancelada. Haz `git add` manualmente cuando estés listo.")
+                ctx.start_monitor()
+                return
+        else:
+            UI.warn("Tu repositorio está completamente limpio. No hay nada que commitear.")
+            ctx.start_monitor()
+            return
+
+    # 1. Hacer Stash del chat pesado actual
+    UI.info("Guardando copia de seguridad del chat actual en tu disco (Stash)...")
+    chat_id = ctx.state["chat_id"]
+    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        UI.error("No se pudo descargar el chat actual para hacer la copia de seguridad.")
+        ctx.start_monitor()
         return
 
-    UI.info("Enviando prompt a Drive...")
-    if ctx.api.append_message(ctx.state["chat_id"], prompt_text, role="user"):
-        UI.success("¡Listo! Prompt de commit agregado. Ve a AI Studio y presiona RUN.")
+    save_chat_stash(ctx.project_path, chat_data.model_dump_json())
+
+    # 2. Rescatar el archivo project_context.txt para que el modelo tenga el contexto de la app
+    context_chunk = None
+    for chunk in chat_data.chunkedPrompt.chunks:
+        # Buscamos el chunk del documento que coincide con nuestro file_id maestro
+        if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
+
+            assert isinstance(chunk, ChunksDocument)  # Para que mypy entienda el tipo
+            if chunk.driveDocument.id == ctx.state.get("file_id"):
+                context_chunk = chunk
+                break
+
+    # 3. Construir el nuevo historial minimalista
+    UI.info("Configurando chat minimalista con modelo rápido (gemini-2.5-flash)...")
+    fast_chunks = []
+    if context_chunk:
+        fast_chunks.append(context_chunk)
+
+    # Añadimos nuestro prompt con el diff
+    fast_chunks.append(ChunksText(text=prompt_text, role="user"))
+
+    # Cambiamos el modelo a uno rápido y reemplazamos los mensajes
+    chat_data.runSettings.model = "models/gemini-2.5-flash"
+    chat_data.chunkedPrompt.chunks = fast_chunks
+    chat_data.chunkedPrompt.pendingInputs = []
+
+    # 4. Subir a Drive
+    if ctx.api.update_chat_file(chat_id, chat_data):
+        ctx.state["commit_mode"] = True
+        ctx.update_state(ctx.state)
+        UI.success("¡Listo! Modo commit activado de forma exitosa.")
+        UI.info("Ve a AI Studio, [bold red]REFRESCA LA PÁGINA (F5)[/] y presiona RUN.")
+        UI.info("Cuando hayas hecho tu commit, ejecuta [bold cyan]commit done[/] en esta consola.")
     else:
-        UI.error("Error al guardar en Drive.")
+        UI.error("Error al subir el chat de commit temporal a Drive.")
+
+    ctx.start_monitor()
 
 @registry.register("images")
 def cmd_images(ctx: SessionContext, args: str):

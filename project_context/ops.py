@@ -38,15 +38,14 @@ def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
         return None
 
     prompt_text = (
-        f"{COMMIT_TASK_MARKER}\n"
-        "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas. "
-        "El archivo context_project.txt contiene el contexto del proyecto:\n\n"
+        "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas Conventional Commits. "
+        "Tienes adjunto a este chat el contexto del proyecto para que entiendas la arquitectura general.\n\n"
         "He realizado los siguientes cambios (git diff --cached):\n\n"
         "```diff\n"
         f"{diff_content}\n"
         "```\n\n"
-        "Con base en esos cambios, sugiéreme un mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. "
-        "El mensaje debe ocupar un solo párrafo y reflejar la intención del cambio sin omitir detalles importantes.\n\n"
+        "Con base en esos cambios, sugiéreme un único mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. "
+        "No me des explicaciones, solo devuélveme el mensaje final listo para copiar y pegar. \n"
         "Formato deseado: <tipo>(<alcance>): <descripción>"
     )
     return prompt_text
@@ -111,7 +110,7 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         UI.success(f"El contexto ({scope_name}) está actualizado.")
         return state
 
-    UI.info(f"Cambios detectados. Generando nuevo contexto y calculando tokens...")
+    UI.info("Cambios detectados. Generando nuevo contexto y calculando tokens...")
 
     content, new_tokens = generate_context(project_path, target_path=target_path)
     path_context = save_context(project_path, content)
