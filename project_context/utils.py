@@ -142,6 +142,8 @@ class ProfileManager:
 
 
     def set_active_profile(self, profile_name: str):
+        self._temp_profile = None
+
         config = {"current_profile": profile_name}
         self.config_file.write_text(json.dumps(config))
         (self.profiles_dir / profile_name).mkdir(parents=True, exist_ok=True)

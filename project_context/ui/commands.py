@@ -71,6 +71,7 @@ def command_help():
         "  [bold]save <msg>[/]         - Snapshot manual con nombre.\n"
         "  [bold]history[/]            - Ver puntos de restauración.\n"
         "  [bold]restore <id>[/]       - Restaurar chat y contexto.\n"
+        "  [bold]transfer <perfil>[/]  - Migrar la sesión actual a otra cuenta.\n"
         "  [bold]clear[/]              - Limpiar historial del chat en Drive.\n"
         "  [bold]update[/]             - Forzar actualización de contexto.\n"
         "  [bold]reset[/]              - Reconstrucción total del chat.\n"
@@ -342,7 +343,7 @@ def cmd_commit(ctx: SessionContext, args: str):
     fast_chunks.append(ChunksText(text=prompt_text, role="user"))
 
     # Cambiamos el modelo a uno rápido y reemplazamos los mensajes
-    chat_data.runSettings.model = "models/gemini-2.5-flash"
+    chat_data.runSettings.model = "models/gemini-flash-latest"
     chat_data.chunkedPrompt.chunks = fast_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
@@ -538,3 +539,59 @@ def cmd_context(ctx: SessionContext, args: str):
 
     else:
         UI.warn("Subcomando desconocido. Usa: add, rm, ls, reset.")
+
+
+@registry.register("transfer")
+def cmd_transfer(ctx: SessionContext, args: str):
+    target_profile = args.strip()
+    if not target_profile:
+        UI.warn("Uso: transfer <perfil_destino>")
+        return
+
+    from project_context.utils import profile_manager
+    current_profile = profile_manager.get_active_profile_name()
+
+    if target_profile == current_profile:
+        UI.warn("El perfil destino no puede ser el mismo que el actual.")
+        return
+
+    if target_profile not in profile_manager.list_profiles():
+        UI.error(f"El perfil '{target_profile}' no existe.")
+        UI.info(f"Perfiles disponibles: {', '.join(profile_manager.list_profiles())}")
+        return
+
+    confirm = console.input(f"[bold red]¿Migrar sesión de '{current_profile}' hacia '{target_profile}'? (s/n): [/]")
+    if confirm.lower() != "s":
+        UI.info("Transferencia cancelada.")
+        return
+
+    try:
+        from project_context.ops import transfer_chat_to_profile
+
+        # Pausar el rastreo de snapshots localmente en el viejo perfil
+        ctx.stop_monitor()
+
+        new_api, new_state = transfer_chat_to_profile(
+            ctx.api, ctx.state, ctx.project_path, target_profile
+        )
+
+        # Actualización de punteros de memoria "en caliente"
+        ctx.api = new_api
+        ctx.state = new_state
+
+        # Instanciar un nuevo motor de Snapshots atado a la nueva API
+        from project_context.history import SnapshotManager
+        ctx.monitor = SnapshotManager(new_api, ctx.project_path, new_state)
+
+        # Sobreescribir o crear el state en la ruta del *nuevo* perfil y arrancar
+        ctx.update_state(new_state)
+        ctx.start_monitor()
+
+        UI.success(f"¡Migración completada! Ahora estás operando nativamente como [bold]{target_profile}[/].")
+        UI.warn("RECUERDA: Ve a Google AI Studio, asegúrate de haber cambiado de cuenta de Google y abre el nuevo chat.")
+
+    except Exception as e:
+        UI.error(f"Error crítico durante la transferencia: {e}")
+        # Intentar restaurar el perfil de manera segura en caso de fallo parcial
+        profile_manager.set_active_profile(current_profile)
+        ctx.start_monitor()

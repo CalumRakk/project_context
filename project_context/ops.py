@@ -6,6 +6,7 @@ from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
+    ChunksImage,
     ChunksText,
     RunSettings,
     SystemInstruction,
@@ -319,3 +320,119 @@ def resolve_image_paths(
             missing_refs.append(ref_text)
 
     return found_paths, missing_refs
+
+
+def extract_chat_assets(api: AIStudioDriveManager, chat_id: str) -> Tuple[ChatIAStudio, Dict]:
+    """
+    Descarga el JSON del chat y los contenidos binarios referenciados.
+    Retorna el chat y un diccionario con los assets en memoria.
+    """
+    chat_data = api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
+
+    assets = {}
+    for chunk in chat_data.chunkedPrompt.chunks:
+        file_id = None
+        if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
+            file_id = chunk.driveDocument.id # type: ignore
+        elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
+            file_id = chunk.driveImage.id # type: ignore
+
+        if file_id and file_id not in assets:
+            try:
+                # Obtener la metadata explícita para asegurar que tenemos el mimeType original
+                metadata = api.gdm.service.files().get(
+                    fileId=file_id, fields="id, name, mimeType"
+                ).execute()
+
+                content_bytes = api.gdm.get_file_content(file_id)
+                if content_bytes:
+                    assets[file_id] = {
+                        "name": metadata.get("name", f"asset_{file_id}"),
+                        "mimeType": metadata.get("mimeType", "application/octet-stream"),
+                        "bytes": content_bytes
+                    }
+                else:
+                    UI.warn(f"No se pudo descargar el binario del archivo: {file_id}")
+            except Exception as e:
+                UI.error(f"Error descargando el asset {file_id}: {e}")
+
+    return chat_data, assets
+
+
+def transfer_chat_to_profile(
+    api: AIStudioDriveManager,
+    state: Dict,
+    project_path: Path,
+    target_profile: str
+) -> Tuple[AIStudioDriveManager, Dict]:
+    """
+    Realiza la migración de cuenta, sube los archivos, parchea el JSON
+    y establece el nuevo estado seguro.
+    """
+    from project_context.history import SnapshotManager
+    from project_context.utils import load_project_context_state, profile_manager
+
+    UI.info("Extrayendo chat y archivos desde el Perfil Actual (A)...")
+    chat_data, assets = extract_chat_assets(api, state["chat_id"])
+
+    old_file_id = state.get("file_id")
+    old_md5 = state.get("md5")
+
+    UI.info(f"Transicionando al perfil destino: {target_profile} (B)...")
+    profile_manager.set_active_profile(target_profile)
+
+    try:
+        new_api = AIStudioDriveManager()
+    except Exception as e:
+        raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
+
+    # Snapshot de seguridad si el Perfil B ya tenía un historial para este proyecto
+    target_state = load_project_context_state(project_path)
+    if target_state and target_state.get("chat_id"):
+        UI.warn("El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo...")
+        backup_monitor = SnapshotManager(new_api, project_path, target_state)
+        backup_monitor.create_named_snapshot("Backup previo a migración entrante")
+
+    UI.info("Subiendo archivos al nuevo Drive y generando mapa de IDs...")
+    id_map = {}
+    for old_id, asset_data in assets.items():
+        new_file = new_api.gdm.upload_binary_to_drive(
+            folder_id=new_api.ai_studio_folder,
+            file_name=asset_data["name"],
+            content=asset_data["bytes"],
+            mime_type=asset_data["mimeType"]
+        )
+        if new_file and "id" in new_file:
+            id_map[old_id] = new_file["id"]
+        else:
+            raise ValueError(f"Fallo al subir el archivo {asset_data['name']} al nuevo perfil.")
+
+    UI.info("Parcheando JSON del chat con los nuevos IDs de Drive...")
+    for chunk in chat_data.chunkedPrompt.chunks:
+        if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
+            if chunk.driveDocument.id in id_map: # type: ignore
+                chunk.driveDocument.id = id_map[chunk.driveDocument.id] # type: ignore
+        elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
+            if chunk.driveImage.id in id_map: # type: ignore
+                chunk.driveImage.id = id_map[chunk.driveImage.id] # type: ignore
+
+    UI.info("Generando nuevo entorno de chat en Google AI Studio...")
+    chat_filename = project_path.name + "_chat.prompt"
+    new_chat_id = new_api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
+
+    if not new_chat_id:
+        raise ValueError("No se pudo crear el archivo de chat en el Perfil B.")
+
+    # Generar el nuevo estado, conservando filtros y MD5 originales para sincronizaciones futuras
+    new_state = {
+        "path": str(project_path),
+        "last_modified": project_path.stat().st_mtime,
+        "md5": old_md5,
+        "chat_id": new_chat_id,
+        "file_id": id_map.get(old_file_id) if old_file_id else None,
+        "context_items": state.get("context_items", {"files": [], "folders": []})
+    }
+
+    return new_api, new_state
