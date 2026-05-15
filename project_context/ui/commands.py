@@ -22,6 +22,7 @@ from project_context.utils import (
     UI,
     clear_chat_stash,
     console,
+    get_context_tree,
     get_potential_media_folders,
     has_unstaged_changes,
     load_chat_stash,
@@ -72,6 +73,7 @@ def command_help():
         "  [bold]history[/]            - Ver puntos de restauración.\n"
         "  [bold]restore <id>[/]       - Restaurar chat y contexto.\n"
         "  [bold]transfer <perfil>[/]  - Migrar la sesión actual a otra cuenta.\n"
+        "  [bold]tree[/]               - Muestra el árbol de archivos del contexto actual.\n"
         "  [bold]clear[/]              - Limpiar historial del chat en Drive.\n"
         "  [bold]update[/]             - Forzar actualización de contexto.\n"
         "  [bold]reset[/]              - Reconstrucción total del chat.\n"
@@ -221,7 +223,19 @@ def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
     new_state = update_context(ctx.api, ctx.project_path, ctx.state)
     ctx.update_state(new_state)
-    print("Puedes reactivar el monitor con 'monitor on'.")
+
+    # Imprimimos el árbol automáticamente SOLO si el usuario pasó 'tree' como argumento (ej: update tree)
+    # o si está usando un contexto enfocado
+    has_focus = bool(ctx.state.get("context_items", {}).get("files") or ctx.state.get("context_items", {}).get("folders"))
+
+    if args.strip() == "tree" or has_focus:
+        UI.info("Árbol de archivos enviado:")
+        tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
+        console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
+    elif not has_focus and args.strip() != "tree":
+        UI.info("Tip: Ejecuta [bold]tree[/] para ver qué archivos se están rastreando.")
+
+    UI.info("Puedes reactivar el monitor con 'monitor on'.")
 
 @registry.register("reset")
 def cmd_reset(ctx: SessionContext, args: str):
@@ -595,3 +609,10 @@ def cmd_transfer(ctx: SessionContext, args: str):
         # Intentar restaurar el perfil de manera segura en caso de fallo parcial
         profile_manager.set_active_profile(current_profile)
         ctx.start_monitor()
+
+@registry.register("tree")
+def cmd_tree(ctx: SessionContext, args: str):
+    """Muestra el árbol de directorio que la IA está viendo actualmente."""
+    UI.info("Generando árbol del contexto actual...")
+    tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
+    console.print(f"\n[cyan]{tree_str}[/cyan]\n")

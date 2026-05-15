@@ -533,3 +533,41 @@ def clear_chat_stash(project_path: Union[str, Path]):
     input_path = base_dir / inodo / "chat_stash.json"
     if input_path.exists():
         input_path.unlink()
+
+def get_context_tree(project_path: Union[str, Path], context_items: Optional[dict] = None) -> str:
+    """Genera solo la representación visual del árbol (sin el contenido de los archivos)."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+
+    # Si no hay enfoque específico, devolvemos el árbol de todo el proyecto
+    if not context_items or (not context_items.get("files") and not context_items.get("folders")):
+        custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+        summary, tree, content = gitingest.ingest(
+            str(project_path), exclude_patterns=set(custom_ignores)
+        )
+        return tree
+
+    # Si hay un enfoque específico, construimos el árbol manual
+    custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+    final_tree = "Directory structure (Custom Focus):\n"
+
+    files = context_items.get("files", [])
+    if files:
+        final_tree += "└── [Archivos Específicos Añadidos]\n"
+        for idx, f_path in enumerate(files):
+            prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+            final_tree += f"{prefix}{f_path}\n"
+
+    folders = context_items.get("folders", [])
+    if folders:
+        final_tree += "└── [Carpetas Específicas Añadidas]\n"
+        for folder in folders:
+            real_folder = project_path / folder
+            if real_folder.exists() and real_folder.is_dir():
+                summary, tree, content = gitingest.ingest(
+                    str(real_folder), exclude_patterns=set(custom_ignores)
+                )
+                # Indentamos para que cuadre visualmente
+                indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
+                final_tree += f"{indented_tree}\n"
+
+    return final_tree
