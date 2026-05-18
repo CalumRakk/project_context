@@ -10,3 +10,5 @@ script.py
 build/
 
 identity.py
+fix_subtitles.py
+docs/

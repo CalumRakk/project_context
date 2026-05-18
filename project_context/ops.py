@@ -23,7 +23,7 @@ from project_context.utils import (
     resolve_prompt,
     save_context,
 )
-
+import re
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -436,3 +436,165 @@ def transfer_chat_to_profile(
     }
 
     return new_api, new_state
+
+
+
+def parse_story_file(file_path: Path) -> Dict:
+    """
+    Lee un archivo Markdown, busca las etiquetas <mejora>...</mejora>
+    y determina la intención del usuario basándose en el texto circundante.
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"El archivo {file_path.name} no existe.")
+
+    content = file_path.read_text(encoding="utf-8")
+
+    # Buscar todas las etiquetas para advertir si hay más de una
+    matches = list(re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE))
+
+    if not matches:
+        raise ValueError(f"No se encontró la etiqueta <mejora>...</mejora> en {file_path.name}.")
+
+    if len(matches) > 1:
+        UI.warn(f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada.")
+
+    # Tomamos la última etiqueta como la activa
+    match = matches[-1]
+    instruction = match.group(1).strip()
+
+    pre_text = content[:match.start()]
+    post_text = content[match.end():]
+
+    # Función auxiliar para limpiar encabezados markdown y ver si realmente hay texto
+    def clean_md(text: str) -> str:
+        return re.sub(r'(?m)^#+ .*$', '', text).strip()
+
+    clean_pre = clean_md(pre_text)
+    clean_post = clean_md(post_text)
+
+    # Determinar modo
+    if not clean_pre and not clean_post:
+        mode = "nuevo"
+        anchor_pre = ""
+        anchor_post = ""
+    elif clean_pre and not clean_post:
+        mode = "continuacion"
+        # Tomamos los últimos ~800 caracteres útiles como ancla
+        anchor_pre = clean_pre[-800:].strip()
+        anchor_post = ""
+    else:
+        mode = "edicion"
+        anchor_pre = clean_pre[-800:].strip() if clean_pre else ""
+        anchor_post = clean_post[:800].strip() if clean_post else ""
+
+    return {
+        "mode": mode,
+        "instruction": instruction,
+        "anchor_pre": anchor_pre.split("\n")[-1],
+        "anchor_post": anchor_post
+    }
+
+
+def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
+    """
+    Construye el prompt exacto que se enviará a la IA según el modo detectado.
+    """
+    mode = parsed_data["mode"]
+    instruction = parsed_data["instruction"]
+
+    base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
+    base_rule= (
+        "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
+        "Mantén la coherencia con el contexto global y pioriza escribir dialogos.\n\n"
+    )
+
+    if mode == "nuevo":
+        return f"Ayúdame a escribir la primera escena del archivo `{file_name} ` desde cero, {base_rule}"
+
+    elif mode == "continuacion":
+        return (
+            f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}" +
+            "La mejora empieza exactamente despues del siguiente texto:\n"
+            "```text\n"
+            f"{parsed_data['anchor_pre']}\n"
+            "```\n\n"
+        )
+
+    elif mode == "edicion":
+        return (
+            base_prompt +
+            "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
+            "Tienes que desarrollar y mejorar el siguiente borrador, agregando diálogos o descripciones si es necesario, "
+            "y hacer que encaje perfectamente como puente entre el texto anterior y el texto posterior.\n\n"
+            "Instrucciones / Borrador a mejorar:\n"
+            f"{instruction}\n\n"
+            "--- TEXTO ANTERIOR ---\n"
+            "```text\n"
+            f"{parsed_data['anchor_pre']}\n"
+            "```\n\n"
+            "--- TEXTO POSTERIOR ---\n"
+            "```text\n"
+            f"{parsed_data['anchor_post']}\n"
+            "```\n"
+        )
+
+    return ""
+
+
+def apply_story_update(api: AIStudioDriveManager, project_path: Path, state: Dict) -> Dict:
+    """
+    Actualiza el contexto general, intercepta el chat y sobrescribe el bloque 4 (Prompt Dinámico)
+    basado en la intención detectada en el archivo anclado.
+    """
+    anchor_rel_path = state.get("story_anchor")
+    if not anchor_rel_path:
+        raise ValueError("No hay un ancla de historia definida en el estado.")
+
+    anchor_file = project_path / anchor_rel_path
+
+    UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
+
+    # Parsear el archivo local
+    try:
+        parsed_data = parse_story_file(anchor_file)
+    except Exception as e:
+        UI.error(str(e))
+        return state
+
+    UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
+
+    # Generar el Prompt Dinámico
+    anchor_file_path= anchor_file.relative_to(project_path).as_posix()
+    story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
+
+    # Forzar sincronización del contexto global (Para que la IA pueda leer tus SSoT actualizados)
+    state = update_context(api, project_path, state)
+
+    # Modificar el Chat en Drive
+    chat_id = state["chat_id"]
+    chat_data = api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
+
+    UI.info("Sobrescribiendo bloque de instrucción (Chat 4) y limpiando respuestas previas...")
+
+    # Mantenemos solo los 3 primeros bloques (1: Documento, 2: Prompt Sistema, 3: "Entendido")
+    # Nota: Si por alguna razón hay menos de 3, lo respetamos, pero lo normal es 3.
+    # TODO: AGREGAR SOPORTE PARA MÁS BLOQUES.
+    base_chunks = chat_data.chunkedPrompt.chunks[:3]
+
+    # Creamos el nuevo bloque 4 con la instrucción de la historia
+    new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
+    base_chunks.append(new_instruction_chunk)
+
+    # Asignamos la nueva lista de chunks truncada
+    chat_data.chunkedPrompt.chunks = base_chunks
+    chat_data.chunkedPrompt.pendingInputs = []
+
+    # Subir a Drive
+    if api.update_chat_file(chat_id, chat_data):
+        UI.success("¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
+    else:
+        UI.error("Error al actualizar el chat de historia en Drive.")
+
+    return state

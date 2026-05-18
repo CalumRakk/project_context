@@ -13,6 +13,7 @@ from project_context.ops import (
     resolve_image_paths,
     sync_images,
     update_context,
+    apply_story_update,
 )
 from project_context.schema import ChunksDocument, ChunksText
 from project_context.ui.editor import run_editor_mode
@@ -81,6 +82,8 @@ def command_help():
         "  [bold]context <ruta>[/]     - Enfoca el contexto en una ruta específica.\n"
         "  [bold]fix[/]                - Reparar estructura interna del chat.\n"
         "  [bold]exit / quit[/]        - Salir de la sesión.\n"
+        "  [bold]story <ruta>[/]      - Entrar al modo co-escritura con un archivo ancla.\n"
+        "  [bold]story exit[/]        - Salir del modo co-escritura.\n"
     )
     console.print(help_text)
 
@@ -221,19 +224,31 @@ def cmd_clear(ctx: SessionContext, args: str):
 @registry.register("update")
 def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
-    new_state = update_context(ctx.api, ctx.project_path, ctx.state)
-    ctx.update_state(new_state)
+    # INTERCEPCIÓN MODO HISTORIA
+    if ctx.state.get("story_mode"):
+        UI.info("Modo historia activo. Procesando actualización...")
+        try:
+            new_state = apply_story_update(ctx.api, ctx.project_path, ctx.state)
+            ctx.update_state(new_state)
+        except Exception as e:
+            UI.error(f"Fallo en la actualización de historia: {e}")
+            UI.info("Asegúrate de que la etiqueta <mejora> esté bien escrita.")
 
-    # Imprimimos el árbol automáticamente SOLO si el usuario pasó 'tree' como argumento (ej: update tree)
-    # o si está usando un contexto enfocado
-    has_focus = bool(ctx.state.get("context_items", {}).get("files") or ctx.state.get("context_items", {}).get("folders"))
+    # FLUJO NORMAL (CÓDIGO)
+    else:
+        new_state = update_context(ctx.api, ctx.project_path, ctx.state)
+        ctx.update_state(new_state)
 
-    if args.strip() == "tree" or has_focus:
-        UI.info("Árbol de archivos enviado:")
-        tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
-        console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
-    elif not has_focus and args.strip() != "tree":
-        UI.info("Tip: Ejecuta [bold]tree[/] para ver qué archivos se están rastreando.")
+        # Imprimimos el árbol automáticamente SOLO si el usuario pasó 'tree' como argumento (ej: update tree)
+        # o si está usando un contexto enfocado
+        has_focus = bool(ctx.state.get("context_items", {}).get("files") or ctx.state.get("context_items", {}).get("folders"))
+
+        if args.strip() == "tree" or has_focus:
+            UI.info("Árbol de archivos enviado:")
+            tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
+            console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
+        elif not has_focus and args.strip() != "tree":
+            UI.info("Tip: Ejecuta [bold]tree[/] para ver qué archivos se están rastreando.")
 
     UI.info("Puedes reactivar el monitor con 'monitor on'.")
 
@@ -616,3 +631,78 @@ def cmd_tree(ctx: SessionContext, args: str):
     UI.info("Generando árbol del contexto actual...")
     tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
     console.print(f"\n[cyan]{tree_str}[/cyan]\n")
+
+@registry.register("story")
+def cmd_story(ctx: SessionContext, args: str):
+    args = args.strip()
+
+    # Mostrar estado actual si no pasan argumentos
+    if not args:
+        if ctx.state.get("story_mode"):
+            UI.info(f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]")
+        else:
+            UI.warn("Uso: story <archivo.md> o story exit")
+        return
+
+    # Salir del modo historia
+    if args.lower() in ["exit", "quit", "off"]:
+        ctx.state["story_mode"] = False
+        ctx.state["story_anchor"] = None
+        ctx.update_state(ctx.state)
+        UI.success("Has salido del modo historia. El comando 'update' vuelve a comportarse normalmente.")
+        return
+
+    # Iniciar modo historia
+    target_file = ctx.project_path / args
+    if not target_file.exists():
+        UI.error(f"El archivo '{args}' no existe en el proyecto.")
+        return
+
+    rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
+
+    # ==========================================
+    # LÓGICA INTELIGENTE DE VALIDACIÓN DE CONTEXTO
+    # ==========================================
+    context_items = ctx.state.get("context_items", {"files": [], "folders": []})
+    has_specific_focus = bool(context_items.get("files") or context_items.get("folders"))
+
+    if has_specific_focus:
+        # 1. Modo Especifico: Auto-Añadir al contexto
+        if rel_path not in context_items["files"]:
+            context_items["files"].append(rel_path)
+            ctx.state["context_items"] = context_items
+            ctx.update_state(ctx.state)
+            UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido automáticamente al contexto específico.")
+    else:
+        # 2. Modo General: Advertencia de ignorados
+        import pathspec
+        from project_context.utils import get_ignore_patterns
+
+        patterns = get_ignore_patterns(ctx.project_path, ".gitignore")
+        patterns += get_ignore_patterns(ctx.project_path, ".contextignore")
+
+        if patterns:
+            spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+            if spec.match_file(rel_path):
+                UI.warn(f"¡Atención! El archivo [cyan]{rel_path}[/] parece estar excluido por .gitignore o .contextignore.")
+                UI.info("La IA no podrá leer el contenido de tu historia. Verifica tus reglas de exclusión.")
+    # ==========================================
+
+
+    ctx.stop_monitor()
+
+    UI.info("Iniciando Modo Historia...")
+    ctx.state["story_mode"] = True
+    ctx.state["story_anchor"] = rel_path
+    ctx.update_state(ctx.state)
+
+    try:
+        # Llamamos al procesador principal que hará la subida a Drive
+        from project_context.ops import apply_story_update
+        new_state = apply_story_update(ctx.api, ctx.project_path, ctx.state)
+        ctx.update_state(new_state)
+    except Exception as e:
+        UI.error(f"Error inicializando ancla: {e}")
+        UI.info(f"El modo historia se activó para '{rel_path}', pero corrige la etiqueta y usa 'update'.")
+
+    ctx.start_monitor()
