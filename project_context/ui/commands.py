@@ -173,10 +173,18 @@ def cmd_history(ctx: SessionContext, args: str):
 
     page_size = 10
     total_snapshots = len(all_ids)
+    total_pages = (total_snapshots + page_size - 1) // page_size
+    current_page = 0
 
-    for i in range(0, total_snapshots, page_size):
+    while True:
+        # Limpia la pantalla para evitar la saturación del scroll de la consola
+        typer.clear()
+
+        start_idx = current_page * page_size
+        end_idx = min(start_idx + page_size, total_snapshots)
+
         table = Table(
-            title=f"Historial de Snapshots ({i+1}-{min(i+page_size, total_snapshots)} de {total_snapshots})",
+            title=f"Historial de Snapshots (Pág. {current_page + 1}/{total_pages} | {start_idx + 1}-{end_idx} de {total_snapshots})",
             show_header=True,
             header_style="bold magenta",
         )
@@ -184,8 +192,8 @@ def cmd_history(ctx: SessionContext, args: str):
         table.add_column("Fecha/Hora", no_wrap=True)
         table.add_column("Mensaje", style="cyan")
 
-        current_chunk = all_ids[i : i + page_size]
-        for tid in current_chunk:
+        page_chunk = all_ids[start_idx:end_idx]
+        for tid in page_chunk:
             info = ctx.monitor.get_snapshot_info(tid)
             if info:
                 table.add_row(
@@ -196,13 +204,25 @@ def cmd_history(ctx: SessionContext, args: str):
 
         console.print(table)
 
-        if i + page_size < total_snapshots:
-            prompt_msg = f"[bold yellow]-- Presiona ENTER para ver más ({total_snapshots - (i + page_size)} restantes) o 'q' para salir --[/]"
-            choice = console.input(prompt_msg).strip().lower()
-            if choice == "q":
-                break
-        else:
-            UI.info("Fin del historial.")
+        # Construcción dinámica de las opciones de navegación
+        options = []
+        if current_page < total_pages - 1:
+            options.append("[bold cyan][S][/]iguiente")
+        if current_page > 0:
+            options.append("[bold cyan][A][/]nterior")
+        options.append("[bold cyan][Q][/]uit")
+
+        prompt_msg = f"\nNavegación ({', '.join(options)}): "
+        choice = console.input(prompt_msg).strip().lower()
+
+        if choice == "q":
+            # No limpiamos la pantalla aquí para que el prompt interactivo
+            # aparezca justo debajo de la última tabla dibujada.
+            break
+        elif choice == "s" and current_page < total_pages - 1:
+            current_page += 1
+        elif choice == "a" and current_page > 0:
+            current_page -= 1
 
 @registry.register("restore")
 def cmd_restore(ctx: SessionContext, args: str):
