@@ -115,8 +115,9 @@ class RunSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str = Field(
-        default="models/gemini-3-flash-preview",
-        description="Model name used in the chat."
+        default="models/gemini-3.5-flash",
+        description="Model name used in the chat.",
+        examples=["models/gemini-3.1-flash-lite", "gemini-3.1-pro-preview","gemini-flash-latest","models/gemini-2.5-flash"],
     )
     temperature: float = 1.0
     topP: float = 0.95

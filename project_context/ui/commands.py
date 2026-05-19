@@ -166,18 +166,23 @@ def cmd_monitor(ctx: SessionContext, args: str):
 
 @registry.register("history")
 def cmd_history(ctx: SessionContext, args: str):
-    all_ids = ctx.monitor.get_all_snapshot_ids()
-    if not all_ids:
-        UI.info("No hay historial disponible aún.")
-        return
-
     page_size = 10
-    total_snapshots = len(all_ids)
-    total_pages = (total_snapshots + page_size - 1) // page_size
     current_page = 0
 
     while True:
-        # Limpia la pantalla para evitar la saturación del scroll de la consola
+        # Cargamos los IDs dinámicamente en cada ciclo por si se eliminan elementos
+        all_ids = ctx.monitor.get_all_snapshot_ids()
+        if not all_ids:
+            UI.info("No hay historial disponible.")
+            break
+
+        total_snapshots = len(all_ids)
+        total_pages = (total_snapshots + page_size - 1) // page_size
+
+        # Ajustar el puntero de página si se eliminan elementos de la última página
+        if current_page >= total_pages:
+            current_page = max(0, total_pages - 1)
+
         typer.clear()
 
         start_idx = current_page * page_size
@@ -204,25 +209,61 @@ def cmd_history(ctx: SessionContext, args: str):
 
         console.print(table)
 
-        # Construcción dinámica de las opciones de navegación
+        # Construcción de opciones en pantalla
         options = []
         if current_page < total_pages - 1:
             options.append("[bold cyan][S][/]iguiente")
         if current_page > 0:
             options.append("[bold cyan][A][/]nterior")
+        options.append("[bold cyan][D][/]elete")
+        options.append("[bold cyan][R][/]ename")
         options.append("[bold cyan][Q][/]uit")
 
         prompt_msg = f"\nNavegación ({', '.join(options)}): "
         choice = console.input(prompt_msg).strip().lower()
 
         if choice == "q":
-            # No limpiamos la pantalla aquí para que el prompt interactivo
-            # aparezca justo debajo de la última tabla dibujada.
             break
+
         elif choice == "s" and current_page < total_pages - 1:
             current_page += 1
+
         elif choice == "a" and current_page > 0:
             current_page -= 1
+
+        elif choice == "d":
+            tid = console.input("\n[bold yellow]Ingresa el ID del snapshot a eliminar: [/]").strip()
+            if tid in all_ids:
+                confirm = console.input(f"[bold red]¿Confirmas la eliminación definitiva del snapshot {tid}? (s/n): [/]").strip().lower()
+                if confirm == "s":
+                    if ctx.monitor.delete_snapshot(tid):
+                        UI.success("Snapshot eliminado de forma definitiva.")
+                    else:
+                        UI.error("No se pudo realizar la eliminación física.")
+                else:
+                    UI.info("Operación cancelada.")
+            else:
+                UI.error("ID no encontrado en el historial.")
+            console.input("\nPresiona ENTER para continuar...")
+
+        elif choice == "r":
+            tid = console.input("\n[bold yellow]Ingresa el ID del snapshot a renombrar: [/]").strip()
+            if tid in all_ids:
+                new_msg = console.input("[bold yellow]Ingresa el nuevo mensaje o descripción: [/]").strip()
+                if new_msg:
+                    confirm = console.input(f"¿Deseas renombrar a: '{new_msg}'? (s/n): ").strip().lower()
+                    if confirm == "s":
+                        if ctx.monitor.rename_snapshot(tid, new_msg):
+                            UI.success("Snapshot renombrado exitosamente.")
+                        else:
+                            UI.error("No se pudieron guardar los cambios.")
+                    else:
+                        UI.info("Operación cancelada.")
+                else:
+                    UI.warn("El mensaje no puede estar vacío.")
+            else:
+                UI.error("ID no encontrado en el historial.")
+            console.input("\nPresiona ENTER para continuar...")
 
 @registry.register("restore")
 def cmd_restore(ctx: SessionContext, args: str):

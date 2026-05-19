@@ -218,3 +218,27 @@ class SnapshotManager:
             if info:
                 snaps.append(info)
         return snaps
+
+    def delete_snapshot(self, timestamp: str) -> bool:
+            """Elimina físicamente la carpeta del snapshot especificado."""
+            snap_folder = self.snapshots_dir / timestamp
+            if snap_folder.exists() and snap_folder.is_dir():
+                try:
+                    shutil.rmtree(snap_folder)
+                    return True
+                except Exception:
+                    return False
+            return False
+
+    def rename_snapshot(self, timestamp: str, new_message: str) -> bool:
+        """Modifica la descripción o nombre del snapshot en su metadata JSON."""
+        info_path = self.snapshots_dir / timestamp / "info.json"
+        if not info_path.exists():
+            return False
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+            info["message"] = new_message
+            info_path.write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
+            return True
+        except Exception:
+            return False
