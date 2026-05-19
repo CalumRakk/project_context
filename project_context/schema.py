@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
-
+from pydantic import BaseModel, Field, ConfigDict
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -112,51 +112,44 @@ ThinkingLevel = Literal[
 
 
 class RunSettings(BaseModel):
-    temperature: float = 1.0
+    model_config = ConfigDict(extra="allow")
+
     model: str = Field(
         default="models/gemini-3-flash-preview",
-        description="Model name used in the chat.",
-        examples=["models/gemini-2.5-flash", "models/gemini-2.5-pro"],
+        description="Model name used in the chat."
     )
+    temperature: float = 1.0
     topP: float = 0.95
     topK: int = 64
     maxOutputTokens: int = 65536
-    safetySettings: list[runSettings_safetySettings] = [
-        runSettings_safetySettings(
-            category="HARM_CATEGORY_HARASSMENT", threshold="OFF"
-        ),
-        runSettings_safetySettings(
-            category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"
-        ),
-        runSettings_safetySettings(
-            category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"
-        ),
-        runSettings_safetySettings(
-            category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"
-        ),
-    ]
-    responseMimeType: Optional[str] = None  # application/json
-    enableCodeExecution: bool = False
-    responseSchema: dict = {}
-    enableSearchAsATool: bool = True
-    enableBrowseAsATool: bool = False
-    enableAutoFunctionResponse: bool = False
-    thinkingBudget: int = 0
-    mediaResolution: MediaResolution = "MEDIA_RESOLUTION_UNSPECIFIED"
-    outputResolution: str = "1K"
-    thinkingLevel: Optional[ThinkingLevel] = None
-    enableImageSearch: bool = False
-    enableGoogleMaps: bool = False
-    enableAgentThinkingSummariesControl: bool = False
-    enableAgentVisualizationControl: bool = False
-    enableAgentCollaborativePlanningControl: bool = False
 
+    safetySettings: Optional[list[runSettings_safetySettings]] = None
+    responseMimeType: Optional[str] = None
+    enableCodeExecution: Optional[bool] = None
+    responseSchema: Optional[dict] = None
+    enableSearchAsATool: Optional[bool] = None
+    enableBrowseAsATool: Optional[bool] = None
+    enableAutoFunctionResponse: Optional[bool] = None
+    thinkingBudget: Optional[int] = None
+    mediaResolution: Optional[MediaResolution] = None
+    outputResolution: Optional[str] = None
+    thinkingLevel: Optional[ThinkingLevel] = None
+    enableImageSearch: Optional[bool] = None
+    enableGoogleMaps: Optional[bool] = None
+    enableAgentThinkingSummariesControl: Optional[bool] = None
+    enableAgentVisualizationControl: Optional[bool] = None
+    enableAgentCollaborativePlanningControl: Optional[bool] = None
+
+    environmentMode: Optional[str] = None
+    googleSearch: Optional[dict] = None
 
 class SystemInstruction(BaseModel):
+    model_config = ConfigDict(extra="allow")
     text: Optional[str] = None
 
+class ChatIAStudio(BaseModel):
+    model_config = ConfigDict(extra="allow")
 
-class ChatIAStudio(RunSettings):
     runSettings: RunSettings
     systemInstruction: SystemInstruction
     chunkedPrompt: ChunkedPrompt

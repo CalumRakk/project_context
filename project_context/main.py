@@ -45,7 +45,7 @@ try:
 except ImportError:
     pass
 
-from project_context.commands import profile, run
+from project_context.commands import profile, run,dev
 
 if sys.platform.startswith("win"):
     os.system("chcp 65001 > nul")
@@ -86,6 +86,7 @@ def global_options(
 
 
 app.add_typer(profile.app, name="profile")
+app.add_typer(dev.app, name="dev")
 app.command(name="run")(run.run_command)
 
 

@@ -262,7 +262,7 @@ class AIStudioDriveManager:
     def create_chat_file(
         self, file_name: str, chat_data: ChatIAStudio
     ) -> Optional[str]:
-        content_json = chat_data.model_dump_json()
+        content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
         result = self.gdm.create_file_from_memory(
             folder_id=self.ai_studio_folder,
             file_name=file_name,
@@ -276,7 +276,7 @@ class AIStudioDriveManager:
         Serializa y actualiza un objeto chat directamente en Drive.
         """
         try:
-            content_json = chat_data.model_dump_json()
+            content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
             result = self.gdm.update_file_from_memory(
                 file_id=chat_id,
                 content=content_json,
