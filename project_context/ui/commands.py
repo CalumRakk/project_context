@@ -290,7 +290,32 @@ def cmd_clear(ctx: SessionContext, args: str):
 def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
 
-    # INTERCEPCIÓN MODO HISTORIA
+    chat_id = ctx.state.get("chat_id")
+
+    # Procesar argumentos para detectar el flag de forzado
+    args_list = args.strip().split()
+    force = False
+    if any(f in args_list for f in ["--force", "-f", "force"]):
+        force = True
+        # Limpiamos el argumento de fuerza para no interferir con otras opciones como 'tree'
+        args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force"]]
+
+    clean_args = " ".join(args_list)
+
+    # Validación de seguridad con el Bridge Server (se omite si force=True)
+    if ctx.bridge_server and chat_id and not force:
+        UI.info("Verificando si hay borradores activos en Google AI Studio...")
+        is_empty = ctx.bridge_server.check_if_input_empty(chat_id, timeout=2.0)
+
+        if not is_empty:
+            UI.error("Sincronización abortada: Tienes texto escrito en el input de AI Studio.")
+            UI.info("Usa 'update --force' para ignorar este aviso o limpia el input en el navegador.")
+            ctx.start_monitor()
+            return
+    elif force:
+        UI.warn("Sincronización forzada activa. Omitiendo validación de input de usuario.")
+
+    # Intercepción del Modo Historia si corresponde
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
         try:
@@ -298,29 +323,24 @@ def cmd_update(ctx: SessionContext, args: str):
             ctx.update_state(new_state)
         except Exception as e:
             UI.error(f"Fallo en la actualización de historia: {e}")
-            UI.info("Asegúrate de que la etiqueta <mejora> esté bien escrita.")
 
-    # FLUJO NORMAL (CÓDIGO)
+    # Flujo de actualización normal de código
     else:
         new_state = update_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
 
-        # Imprimimos el árbol automáticamente SOLO si el usuario pasó 'tree' como argumento (ej: update tree)
-        # o si está usando un contexto enfocado
         has_focus = bool(ctx.state.get("context_items", {}).get("files") or ctx.state.get("context_items", {}).get("folders"))
-
-        if args.strip() == "tree" or has_focus:
+        if clean_args == "tree" or has_focus:
             UI.info("Árbol de archivos enviado:")
             tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
-        elif not has_focus and args.strip() != "tree":
-            UI.info("Tip: Ejecuta [bold]tree[/] para ver qué archivos se están rastreando.")
 
-    if ctx.bridge_server:
+    # Señal de recarga apuntando específicamente al chat_id actual
+    if ctx.bridge_server and chat_id:
         UI.info("Sincronización finalizada. Enviando señal de recarga al navegador...")
-        ctx.bridge_server.broadcast_reload()
+        ctx.bridge_server.broadcast_reload(chat_id)
 
-    UI.info("Puedes reactivar el monitor con 'monitor on'.")
+    ctx.start_monitor()
 
 @registry.register("reset")
 def cmd_reset(ctx: SessionContext, args: str):
