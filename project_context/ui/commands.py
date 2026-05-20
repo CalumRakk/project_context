@@ -291,31 +291,33 @@ def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
 
     chat_id = ctx.state.get("chat_id")
-
-    # Procesar argumentos para detectar el flag de forzado
     args_list = args.strip().split()
     force = False
     if any(f in args_list for f in ["--force", "-f", "force"]):
         force = True
-        # Limpiamos el argumento de fuerza para no interferir con otras opciones como 'tree'
         args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force"]]
 
     clean_args = " ".join(args_list)
 
-    # Validación de seguridad con el Bridge Server (se omite si force=True)
+    tab_is_focused = False
+
+    # Validación inteligente de enfoque e input del usuario
     if ctx.bridge_server and chat_id and not force:
-        UI.info("Verificando si hay borradores activos en Google AI Studio...")
-        is_empty = ctx.bridge_server.check_if_input_empty(chat_id, timeout=2.0)
+        status = ctx.bridge_server.check_if_input_empty(chat_id, timeout=1.5)
+        tab_is_focused = status.get("focused", False)
 
-        if not is_empty:
-            UI.error("Sincronización abortada: Tienes texto escrito en el input de AI Studio.")
-            UI.info("Usa 'update --force' para ignorar este aviso o limpia el input en el navegador.")
-            ctx.start_monitor()
-            return
-    elif force:
-        UI.warn("Sincronización forzada activa. Omitiendo validación de input de usuario.")
+        if tab_is_focused:
+            if not status.get("isEmpty", True):
+                UI.error("Sincronización abortada: Tienes texto escrito en el input de AI Studio.")
+                UI.info("Usa 'update --force' para ignorar este aviso o limpia el input en el navegador.")
+                ctx.start_monitor()
+                return
+        else:
+            # Pestaña no enfocada o extensión desconectada
+            UI.warn("La pestaña del chat no está activa/enfocada en tu navegador.")
+            UI.info("El contexto se sincronizará en Google Drive, pero deberás recargar manualmente (F5) al regresar al navegador.")
 
-    # Intercepción del Modo Historia si corresponde
+    # Proceder con la sincronización física del contexto (Google Drive)
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
         try:
@@ -323,8 +325,6 @@ def cmd_update(ctx: SessionContext, args: str):
             ctx.update_state(new_state)
         except Exception as e:
             UI.error(f"Fallo en la actualización de historia: {e}")
-
-    # Flujo de actualización normal de código
     else:
         new_state = update_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
@@ -335,9 +335,9 @@ def cmd_update(ctx: SessionContext, args: str):
             tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
 
-    # Señal de recarga apuntando específicamente al chat_id actual
-    if ctx.bridge_server and chat_id:
-        UI.info("Sincronización finalizada. Enviando señal de recarga al navegador...")
+    # Si la pestaña estaba enfocada, enviamos la señal de recarga física de forma segura
+    if ctx.bridge_server and chat_id and tab_is_focused:
+        UI.info("Enviando señal de recarga al navegador...")
         ctx.bridge_server.broadcast_reload(chat_id)
 
     ctx.start_monitor()

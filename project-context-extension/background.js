@@ -16,28 +16,27 @@ function connect() {
       const targetId = message.chat_id;
 
       if (message.action === "reload") {
-        findMatchingTabs(targetId, (tabs) => {
-          tabs.forEach(tab => {
-            console.log(`[Bridge] Recargando pestaña: ${tab.id}`);
+        findActiveMatchingTab(targetId, (tab) => {
+          if (tab) {
+            console.log(`[Bridge] Recargando pestaña enfocada: ${tab.id}`);
             chrome.tabs.reload(tab.id);
-          });
+          } else {
+            sendResponseToCLI("reply_tab_not_focused", targetId, null);
+          }
         });
       }
       else if (message.action === "query_empty_status") {
-        findMatchingTabs(targetId, (tabs) => {
-          if (tabs.length === 0) {
-            sendResponseToCLI("reply_empty_status", targetId, true);
+        findActiveMatchingTab(targetId, (tab) => {
+          if (!tab) {
+            // Informamos al CLI que la pestaña no está activa o no está enfocada
+            sendResponseToCLI("reply_empty_status", targetId, { isEmpty: true, focused: false });
             return;
           }
-
-          // Si hay varias pestañas del mismo chat, priorizamos la pestaña activa
-          const activeTab = tabs.find(tab => tab.active);
-          if (activeTab) {
-            queryTabEmptyStatus(activeTab.id, targetId);
-          } else {
-            // Si ninguna está en foco, evaluamos todas de manera acumulativa
-            queryAllTabsAccumulative(tabs, targetId);
-          }
+          // Si está enfocada, consultamos al content script
+          chrome.tabs.sendMessage(tab.id, { action: "check_input_status" }, (response) => {
+            const isEmpty = response ? response.isEmpty : true;
+            sendResponseToCLI("reply_empty_status", targetId, { isEmpty: isEmpty, focused: true });
+          });
         });
       }
     } catch (error) {
@@ -55,39 +54,22 @@ function connect() {
   };
 }
 
-// Filtra las pestañas que tengan el chat_id en su URL
-function findMatchingTabs(chatId, callback) {
-  chrome.tabs.query({ url: "https://aistudio.google.com/*" }, (tabs) => {
-    const matching = tabs.filter(tab => tab.url && tab.url.includes(chatId));
-    callback(matching);
+// Busca únicamente la pestaña activa que coincida con el chat_id en su URL
+function findActiveMatchingTab(chatId, callback) {
+  // Consultamos pestañas que estén activas (pueden ser de diferentes ventanas del navegador)
+  chrome.tabs.query({ active: true }, (tabs) => {
+    const matchingTab = tabs.find(tab => tab.url && tab.url.includes(chatId));
+    callback(matchingTab); // Retorna la pestaña o undefined si ninguna coincide o está enfocada
   });
 }
 
-function queryTabEmptyStatus(tabId, chatId) {
-  chrome.tabs.sendMessage(tabId, { action: "check_input_status" }, (response) => {
-    const isEmpty = response ? response.isEmpty : true;
-    sendResponseToCLI("reply_empty_status", chatId, isEmpty);
-  });
-}
-
-function queryAllTabsAccumulative(tabs, chatId) {
-  const promises = tabs.map(tab => {
-    return new Promise((resolve) => {
-      chrome.tabs.sendMessage(tab.id, { action: "check_input_status" }, (response) => {
-        resolve(response ? response.isEmpty : true);
-      });
-    });
-  });
-
-  Promise.all(promises).then((results) => {
-    const allEmpty = results.every(status => status === true);
-    sendResponseToCLI("reply_empty_status", chatId, allEmpty);
-  });
-}
-
-function sendResponseToCLI(action, chatId, isEmpty) {
+function sendResponseToCLI(action, chatId, payload) {
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ action: action, chat_id: chatId, isEmpty: isEmpty }));
+    socket.send(JSON.stringify({
+      action: action,
+      chat_id: chatId,
+      ...payload
+    }));
   }
 }
 

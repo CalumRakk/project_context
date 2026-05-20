@@ -14,9 +14,9 @@ class BrowserBridgeServer:
         self._thread: threading.Thread = None
         self._server = None
 
-        # Estructuras para sincronización síncrona/asíncrona
         self._response_events: Dict[str, threading.Event] = {}
-        self._responses: Dict[str, bool] = {}
+        # Guardaremos un diccionario con el estado detallado: {"isEmpty": bool, "focused": bool}
+        self._responses: Dict[str, dict] = {}
 
     async def _register(self, websocket):
         self.clients.add(websocket)
@@ -24,14 +24,20 @@ class BrowserBridgeServer:
             async for raw_message in websocket:
                 try:
                     message = json.loads(raw_message)
-                    if message.get("action") == "reply_empty_status":
-                        chat_id = message.get("chat_id")
-                        is_empty = message.get("isEmpty", True)
+                    action = message.get("action")
+                    chat_id = message.get("chat_id")
 
-                        # Guardamos el resultado y despertamos al hilo del CLI
-                        if chat_id in self._response_events:
-                            self._responses[chat_id] = is_empty
-                            self._response_events[chat_id].set()
+                    if action == "reply_empty_status" and chat_id in self._response_events:
+                        self._responses[chat_id] = {
+                            "isEmpty": message.get("isEmpty", True),
+                            "focused": message.get("focused", False)
+                        }
+                        self._response_events[chat_id].set()
+
+                    elif action == "reply_tab_not_focused":
+                        # El CLI intentó hacer reload pero la extensión detectó que no está enfocada
+                        UI.info("[Bridge] El chat se actualizó en Drive, pero la pestaña no está enfocada en el navegador.")
+
                 except Exception as e:
                     UI.error(f"[Bridge] Error procesando respuesta del cliente: {e}")
         except websockets.exceptions.ConnectionClosed:
@@ -98,38 +104,32 @@ class BrowserBridgeServer:
 
         asyncio.run_coroutine_threadsafe(send_to_all(), self._loop)
 
-    def check_if_input_empty(self, chat_id: str, timeout: float = 2.0) -> bool:
+    def check_if_input_empty(self, chat_id: str, timeout: float = 1.5) -> dict:
         """
-        Consulta a la extensión si el input del chat_id está vacío.
-        Bloquea el hilo del comando CLI por un máximo de 'timeout' segundos.
-        Si la extensión no está conectada o no responde, asume True por seguridad operativa.
+        Consulta a la extensión si la pestaña activa y enfocada del chat_id está vacía.
+        Retorna un diccionario indicando {'isEmpty': bool, 'focused': bool}.
         """
+        default_status = {"isEmpty": True, "focused": False}
+
         if not self.clients or not self._loop or not self._loop.is_running():
-            # Si no hay extensión conectada, asumimos que es seguro proceder
-            return True
+            return default_status
 
         event = threading.Event()
         self._response_events[chat_id] = event
-        self._responses[chat_id] = True  # Valor por defecto
+        self._responses[chat_id] = default_status
 
-        # Preparamos el mensaje de consulta
         message = json.dumps({"action": "query_empty_status", "chat_id": chat_id})
 
         async def send_query():
             for client in self.clients:
                 await client.send(message)
 
-        # Enviamos la consulta a través del loop asíncrono
         asyncio.run_coroutine_threadsafe(send_query(), self._loop)
 
-        # Esperamos a que la extensión responda o se agote el timeout
+        # Esperar respuesta de la extensión
         completed = event.wait(timeout=timeout)
 
-        # Limpieza
-        is_empty = self._responses.pop(chat_id, True)
+        status = self._responses.pop(chat_id, default_status)
         self._response_events.pop(chat_id, None)
 
-        if not completed:
-            UI.warn("[Bridge] Tiempo de espera agotado al consultar el estado de la pestaña.")
-
-        return is_empty
+        return status
