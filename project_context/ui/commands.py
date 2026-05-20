@@ -30,6 +30,7 @@ from project_context.utils import (
     save_chat_stash,
     save_project_context_state,
     stage_all_changes,
+    human_to_int,
 )
 
 
@@ -78,6 +79,7 @@ def command_help():
         "  [bold]clear[/]              - Limpiar historial del chat en Drive.\n"
         "  [bold]update[/]             - Forzar actualización de contexto.\n"
         "  [bold]reset[/]              - Reconstrucción total del chat.\n"
+        "  [bold]tokens <cant>[/]      - Ajustar manualmente los tokens del contexto.\n"
         "  [bold]images <archivo>[/]   - Sincroniza imágenes referenciadas.\n"
         "  [bold]context <ruta>[/]     - Enfoca el contexto en una ruta específica.\n"
         "  [bold]fix[/]                - Reparar estructura interna del chat.\n"
@@ -767,3 +769,48 @@ def cmd_story(ctx: SessionContext, args: str):
         UI.info(f"El modo historia se activó para '{rel_path}', pero corrige la etiqueta y usa 'update'.")
 
     ctx.start_monitor()
+
+
+@registry.register("tokens")
+def cmd_tokens(ctx: SessionContext, args: str):
+    val = args.strip()
+    if not val:
+        UI.warn("Uso: tokens <cantidad> (ej: tokens 150000 o tokens 150k)")
+        return
+
+    try:
+        tokens = human_to_int(val)
+    except Exception:
+        UI.error("Formato de tokens no válido. Usa números enteros o notaciones como '150k'.")
+        return
+
+    chat_id = ctx.state.get("chat_id")
+    file_id = ctx.state.get("file_id")
+
+    if not chat_id or not file_id:
+        UI.error("Falta información del chat o del archivo de contexto en el estado actual.")
+        return
+
+    UI.info(f"Actualizando contador de tokens a [bold]{tokens}[/] en Google Drive...")
+    ctx.stop_monitor()
+
+    try:
+        with ctx.api.modify_chat(chat_id) as chat_data:
+            updated_metadata = False
+            for chunk in chat_data.chunkedPrompt.chunks:
+                if (
+                    isinstance(chunk, ChunksDocument)
+                    and chunk.driveDocument.id == file_id
+                ):
+                    chunk.tokenCount = tokens
+                    updated_metadata = True
+                    break
+
+            if updated_metadata:
+                UI.success(f"Contador de tokens actualizado en Drive a: [bold]{tokens}[/]")
+            else:
+                UI.warn("No se encontró el bloque de contexto del archivo en el chat actual.")
+    except Exception as e:
+        UI.error(f"Error al intentar modificar los tokens en el chat: {e}")
+    finally:
+        ctx.start_monitor()
