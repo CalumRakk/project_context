@@ -750,9 +750,7 @@ def cmd_story(ctx: SessionContext, args: str):
 
     rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
 
-    # ==========================================
     # LÓGICA INTELIGENTE DE VALIDACIÓN DE CONTEXTO
-    # ==========================================
     context_items = ctx.state.get("context_items", {"files": [], "folders": []})
     has_specific_focus = bool(context_items.get("files") or context_items.get("folders"))
 
@@ -764,7 +762,6 @@ def cmd_story(ctx: SessionContext, args: str):
             ctx.update_state(ctx.state)
             UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido automáticamente al contexto específico.")
     else:
-        # 2. Modo General: Advertencia de ignorados
         import pathspec
         from project_context.utils import get_ignore_patterns
 
@@ -776,8 +773,6 @@ def cmd_story(ctx: SessionContext, args: str):
             if spec.match_file(rel_path):
                 UI.warn(f"¡Atención! El archivo [cyan]{rel_path}[/] parece estar excluido por .gitignore o .contextignore.")
                 UI.info("La IA no podrá leer el contenido de tu historia. Verifica tus reglas de exclusión.")
-    # ==========================================
-
 
     ctx.stop_monitor()
 
@@ -841,3 +836,128 @@ def cmd_tokens(ctx: SessionContext, args: str):
         UI.error(f"Error al intentar modificar los tokens en el chat: {e}")
     finally:
         ctx.start_monitor()
+
+@registry.register("insert", "msg")
+def cmd_insert(ctx: SessionContext, args: str):
+    args = args.strip()
+    if not args:
+        UI.warn("Uso: insert [user|ia|model] <mensaje>")
+        return
+
+    parts = args.split(" ", 1)
+    role_input = parts[0].lower()
+
+    user_aliases = {"user", "usuario", "u"}
+    model_aliases = {"model", "ia", "assistant", "modelo", "i"}
+
+    # Determinar rol y mensaje de forma inteligente
+    if role_input in user_aliases:
+        role = "user"
+        message = parts[1].strip() if len(parts) > 1 else ""
+    elif role_input in model_aliases:
+        role = "model"
+        message = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        # Si no coincide con ningún alias, asumimos que todo es el mensaje del usuario
+        role = "user"
+        message = args
+
+    if not message:
+        UI.warn("El cuerpo del mensaje no puede estar vacío.")
+        return
+
+    ctx.stop_monitor()
+
+    chat_id = ctx.state.get("chat_id")
+    if not chat_id:
+        UI.error("No se encontró un chat_id válido en el estado actual.")
+        ctx.start_monitor()
+        return
+
+    UI.info("Verificando la estructura del chat en Google Drive...")
+    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        UI.error("No se pudo obtener el historial del chat desde Drive.")
+        ctx.start_monitor()
+        return
+
+    chunks = chat_data.chunkedPrompt.chunks
+    if chunks:
+        last_chunk = chunks[-1]
+        last_role = getattr(last_chunk, "role", None)
+
+        # Regla de validación de alternancia
+        if role == "user" and last_role == "user":
+            UI.error("Validación fallida: El último bloque del chat ya es de tipo [bold]Usuario[/].")
+            UI.info("Ejecuta 'RUN' en AI Studio para obtener la respuesta o inserta un mensaje de tipo 'ia' primero.")
+            ctx.start_monitor()
+            return
+        elif role == "model" and last_role == "model":
+            UI.error("Validación fallida: El último bloque del chat ya es de tipo [bold]IA (Model)[/].")
+            UI.info("Inserta un mensaje de tipo 'user' primero para mantener la alternancia.")
+            ctx.start_monitor()
+            return
+
+    UI.info(f"Insertando bloque con rol '{role}'...")
+    success = ctx.api.append_message(chat_id, message, role=role)
+
+    if success:
+        UI.success(f"Mensaje insertado con rol '{role}'.")
+        if ctx.bridge_server:
+            UI.info("Enviando señal de recarga al navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+        else:
+            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5).")
+    else:
+        UI.error("Error al escribir el mensaje en Google Drive.")
+
+    ctx.start_monitor()
+    args = args.strip()
+    if not args:
+        UI.warn("Uso: insert <user|ia|model> <mensaje>")
+        return
+
+    # Separamos el primer argumento (rol) del resto del texto (mensaje)
+    parts = args.split(" ", 1)
+    if len(parts) < 2:
+        UI.warn("Uso: insert <user|ia|model> <mensaje>")
+        return
+
+    role_input = parts[0].lower()
+    message = parts[1].strip()
+
+    # Mapeo flexible de roles para facilitar la escritura en la consola
+    if role_input in ["user", "usuario", "u"]:
+        role = "user"
+    elif role_input in ["model", "ia", "assistant", "modelo", "i"]:
+        role = "model"
+    else:
+        UI.warn(f"Rol '{role_input}' no reconocido. Utiliza 'user' (u) o 'ia' (i).")
+        return
+
+    if not message:
+        UI.warn("El cuerpo del mensaje no puede estar vacío.")
+        return
+
+    ctx.stop_monitor()
+    UI.info(f"Insertando bloque con rol '{role}' en Drive...")
+
+    chat_id = ctx.state.get("chat_id")
+    if not chat_id:
+        UI.error("No se encontró un chat_id válido en el estado actual.")
+        ctx.start_monitor()
+        return
+
+    success = ctx.api.append_message(chat_id, message, role=role)
+
+    if success:
+        UI.success(f"Mensaje insertado exitosamente en el rol '{role}'.")
+        if ctx.bridge_server:
+            UI.info("Enviando señal de recarga al navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+        else:
+            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5).")
+    else:
+        UI.error("Hubo un problema al intentar escribir el mensaje en Google Drive.")
+
+    ctx.start_monitor()
