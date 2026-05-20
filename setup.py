@@ -19,6 +19,7 @@ setup(
         "google-api-python-client==2.187.0",
         "google-auth-oauthlib==1.2.3",
         "GitPython==3.1.45",
+        "websockets>=12.0"
     ],
     keywords="cli google-ai-studio project-context",
     include_package_data=True,

@@ -4,6 +4,7 @@ from typing import Callable, Dict, Optional
 
 import typer
 from rich.table import Table
+from project_context.server import BrowserBridgeServer
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
@@ -96,6 +97,7 @@ class SessionContext:
     project_path: Path
     monitor: SnapshotManager
     session_media_root: Optional[Path] = None
+    bridge_server: Optional[BrowserBridgeServer] = None
 
     def stop_monitor(self):
         self.monitor.stop_monitoring()
@@ -287,6 +289,7 @@ def cmd_clear(ctx: SessionContext, args: str):
 @registry.register("update")
 def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
+
     # INTERCEPCIÓN MODO HISTORIA
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
@@ -312,6 +315,10 @@ def cmd_update(ctx: SessionContext, args: str):
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
         elif not has_focus and args.strip() != "tree":
             UI.info("Tip: Ejecuta [bold]tree[/] para ver qué archivos se están rastreando.")
+
+    if ctx.bridge_server:
+        UI.info("Sincronización finalizada. Enviando señal de recarga al navegador...")
+        ctx.bridge_server.broadcast_reload()
 
     UI.info("Puedes reactivar el monitor con 'monitor on'.")
 

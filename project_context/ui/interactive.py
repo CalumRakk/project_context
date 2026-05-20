@@ -9,10 +9,12 @@ from project_context.utils import (
     UI,
     console,
 )
-
+from project_context.server import BrowserBridgeServer
 
 def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
     UI.info("Sesión interactiva iniciada. Escribe [bold]help[/] para comandos.")
+
+    bridge_server = BrowserBridgeServer()
 
     ctx = SessionContext(
         api=api,
@@ -20,10 +22,12 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
         project_path=project_path,
         monitor=SnapshotManager(api, project_path, state)
     )
+    ctx.bridge_server = bridge_server
 
     def handle_exit(sig, frame):
         UI.info("Cerrando sesión de forma segura...")
         ctx.stop_monitor()
+        bridge_server.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_exit)  # Ctrl+C
@@ -31,6 +35,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
         signal.signal(signal.SIGTERM, handle_exit)
 
     ctx.start_monitor()
+    bridge_server.start()
 
     UI.info(f"[Chat] Iniciando sesión con chat_id {state.get('chat_id')}...")
     consecutive_errors = 0
@@ -51,6 +56,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
                 consecutive_errors = 0
                 should_continue = handler(ctx, args)
                 if should_continue is False:
+                    bridge_server.stop()
                     break
             else:
                 print(f"Comando desconocido: '{command_name}'")
@@ -58,6 +64,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
         except (EOFError, KeyboardInterrupt):
             UI.info("Saliendo...")
             ctx.stop_monitor()
+            bridge_server.stop()
             break
         except Exception as e:
             UI.error(f"Error de ejecución: {e}")
@@ -66,6 +73,7 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             if consecutive_errors > 10:
                 UI.error("Demasiados errores consecutivos. Saliendo...")
                 ctx.stop_monitor()
+                bridge_server.stop()
                 sys.exit(1)
 
             ctx.start_monitor()
