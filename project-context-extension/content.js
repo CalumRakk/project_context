@@ -1,6 +1,5 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "check_input_status") {
-    // Verificación de seguridad para evitar recargas si hay un borrador activo en la caja de texto
     const editor = document.querySelector('div[contenteditable="true"], textarea, ms-prompt-input');
     let isEmpty = true;
     if (editor) {
@@ -14,34 +13,97 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   else if (request.action === "click_run") {
     attemptClickRun(sendResponse);
-    return true; // Mantiene el canal de comunicación abierto para la respuesta asíncrona
+    return true;
+  }
+
+  else if (request.action === "connection_status") {
+    updateUIStatus(request.connected);
   }
   return true;
 });
 
+// Función para renderizar el indicador visual discreto en la web
+function updateUIStatus(connected) {
+  let indicator = document.getElementById("project-context-status-indicator");
+
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.id = "project-context-status-indicator";
+
+    // Estilos elegantes que flotan en la esquina inferior derecha
+    Object.assign(indicator.style, {
+      position: "fixed",
+      bottom: "16px",
+      right: "16px",
+      zIndex: "10000",
+      backgroundColor: "#1e1e2e",
+      color: "#cdd6f4",
+      padding: "6px 12px",
+      borderRadius: "20px",
+      fontSize: "11px",
+      fontWeight: "500",
+      fontFamily: "Google Sans, Roboto, sans-serif",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+      border: "1px solid #313244",
+      pointerEvents: "none",
+      transition: "opacity 0.3s ease, transform 0.3s ease"
+    });
+
+    const dot = document.createElement("span");
+    dot.id = "project-context-status-dot";
+    Object.assign(dot.style, {
+      width: "8px",
+      height: "8px",
+      borderRadius: "50%",
+      display: "inline-block"
+    });
+
+    const textNode = document.createElement("span");
+    textNode.id = "project-context-status-text";
+
+    indicator.appendChild(dot);
+    indicator.appendChild(textNode);
+    document.body.appendChild(indicator);
+  }
+
+  const dot = indicator.querySelector("#project-context-status-dot");
+  const textNode = indicator.querySelector("#project-context-status-text");
+
+  if (connected) {
+    dot.style.backgroundColor = "#4CAF50"; // Verde
+    textNode.textContent = "CLI Conectado";
+    indicator.style.opacity = "0.85";
+  } else {
+    dot.style.backgroundColor = "#F44336"; // Rojo
+    textNode.textContent = "CLI Desconectado";
+    indicator.style.opacity = "0.5";
+  }
+}
+
+// Consultar el estado de la conexión tan pronto como se carga la página
+chrome.runtime.sendMessage({ action: "query_bridge_connection" }, (response) => {
+  if (response && response.connected !== undefined) {
+    updateUIStatus(response.connected);
+  }
+});
+
 function attemptClickRun(sendResponse) {
   let attempts = 0;
-  const maxAttempts = 30; // Espera máxima de 15 segundos (intervalos de 500ms)
+  const maxAttempts = 30;
 
   const interval = setInterval(() => {
     attempts++;
-
-    // Localizar los contenedores de turnos/mensajes del chat en la UI
-    // AI Studio utiliza etiquetas personalizadas como ms-chat-turn o ms-chat-chunk
     const chatTurns = document.querySelectorAll('ms-chat-turn, ms-chat-chunk, .chat-turn, .chat-chunk');
 
     if (chatTurns.length > 0) {
-      // Obtenemos el último bloque de la lista (el mensaje de usuario recién inyectado)
       const lastTurn = chatTurns[chatTurns.length - 1];
-
-      // imular el evento hover (mouseenter/mouseover) para forzar al DOM a mostrar los controles rápidos
       triggerHover(lastTurn);
-
-      // Buscar el botón de ejecución/re-run dentro de este bloque específico
       const runButton = findRunButtonInBlock(lastTurn);
 
       if (runButton) {
-        // Verificar si el botón está desactivado temporalmente por el sistema
         const isDisabled = runButton.hasAttribute('disabled') ||
                            runButton.classList.contains('disabled') ||
                            runButton.getAttribute('aria-disabled') === 'true';
@@ -71,7 +133,6 @@ function triggerHover(element) {
   element.dispatchEvent(new MouseEvent('mouseover', opts));
   element.dispatchEvent(new MouseEvent('mousemove', opts));
 }
-
 
 function findRunButtonInBlock(block) {
   const candidates = block.querySelectorAll('button, [role="button"]');

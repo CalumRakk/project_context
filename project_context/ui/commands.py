@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Callable, Dict, Optional
 
 import typer
@@ -279,12 +280,27 @@ def cmd_restore(ctx: SessionContext, args: str):
     if confirm.lower() == "s":
         ctx.stop_monitor()
         if ctx.monitor.restore_snapshot(args.strip()):
-            UI.success("Chat restaurado. Recarga AI Studio.")
+            chat_id = ctx.state.get("chat_id")
+            if ctx.bridge_server and ctx.bridge_server.clients and chat_id:
+                UI.success("Chat restaurado en Drive. Recargando pestaña en navegador...")
+                ctx.bridge_server.broadcast_reload(chat_id)
+            else:
+                UI.success("Chat restaurado de forma local y en Drive. Recarga AI Studio (F5).")
+        ctx.start_monitor()
 
 @registry.register("clear")
 def cmd_clear(ctx: SessionContext, args: str):
-    if ctx.api.clear_chat_ia_studio(ctx.state["chat_id"]):
-        UI.success("Historial de mensajes limpiado en Drive.")
+    chat_id = ctx.state.get("chat_id")
+    if not chat_id:
+        UI.error("No hay un chat activo.")
+        return
+
+    if ctx.api.clear_chat_ia_studio(chat_id):
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.success("Historial de mensajes limpiado en Drive. Recargando pestaña...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+        else:
+            UI.success("Historial de mensajes limpiado en Drive.")
 
 @registry.register("update")
 def cmd_update(ctx: SessionContext, args: str):
@@ -357,7 +373,7 @@ def cmd_update(ctx: SessionContext, args: str):
             UI.info("Esperando que la página recargue para presionar RUN automáticamente...")
             run_status = ctx.bridge_server.trigger_browser_run(chat_id)
             if run_status.get("success"):
-                UI.success(run_status.get("message"))
+                UI.success(run_status.get("message")) # type: ignore
             else:
                 UI.error(f"Fallo en la ejecución: {run_status.get('message')}")
 
@@ -376,8 +392,6 @@ def cmd_reset(ctx: SessionContext, args: str):
 @registry.register("commit")
 def cmd_commit(ctx: SessionContext, args: str):
     subcommand = args.strip().lower()
-
-    # Comprobar si ya estamos en "Modo Commit"
     is_commit_mode = ctx.state.get("commit_mode", False)
 
     if subcommand in ["clear", "done", "restore", "rm"]:
@@ -389,13 +403,12 @@ def cmd_commit(ctx: SessionContext, args: str):
         stashed_json = load_chat_stash(ctx.project_path)
 
         if not stashed_json:
-            UI.error("No se encontró el respaldo del chat. ¿Se borró accidentalmente?")
+            UI.error("No se encontró el respaldo del chat.")
             ctx.state["commit_mode"] = False
             ctx.update_state(ctx.state)
             return
 
         ctx.stop_monitor()
-        # Subimos el JSON original directamente a Drive, sobreescribiendo el rápido
         ctx.api.gdm.update_file_from_memory(
             file_id=ctx.state["chat_id"],
             content=stashed_json,
@@ -408,21 +421,19 @@ def cmd_commit(ctx: SessionContext, args: str):
         ctx.start_monitor()
 
         UI.success("¡Chat original restaurado!")
-        UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.info("Enviando señal de recarga para restaurar el chat en el navegador...")
+            ctx.bridge_server.broadcast_reload(ctx.state["chat_id"])
+        else:
+            UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
         return
 
-    # Si ya estamos en modo commit y trata de lanzar otro:
     if is_commit_mode:
-        UI.warn("Ya estás en modo commit. Ve a AI Studio, presiona RUN para obtener tu commit.")
-        UI.info("Cuando termines, usa [bold cyan]commit done[/] para regresar a tu chat original.")
+        UI.warn("Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar.")
         return
 
-    # ==========================================
-    # FLUJO DE ENTRADA: Secuestrar chat y poner modelo rápido
-    # ==========================================
     ctx.stop_monitor()
 
-    # ¿Pusieron el flag de añadir todo?
     if subcommand in ["-a", "--all", "all"]:
         UI.info("Añadiendo todos los cambios al stage (git add -A)...")
         stage_all_changes(ctx.project_path)
@@ -431,75 +442,74 @@ def cmd_commit(ctx: SessionContext, args: str):
     UI.info("Obteniendo cambios de Git...")
     prompt_text = generate_commit_prompt_text(ctx.project_path)
 
-    # Inteligencia de UX: Sugerir hacer add si olvidó hacerlo
     if not prompt_text:
         if has_unstaged_changes(ctx.project_path):
-            UI.warn("No hay archivos en stage (git add), PERO tienes archivos modificados.")
-            confirm = console.input("[bold yellow]¿Quieres añadirlos todos al stage (git add .) ahora? (s/n): [/]")
+            UI.warn("No hay archivos en stage (git add), pero hay modificaciones locales.")
+            confirm = console.input("[bold yellow]¿Quieres añadirlos todos al stage ahora? (s/n): [/]")
             if confirm.lower() == "s":
                 stage_all_changes(ctx.project_path)
                 prompt_text = generate_commit_prompt_text(ctx.project_path)
                 if not prompt_text:
-                    UI.error("No se pudo generar el diff incluso después de hacer git add.")
+                    UI.error("No se pudo generar el diff.")
                     ctx.start_monitor()
                     return
             else:
-                UI.info("Operación cancelada. Haz `git add` manualmente cuando estés listo.")
+                UI.info("Operación cancelada.")
                 ctx.start_monitor()
                 return
         else:
-            UI.warn("Tu repositorio está completamente limpio. No hay nada que commitear.")
+            UI.warn("El repositorio está limpio. No hay cambios pendientes.")
             ctx.start_monitor()
             return
 
-    # 1. Hacer Stash del chat pesado actual
-    UI.info("Guardando copia de seguridad del chat actual en tu disco (Stash)...")
+    UI.info("Guardando copia de seguridad del chat actual (Stash)...")
     chat_id = ctx.state["chat_id"]
     chat_data = ctx.api.get_chat_ia_studio(chat_id)
     if not chat_data:
-        UI.error("No se pudo descargar el chat actual para hacer la copia de seguridad.")
+        UI.error("No se pudo descargar el chat para respaldo.")
         ctx.start_monitor()
         return
 
     save_chat_stash(ctx.project_path, chat_data.model_dump_json())
 
-    # 2. Rescatar el archivo project_context.txt para que el modelo tenga el contexto de la app
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:
-        # Buscamos el chunk del documento que coincide con nuestro file_id maestro
         if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
-
-            assert isinstance(chunk, ChunksDocument)  # Para que mypy entienda el tipo
-            if chunk.driveDocument.id == ctx.state.get("file_id"):
+            if chunk.driveDocument.id == ctx.state.get("file_id"): # type: ignore
                 context_chunk = chunk
                 break
 
-    # 3. Construir el nuevo historial minimalista
-    UI.info("Configurando chat minimalista con modelo rápido (gemini-2.5-flash)...")
+    UI.info("Configurando chat minimalista con modelo rápido...")
     fast_chunks = []
     if context_chunk:
         fast_chunks.append(context_chunk)
 
-    # Añadimos nuestro prompt con el diff
     fast_chunks.append(ChunksText(text=prompt_text, role="user"))
-
-    # Cambiamos el modelo a uno rápido y reemplazamos los mensajes
-    chat_data.runSettings.model = "models/gemini-flash-latest"
+    chat_data.runSettings.model = "models/gemini-2.5-flash"  # Actualizado a gemini-2.5-flash
     chat_data.chunkedPrompt.chunks = fast_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
-    # 4. Subir a Drive
     if ctx.api.update_chat_file(chat_id, chat_data):
         ctx.state["commit_mode"] = True
         ctx.update_state(ctx.state)
-        UI.success("¡Listo! Modo commit activado de forma exitosa.")
-        UI.info("Ve a AI Studio, [bold red]REFRESCA LA PÁGINA (F5)[/] y presiona RUN.")
-        UI.info("Cuando hayas hecho tu commit, ejecuta [bold cyan]commit done[/] en esta consola.")
+        UI.success("¡Modo commit activado!")
+
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.info("Enviando señal de recarga al navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+            time.sleep(1.2)
+            UI.info("Iniciando ejecución remota del commit...")
+            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+            if run_status.get("success"):
+                UI.success(run_status.get("message")) # type: ignore
+            else:
+                UI.error(f"Fallo en ejecución: {run_status.get('message')}")
+        else:
+            UI.info("Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
     else:
         UI.error("Error al subir el chat de commit temporal a Drive.")
 
     ctx.start_monitor()
-
 @registry.register("images")
 def cmd_images(ctx: SessionContext, args: str):
     if not args:
@@ -748,7 +758,6 @@ def cmd_tree(ctx: SessionContext, args: str):
 def cmd_story(ctx: SessionContext, args: str):
     args = args.strip()
 
-    # Mostrar estado actual si no pasan argumentos
     if not args:
         if ctx.state.get("story_mode"):
             UI.info(f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]")
@@ -756,64 +765,56 @@ def cmd_story(ctx: SessionContext, args: str):
             UI.warn("Uso: story <archivo.md> o story exit")
         return
 
-    # Salir del modo historia
     if args.lower() in ["exit", "quit", "off"]:
         ctx.state["story_mode"] = False
         ctx.state["story_anchor"] = None
         ctx.update_state(ctx.state)
-        UI.success("Has salido del modo historia. El comando 'update' vuelve a comportarse normalmente.")
+        UI.success("Has salido del modo historia.")
         return
 
-    # Iniciar modo historia
     target_file = ctx.project_path / args
     if not target_file.exists():
         UI.error(f"El archivo '{args}' no existe en el proyecto.")
         return
 
     rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
-
-    # LÓGICA INTELIGENTE DE VALIDACIÓN DE CONTEXTO
     context_items = ctx.state.get("context_items", {"files": [], "folders": []})
     has_specific_focus = bool(context_items.get("files") or context_items.get("folders"))
 
     if has_specific_focus:
-        # 1. Modo Especifico: Auto-Añadir al contexto
         if rel_path not in context_items["files"]:
             context_items["files"].append(rel_path)
             ctx.state["context_items"] = context_items
             ctx.update_state(ctx.state)
-            UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido automáticamente al contexto específico.")
-    else:
-        import pathspec
-        from project_context.utils import get_ignore_patterns
-
-        patterns = get_ignore_patterns(ctx.project_path, ".gitignore")
-        patterns += get_ignore_patterns(ctx.project_path, ".contextignore")
-
-        if patterns:
-            spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
-            if spec.match_file(rel_path):
-                UI.warn(f"¡Atención! El archivo [cyan]{rel_path}[/] parece estar excluido por .gitignore o .contextignore.")
-                UI.info("La IA no podrá leer el contenido de tu historia. Verifica tus reglas de exclusión.")
+            UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico.")
 
     ctx.stop_monitor()
-
     UI.info("Iniciando Modo Historia...")
     ctx.state["story_mode"] = True
     ctx.state["story_anchor"] = rel_path
     ctx.update_state(ctx.state)
 
     try:
-        # Llamamos al procesador principal que hará la subida a Drive
         from project_context.ops import apply_story_update
         new_state = apply_story_update(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
+
+        chat_id = ctx.state.get("chat_id")
+        if ctx.bridge_server and ctx.bridge_server.clients and chat_id:
+            UI.info("Recargando pestaña en el navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+            time.sleep(1.2)
+            UI.info("Iniciando generación automática...")
+            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+
+            if run_status.get("success"):
+                UI.success(run_status.get("message")) # type: ignore
+            else:
+                UI.error(f"No se pudo ejecutar automáticamente: {run_status.get('message')}")
     except Exception as e:
-        UI.error(f"Error inicializando ancla: {e}")
-        UI.info(f"El modo historia se activó para '{rel_path}', pero corrige la etiqueta y usa 'update'.")
+        UI.error(f"Error inicializando modo historia: {e}")
 
     ctx.start_monitor()
-
 
 @registry.register("tokens")
 def cmd_tokens(ctx: SessionContext, args: str):
@@ -925,65 +926,25 @@ def cmd_insert(ctx: SessionContext, args: str):
 
     if success:
         UI.success(f"Mensaje insertado con rol '{role}'.")
-        if ctx.bridge_server:
-            UI.info("Enviando señal de recarga al navegador...")
+        # Integración con el puente del navegador
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.info("Puente activo detectado. Recargando pestaña...")
             ctx.bridge_server.broadcast_reload(chat_id)
+
+            if role == "user":
+                time.sleep(1.2)  # Pausa para permitir que la pestaña recargue e inicialice el DOM
+                UI.info("Iniciando ejecución remota en Google AI Studio...")
+                run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+                if run_status.get("success"):
+                    UI.success(run_status.get("message")) # type: ignore
+                else:
+                    UI.error(f"Fallo en ejecución automática: {run_status.get('message')}")
         else:
-            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5).")
+            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios.")
     else:
         UI.error("Error al escribir el mensaje en Google Drive.")
 
     ctx.start_monitor()
-    args = args.strip()
-    if not args:
-        UI.warn("Uso: insert <user|ia|model> <mensaje>")
-        return
-
-    # Separamos el primer argumento (rol) del resto del texto (mensaje)
-    parts = args.split(" ", 1)
-    if len(parts) < 2:
-        UI.warn("Uso: insert <user|ia|model> <mensaje>")
-        return
-
-    role_input = parts[0].lower()
-    message = parts[1].strip()
-
-    # Mapeo flexible de roles para facilitar la escritura en la consola
-    if role_input in ["user", "usuario", "u"]:
-        role = "user"
-    elif role_input in ["model", "ia", "assistant", "modelo", "i"]:
-        role = "model"
-    else:
-        UI.warn(f"Rol '{role_input}' no reconocido. Utiliza 'user' (u) o 'ia' (i).")
-        return
-
-    if not message:
-        UI.warn("El cuerpo del mensaje no puede estar vacío.")
-        return
-
-    ctx.stop_monitor()
-    UI.info(f"Insertando bloque con rol '{role}' en Drive...")
-
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        UI.error("No se encontró un chat_id válido en el estado actual.")
-        ctx.start_monitor()
-        return
-
-    success = ctx.api.append_message(chat_id, message, role=role)
-
-    if success:
-        UI.success(f"Mensaje insertado exitosamente en el rol '{role}'.")
-        if ctx.bridge_server:
-            UI.info("Enviando señal de recarga al navegador...")
-            ctx.bridge_server.broadcast_reload(chat_id)
-        else:
-            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5).")
-    else:
-        UI.error("Hubo un problema al intentar escribir el mensaje en Google Drive.")
-
-    ctx.start_monitor()
-
 
 @registry.register("run", "r")
 def cmd_run(ctx: SessionContext, args: str):
