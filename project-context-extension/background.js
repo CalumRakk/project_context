@@ -31,6 +31,11 @@ function updateBadge(connected) {
 }
 
 function connect() {
+  // Evitar la creación de conexiones duplicadas si ya hay un socket activo o conectando
+  if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
   console.log(`[Bridge] Intentando conectar a ${WEBSOCKET_URL}...`);
   socket = new WebSocket(WEBSOCKET_URL);
 

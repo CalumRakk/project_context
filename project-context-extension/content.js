@@ -83,12 +83,26 @@ function updateUIStatus(connected) {
   }
 }
 
-// Consultar el estado de la conexión tan pronto como se carga la página
-chrome.runtime.sendMessage({ action: "query_bridge_connection" }, (response) => {
-  if (response && response.connected !== undefined) {
-    updateUIStatus(response.connected);
-  }
-});
+// Consultar el estado de la conexión de forma periódica para evitar la suspensión del Service Worker en MV3
+function checkConnection() {
+  chrome.runtime.sendMessage({ action: "query_bridge_connection" }, (response) => {
+    if (chrome.runtime.lastError) {
+      // Si el Service Worker se suspendió, el envío de este mensaje lo forzará a despertar
+      // y a ejecutar de nuevo el bloque de inicialización de conexión WebSocket.
+      updateUIStatus(false);
+      return;
+    }
+    if (response && response.connected !== undefined) {
+      updateUIStatus(response.connected);
+    }
+  });
+}
+
+// Consulta inicial rápida
+checkConnection();
+
+// Heartbeat de ciclo corto (cada 5 segundos) para asegurar persistencia y reactivación inmediata
+setInterval(checkConnection, 5000);
 
 function attemptClickRun(sendResponse) {
   let attempts = 0;
