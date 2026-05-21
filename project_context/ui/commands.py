@@ -292,13 +292,20 @@ def cmd_update(ctx: SessionContext, args: str):
 
     chat_id = ctx.state.get("chat_id")
     args_list = args.strip().split()
+
+    # Detectar flag de forzado
     force = False
     if any(f in args_list for f in ["--force", "-f", "force"]):
         force = True
         args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force"]]
 
-    clean_args = " ".join(args_list)
+    # Detectar flag de ejecución automática posterior
+    run_after_update = False
+    if any(r in args_list for r in ["--run", "-r"]):
+        run_after_update = True
+        args_list = [arg for arg in args_list if arg not in ["--run", "-r"]]
 
+    clean_args = " ".join(args_list)
     tab_is_focused = False
 
     # Validación inteligente de enfoque e input del usuario
@@ -313,8 +320,11 @@ def cmd_update(ctx: SessionContext, args: str):
                 ctx.start_monitor()
                 return
         else:
-            # Pestaña no enfocada o extensión desconectada
             UI.warn("La pestaña del chat no está activa/enfocada en tu navegador.")
+            if run_after_update:
+                UI.error("No se puede ejecutar de forma automática si la pestaña no está enfocada.")
+                ctx.start_monitor()
+                return
             UI.info("El contexto se sincronizará en Google Drive, pero deberás recargar manualmente (F5) al regresar al navegador.")
 
     # Proceder con la sincronización física del contexto (Google Drive)
@@ -340,7 +350,19 @@ def cmd_update(ctx: SessionContext, args: str):
         UI.info("Enviando señal de recarga al navegador...")
         ctx.bridge_server.broadcast_reload(chat_id)
 
+        # Si se solicitó la ejecución automática, esperamos un instante a que inicie la recarga
+        # y luego disparamos el trigger que esperará a que el botón RUN se habilite.
+        if run_after_update:
+            time.sleep(1.0)  # Pausa breve para permitir el inicio de la recarga
+            UI.info("Esperando que la página recargue para presionar RUN automáticamente...")
+            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+            if run_status.get("success"):
+                UI.success(run_status.get("message"))
+            else:
+                UI.error(f"Fallo en la ejecución: {run_status.get('message')}")
+
     ctx.start_monitor()
+
 
 @registry.register("reset")
 def cmd_reset(ctx: SessionContext, args: str):
@@ -961,3 +983,23 @@ def cmd_insert(ctx: SessionContext, args: str):
         UI.error("Hubo un problema al intentar escribir el mensaje en Google Drive.")
 
     ctx.start_monitor()
+
+
+@registry.register("run", "r")
+def cmd_run(ctx: SessionContext, args: str):
+    chat_id = ctx.state.get("chat_id")
+    if not chat_id:
+        UI.error("No se encontró el chat_id en el estado actual.")
+        return
+
+    if not ctx.bridge_server:
+        UI.error("El servidor de puente no está activo o inicializado.")
+        return
+
+    UI.info("Iniciando ejecución remota en AI Studio (esperando activación del botón)...")
+    status = ctx.bridge_server.trigger_browser_run(chat_id)
+
+    if status.get("success"):
+        UI.success(status.get("message", "Ejecución iniciada con éxito."))
+    else:
+        UI.error(f"No se pudo completar la ejecución: {status.get('message')}")

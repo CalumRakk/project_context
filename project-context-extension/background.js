@@ -39,6 +39,20 @@ function connect() {
           });
         });
       }
+
+      else if (message.action === "run") {
+        findActiveMatchingTab(targetId, (tab) => {
+          if (!tab) {
+            sendResponseToCLI("reply_run_status", targetId, { success: false, message: "La pestaña no está enfocada o activa." });
+            return;
+          }
+          chrome.tabs.sendMessage(tab.id, { action: "click_run" }, (response) => {
+            const success = response ? response.success : false;
+            const msg = response ? response.message : "Sin respuesta de la página web.";
+            sendResponseToCLI("reply_run_status", targetId, { success: success, message: msg });
+          });
+        });
+      }
     } catch (error) {
       console.error("[Bridge] Error al procesar mensaje:", error);
     }
@@ -72,5 +86,7 @@ function sendResponseToCLI(action, chatId, payload) {
     }));
   }
 }
+
+
 
 connect();

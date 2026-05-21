@@ -33,10 +33,17 @@ class BrowserBridgeServer:
                             "focused": message.get("focused", False)
                         }
                         self._response_events[chat_id].set()
-
                     elif action == "reply_tab_not_focused":
                         # El CLI intentó hacer reload pero la extensión detectó que no está enfocada
                         UI.info("[Bridge] El chat se actualizó en Drive, pero la pestaña no está enfocada en el navegador.")
+
+                    elif action == "reply_run_status" and chat_id in self._response_events:
+                        self._responses[chat_id] = {
+                            "success": message.get("success", False),
+                            "message": message.get("message", "")
+                        }
+                        self._response_events[chat_id].set()
+
 
                 except Exception as e:
                     UI.error(f"[Bridge] Error procesando respuesta del cliente: {e}")
@@ -44,6 +51,33 @@ class BrowserBridgeServer:
             pass
         finally:
             self.clients.remove(websocket)
+    def trigger_browser_run(self, chat_id: str, timeout: float = 16.0) -> dict:
+        """
+        Envía la orden a la extensión para presionar RUN y espera la confirmación.
+        """
+        default_status = {"success": False, "message": "Servidor de puente no conectado."}
+        if not self.clients or not self._loop or not self._loop.is_running():
+            return default_status
+
+        event = threading.Event()
+        self._response_events[chat_id] = event
+        self._responses[chat_id] = default_status
+
+        message = json.dumps({"action": "run", "chat_id": chat_id})
+
+        async def send_query():
+            for client in self.clients:
+                await client.send(message)
+
+        asyncio.run_coroutine_threadsafe(send_query(), self._loop)
+
+        # Esperamos a que la extensión haga el polling e intente dar clic
+        completed = event.wait(timeout=timeout)
+
+        status = self._responses.pop(chat_id, default_status)
+        self._response_events.pop(chat_id, None)
+
+        return status
 
     async def _main_server(self):
         self._loop = asyncio.get_running_loop()
