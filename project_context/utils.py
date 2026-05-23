@@ -534,6 +534,34 @@ def clear_chat_stash(project_path: Union[str, Path]):
     if input_path.exists():
         input_path.unlink()
 
+def save_vanish_stash(project_path: Union[str, Path], chat_json: str):
+    """Guarda una copia de seguridad del chat actual para el modo vanish."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    output = base_dir / inodo / "vanish_stash.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(chat_json, encoding="utf-8")
+
+def load_vanish_stash(project_path: Union[str, Path]) -> Optional[str]:
+    """Recupera la copia de seguridad del chat guardada por el modo vanish."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    input_path = base_dir / inodo / "vanish_stash.json"
+    if not input_path.exists():
+        return None
+    return input_path.read_text(encoding="utf-8")
+
+def clear_vanish_stash(project_path: Union[str, Path]):
+    """Elimina el archivo de copia de seguridad del modo vanish."""
+    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+    inodo = generate_unique_id(project_path)
+    base_dir = profile_manager.get_working_dir()
+    input_path = base_dir / inodo / "vanish_stash.json"
+    if input_path.exists():
+        input_path.unlink()
+
 def get_context_tree(project_path: Union[str, Path], context_items: Optional[dict] = None) -> str:
     """Genera solo la representación visual del árbol (sin el contenido de los archivos)."""
     project_path = Path(project_path) if isinstance(project_path, str) else project_path

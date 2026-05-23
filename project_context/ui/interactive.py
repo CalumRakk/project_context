@@ -4,12 +4,13 @@ from pathlib import Path
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
+from project_context.server import BrowserBridgeServer
 from project_context.ui.commands import SessionContext, registry
 from project_context.utils import (
     UI,
     console,
 )
-from project_context.server import BrowserBridgeServer
+
 
 def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
     UI.info("Sesión interactiva iniciada. Escribe [bold]help[/] para comandos.")
@@ -49,6 +50,10 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             parts = command_line.split(" ", 1)
             command_name = parts[0].lower()
             args = parts[1] if len(parts) > 1 else ""
+
+            if ctx.state.get("vanished") and command_name not in ["vanish", "exit", "quit", "help"]:
+                UI.warn("La consola está congelada en modo vanish. Usa 'vanish off' para restaurar la sesión.")
+                continue
 
             handler = registry.commands.get(command_name)
 

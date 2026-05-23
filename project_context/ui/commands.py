@@ -24,14 +24,18 @@ from project_context.utils import (
     IMAGE_INSERTION_RESPONSE,
     UI,
     clear_chat_stash,
+    clear_vanish_stash,
     console,
     get_context_tree,
     get_potential_media_folders,
     has_unstaged_changes,
     human_to_int,
     load_chat_stash,
+    load_vanish_stash,
     save_chat_stash,
     save_project_context_state,
+    # Nuevas importaciones:
+    save_vanish_stash,
     stage_all_changes,
 )
 
@@ -85,12 +89,12 @@ def command_help():
         "  [bold]images <archivo>[/]   - Sincroniza imágenes referenciadas.\n"
         "  [bold]context <ruta>[/]     - Enfoca el contexto en una ruta específica.\n"
         "  [bold]fix[/]                - Reparar estructura interna del chat.\n"
+        "  [bold]vanish [on|off][/]    - Ocultar o restaurar el chat de forma temporal.\n"
         "  [bold]exit / quit[/]        - Salir de la sesión.\n"
         "  [bold]story <ruta>[/]      - Entrar al modo co-escritura con un archivo ancla.\n"
         "  [bold]story exit[/]        - Salir del modo co-escritura.\n"
     )
     console.print(help_text)
-
 @dataclass
 class SessionContext:
     api: AIStudioDriveManager
@@ -975,3 +979,103 @@ def cmd_run(ctx: SessionContext, args: str):
         UI.success(status.get("message", "Ejecución iniciada con éxito."))
     else:
         UI.error(f"No se pudo completar la ejecución: {status.get('message')}")
+
+
+@registry.register("vanish")
+def cmd_vanish(ctx: SessionContext, args: str):
+    subcommand = args.strip().lower()
+
+    # Si no se proporciona argumento, se comporta como un interruptor alterno (toggle)
+    if not subcommand:
+        is_vanished = ctx.state.get("vanished", False)
+        subcommand = "off" if is_vanished else "on"
+
+    if subcommand == "on":
+        if ctx.state.get("vanished", False):
+            UI.warn("El modo vanish ya se encuentra activo.")
+            return
+
+        ctx.stop_monitor()
+        chat_id = ctx.state.get("chat_id")
+        if not chat_id:
+            UI.error("No se detectó un chat activo en el estado del proyecto.")
+            ctx.start_monitor()
+            return
+
+        UI.info("Guardando copia de seguridad del chat (Vanish Stash)...")
+        chat_data = ctx.api.get_chat_ia_studio(chat_id)
+        if not chat_data:
+            UI.error("No se pudo descargar el chat desde Drive para realizar el respaldo.")
+            ctx.start_monitor()
+            return
+
+        # Respaldar localmente
+        save_vanish_stash(ctx.project_path, chat_data.model_dump_json())
+
+        # Crear estructura limpia
+        UI.info("Estableciendo pantalla limpia en Google Drive...")
+        vanish_chunks = [
+            ChunksText(
+                text="✨ vanish off ✨",
+                role="user"
+            )
+        ]
+        chat_data.chunkedPrompt.chunks = vanish_chunks
+        chat_data.chunkedPrompt.pendingInputs = []
+
+        if ctx.api.update_chat_file(chat_id, chat_data):
+            ctx.state["vanished"] = True
+            ctx.update_state(ctx.state)
+            UI.success("Modo Vanish activado. La conversación se encuentra oculta en Drive.")
+
+            if ctx.bridge_server and ctx.bridge_server.clients:
+                UI.info("Enviando señal de recarga al navegador...")
+                ctx.bridge_server.broadcast_reload(chat_id)
+            else:
+                UI.info("Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia.")
+        else:
+            UI.error("Ocurrió un problema al actualizar el chat en Drive.")
+            clear_vanish_stash(ctx.project_path)
+
+        ctx.start_monitor()
+
+    elif subcommand == "off":
+        if not ctx.state.get("vanished", False):
+            UI.warn("El modo vanish no está activo en este momento.")
+            return
+
+        ctx.stop_monitor()
+        chat_id = ctx.state.get("chat_id")
+        stashed_json = load_vanish_stash(ctx.project_path)
+
+        if not stashed_json:
+            UI.error("No se encontró el archivo de respaldo de Vanish para restaurar.")
+            ctx.state["vanished"] = False
+            ctx.update_state(ctx.state)
+            ctx.start_monitor()
+            return
+
+        UI.info("Restaurando conversación y contexto original...")
+        success = ctx.api.gdm.update_file_from_memory(
+            file_id=chat_id,
+            content=stashed_json,
+            mime_type=ctx.api.MIME_PROMPT
+        )
+
+        if success:
+            clear_vanish_stash(ctx.project_path)
+            ctx.state["vanished"] = False
+            ctx.update_state(ctx.state)
+            UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
+
+            if ctx.bridge_server and ctx.bridge_server.clients:
+                UI.info("Enviando señal de recarga al navegador...")
+                ctx.bridge_server.broadcast_reload(chat_id)
+            else:
+                UI.info("Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado.")
+        else:
+            UI.error("No se pudo escribir el archivo original en Drive.")
+
+        ctx.start_monitor()
+    else:
+        UI.warn("Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'")
