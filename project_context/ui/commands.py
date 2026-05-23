@@ -1,23 +1,23 @@
+import time
 from dataclasses import dataclass
 from pathlib import Path
-import time
 from typing import Callable, Dict, Optional
 
 import typer
 from rich.table import Table
-from project_context.server import BrowserBridgeServer
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.history import SnapshotManager
 from project_context.ops import (
+    apply_story_update,
     generate_commit_prompt_text,
     rebuild_project_context,
     resolve_image_paths,
     sync_images,
     update_context,
-    apply_story_update,
 )
 from project_context.schema import ChunksDocument, ChunksText
+from project_context.server import BrowserBridgeServer
 from project_context.ui.editor import run_editor_mode
 from project_context.utils import (
     IMAGE_INSERTION_PROMPT,
@@ -28,11 +28,11 @@ from project_context.utils import (
     get_context_tree,
     get_potential_media_folders,
     has_unstaged_changes,
+    human_to_int,
     load_chat_stash,
     save_chat_stash,
     save_project_context_state,
     stage_all_changes,
-    human_to_int,
 )
 
 
@@ -347,7 +347,13 @@ def cmd_update(ctx: SessionContext, args: str):
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
         try:
-            new_state = apply_story_update(ctx.api, ctx.project_path, ctx.state)
+            # Modificado para inyectar ctx.session_media_root
+            new_state = apply_story_update(
+                ctx.api,
+                ctx.project_path,
+                ctx.state,
+                media_root_hint=ctx.session_media_root
+            )
             ctx.update_state(new_state)
         except Exception as e:
             UI.error(f"Fallo en la actualización de historia: {e}")
@@ -796,7 +802,12 @@ def cmd_story(ctx: SessionContext, args: str):
 
     try:
         from project_context.ops import apply_story_update
-        new_state = apply_story_update(ctx.api, ctx.project_path, ctx.state)
+        new_state = apply_story_update(
+            ctx.api,
+            ctx.project_path,
+            ctx.state,
+            media_root_hint=ctx.session_media_root
+        )
         ctx.update_state(new_state)
 
         chat_id = ctx.state.get("chat_id")

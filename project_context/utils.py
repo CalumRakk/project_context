@@ -571,3 +571,29 @@ def get_context_tree(project_path: Union[str, Path], context_items: Optional[dic
                 final_tree += f"{indented_tree}\n"
 
     return final_tree
+
+
+def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
+    """
+    Extrae referencias de imágenes desde una cadena de texto plano.
+    Retorna una lista de tuplas: (nombre_o_ruta, es_wikilink)
+    """
+    results = []
+    # Markdown estándar e HTML
+    std_patterns = [
+        r"!\[.*?\]\((.*?\.(?:png|jpg|jpeg|webp|gif))\)",
+        r'<img\s+[^>]*src=["\'](.*?\.(?:png|jpg|jpeg|webp|gif))["\']',
+    ]
+    for pat in std_patterns:
+        matches = re.findall(pat, content, re.IGNORECASE)
+        results.extend(
+            [(m.strip().lstrip("/"), False) for m in matches if not m.startswith(("http", "data:"))]
+        )
+
+    # WikiLinks (estilo Obsidian): ![[imagen.png|237]]
+    wiki_matches = re.findall(r"!\[\[(.*?)(?:\|.*?)?\]\]", content)
+    results.extend(
+        [(m.strip(), True) for m in wiki_matches if not m.startswith(("http", "data:"))]
+    )
+
+    return list(dict.fromkeys(results))

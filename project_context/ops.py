@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -23,7 +24,7 @@ from project_context.utils import (
     resolve_prompt,
     save_context,
 )
-import re
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -541,20 +542,27 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
     return ""
 
 
-def apply_story_update(api: AIStudioDriveManager, project_path: Path, state: Dict) -> Dict:
+def apply_story_update(
+    api: AIStudioDriveManager,
+    project_path: Path,
+    state: Dict,
+    media_root_hint: Optional[Path] = None
+) -> Dict:
     """
-    Actualiza el contexto general, intercepta el chat y sobrescribe el bloque 4 (Prompt Dinámico)
-    basado en la intención detectada en el archivo anclado.
+    Actualiza el contexto general, analiza el archivo de historia ancla,
+    resuelve y sincroniza las imágenes de su etiqueta <mejora>,
+    y actualiza de forma atómica la estructura del chat en Google Drive.
     """
+    from project_context.utils import extract_image_references_from_text
+
     anchor_rel_path = state.get("story_anchor")
     if not anchor_rel_path:
         raise ValueError("No hay un ancla de historia definida en el estado.")
 
     anchor_file = project_path / anchor_rel_path
-
     UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
 
-    # Parsear el archivo local
+    # 1. Parsear el archivo local
     try:
         parsed_data = parse_story_file(anchor_file)
     except Exception as e:
@@ -562,39 +570,114 @@ def apply_story_update(api: AIStudioDriveManager, project_path: Path, state: Dic
         return state
 
     UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
+    instruction_text = parsed_data["instruction"]
 
-    # Generar el Prompt Dinámico
-    anchor_file_path= anchor_file.relative_to(project_path).as_posix()
+    # 2. Extraer y resolver referencias a imágenes de la etiqueta <mejora>
+    refs = extract_image_references_from_text(instruction_text)
+    resolved_images = []
+
+    for ref_text, is_wiki in refs:
+        # Intentar resolver relativo al directorio del archivo ancla
+        candidate = (anchor_file.parent / ref_text).resolve()
+
+        # Si es WikiLink y no se encuentra, probar con la carpeta de medios de la sesión
+        if not candidate.exists() and is_wiki and media_root_hint:
+            candidate = (media_root_hint / ref_text).resolve()
+
+        # Alternativa: Buscar relativo a la raíz del proyecto
+        if not candidate.exists():
+            candidate = (project_path / ref_text).resolve()
+
+        if candidate.exists() and candidate.is_file():
+            resolved_images.append((candidate, ref_text))
+        else:
+            UI.warn(f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'")
+
+    # 3. Sincronizar las imágenes en Drive (Reutilizando existentes)
+    image_chunks = []
+    if resolved_images:
+        UI.info(f"Sincronizando {len(resolved_images)} recursos visuales detectados...")
+        image_chunks = sync_story_images(api, project_path, resolved_images)
+
+    # 4. Generar el Prompt de Texto Dinámico
+    anchor_file_path = anchor_file.relative_to(project_path).as_posix()
     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
 
-    # Forzar sincronización del contexto global (Para que la IA pueda leer tus SSoT actualizados)
+    # 5. Sincronizar contexto global del código fuente (SSoT)
     state = update_context(api, project_path, state)
 
-    # Modificar el Chat en Drive
+    # 6. Modificar el Chat en Drive
     chat_id = state["chat_id"]
     chat_data = api.get_chat_ia_studio(chat_id)
     if not chat_data:
         raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
 
-    UI.info("Sobrescribiendo bloque de instrucción (Chat 4) y limpiando respuestas previas...")
+    UI.info("Actualizando bloques de prompt del chat e integrando recursos visuales...")
 
-    # Mantenemos solo los 3 primeros bloques (1: Documento, 2: Prompt Sistema, 3: "Entendido")
-    # Nota: Si por alguna razón hay menos de 3, lo respetamos, pero lo normal es 3.
-    # TODO: AGREGAR SOPORTE PARA MÁS BLOQUES.
+    # Conservamos los 3 primeros bloques iniciales (Documento Contexto, System Prompt, Acuse de recibo)
     base_chunks = chat_data.chunkedPrompt.chunks[:3]
 
-    # Creamos el nuevo bloque 4 con la instrucción de la historia
+    # Añadir Bloque 4: La instrucción dinámica
     new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
     base_chunks.append(new_instruction_chunk)
 
-    # Asignamos la nueva lista de chunks truncada
+    # Añadir los bloques de imágenes alternados (Texto de Ruta + Drive Image) si existen
+    if image_chunks:
+        base_chunks.extend(image_chunks)
+
+    # Asignar la lista reconstruida y limpiar inputs pendientes
     chat_data.chunkedPrompt.chunks = base_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
-    # Subir a Drive
+    # Escribir el nuevo JSON en Drive
     if api.update_chat_file(chat_id, chat_data):
         UI.success("¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
     else:
         UI.error("Error al actualizar el chat de historia en Drive.")
 
     return state
+
+def sync_story_images(
+    api: AIStudioDriveManager,
+    project_path: Path,
+    resolved_images: List[Tuple[Path, str]]
+) -> list:
+    """
+    Sincroniza un listado de imágenes locales con Drive de forma ligera.
+    Si la imagen ya existe por nombre en Drive, se reutiliza su ID sin volver a subir bytes.
+    Retorna una lista con la estructura de bloques alternados para el Chat.
+    """
+    media_chunks = []
+    for img_path, original_ref in resolved_images:
+        drive_name = f"ctx_{img_path.name}"
+
+        # 1. Comprobar existencia previa usando metadatos rápidos
+        drive_file = api.gdm.find_item_by_name(
+            drive_name, parent_id=api.ai_studio_folder
+        )
+
+        # 2. Subir binario únicamente si no existía en la carpeta de Drive
+        if not drive_file:
+            UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
+            with open(img_path, "rb") as f:
+                content = f.read()
+                mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
+                drive_file = api.gdm.upload_binary_to_drive(
+                    api.ai_studio_folder, drive_name, content, mime
+                )
+        else:
+            UI.info(f"Reutilizando imagen existente en Drive: [dim]{drive_name}[/]")
+
+        if drive_file:
+            # Creamos el par de bloques estructurados:
+            # Bloque A: Texto indicador con la referencia que usó el usuario
+            prompt_chunk = ChunkFactory.create_text(
+                f"Archivo visual: {original_ref}", role="user"
+            )
+            # Bloque B: El elemento visual de imagen multimodal con su ID de Drive
+            image_chunk = ChunkFactory.create_image(drive_file["id"], role="user")
+
+            media_chunks.append(prompt_chunk)
+            media_chunks.append(image_chunk)
+
+    return media_chunks
