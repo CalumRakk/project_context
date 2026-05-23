@@ -250,14 +250,29 @@ def generate_context(
                 except Exception as e:
                     final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
 
+    # -- Procesa Carpetas Explícitas aplicando Exclusiones Relativas --
     folders = context_items.get("folders", [])
+    exclusions = context_items.get("exclusions", [])
     if folders:
         final_tree += "└── [Carpetas Específicas Añadidas]\n"
         for folder in folders:
             real_folder = project_path / folder
             if real_folder.exists() and real_folder.is_dir():
+                folder_path_obj = Path(folder)
+                folder_specific_ignores = list(custom_ignores)
+
+                # Traducir exclusiones aplicables a esta carpeta
+                for exc in exclusions:
+                    exc_path = Path(exc)
+                    try:
+                        rel_exc = exc_path.relative_to(folder_path_obj)
+                        folder_specific_ignores.append(str(rel_exc.as_posix()))
+                    except ValueError:
+                        # No pertenece a esta carpeta de enfoque
+                        pass
+
                 summary, tree, content = gitingest.ingest(
-                    str(real_folder), exclude_patterns=set(custom_ignores)
+                    str(real_folder), exclude_patterns=set(folder_specific_ignores)
                 )
 
                 # Ajustamos la indentación del árbol para que encaje visualmente
@@ -269,8 +284,6 @@ def generate_context(
 
     full_context = final_tree + "\n" + final_content
     return full_context, total_tokens
-
-
 def save_context(project_path: Union[str, Path], context: str) -> Path:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
     inodo = generate_unique_id(project_path)
@@ -586,20 +599,31 @@ def get_context_tree(project_path: Union[str, Path], context_items: Optional[dic
             final_tree += f"{prefix}{f_path}\n"
 
     folders = context_items.get("folders", [])
+    exclusions = context_items.get("exclusions", [])
     if folders:
         final_tree += "└── [Carpetas Específicas Añadidas]\n"
         for folder in folders:
             real_folder = project_path / folder
             if real_folder.exists() and real_folder.is_dir():
+                folder_path_obj = Path(folder)
+                folder_specific_ignores = list(custom_ignores)
+
+                for exc in exclusions:
+                    exc_path = Path(exc)
+                    try:
+                        rel_exc = exc_path.relative_to(folder_path_obj)
+                        folder_specific_ignores.append(str(rel_exc.as_posix()))
+                    except ValueError:
+                        pass
+
                 summary, tree, content = gitingest.ingest(
-                    str(real_folder), exclude_patterns=set(custom_ignores)
+                    str(real_folder), exclude_patterns=set(folder_specific_ignores)
                 )
                 # Indentamos para que cuadre visualmente
                 indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
                 final_tree += f"{indented_tree}\n"
 
     return final_tree
-
 
 def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     """

@@ -598,7 +598,7 @@ def cmd_fix(ctx: SessionContext, args: str):
 @registry.register("context")
 def cmd_context(ctx: SessionContext, args: str):
     if "context_items" not in ctx.state:
-        ctx.state["context_items"] = {"files": [], "folders": []}
+        ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
 
     parts = args.strip().split()
     if not parts:
@@ -609,6 +609,14 @@ def cmd_context(ctx: SessionContext, args: str):
     targets = parts[1:]
 
     items = ctx.state["context_items"]
+
+    # Asegurar inicialización consistente de todas las colecciones
+    if "exclusions" not in items:
+        items["exclusions"] = []
+    if "files" not in items:
+        items["files"] = []
+    if "folders" not in items:
+        items["folders"] = []
 
     if subcmd == "add":
         if not targets:
@@ -622,8 +630,12 @@ def cmd_context(ctx: SessionContext, args: str):
                 UI.warn(f"Ignorado: '{target}' no existe.")
                 continue
 
-            # Normalizamos la ruta para evitar duplicados como './src' y 'src'
             rel_path = str(full_path.relative_to(ctx.project_path).as_posix())
+
+            # Si el elemento estaba previamente en la lista de exclusión, se revierte la exclusión
+            if rel_path in items["exclusions"]:
+                items["exclusions"].remove(rel_path)
+                UI.info(f"Se revirtió el descarte previo de '{rel_path}'.")
 
             if full_path.is_file():
                 if rel_path not in items["files"]:
@@ -643,35 +655,85 @@ def cmd_context(ctx: SessionContext, args: str):
 
     elif subcmd in ["rm", "remove"]:
         if not targets:
-            UI.warn("Especifica qué quieres eliminar. Ej: context rm src/main.py")
+            UI.warn("Especifica qué quieres eliminar o excluir. Ej: context rm viajes/cascada")
             return
 
         removed = 0
         for target in targets:
-            # Intentar limpiar la ruta para hacer match
             try:
                 full_path = ctx.project_path / target
                 rel_path = str(full_path.relative_to(ctx.project_path).as_posix())
             except ValueError:
-                rel_path = target  # Por si pasan una ruta ya relativa
+                rel_path = target  # En caso de pasar una ruta que ya es relativa o un patrón de descarte
 
+            # Caso A: El objetivo se encuentra directamente en exclusiones
+            if rel_path in items["exclusions"]:
+                items["exclusions"].remove(rel_path)
+                removed += 1
+                UI.success(f"Se eliminó la exclusión sobre: '{rel_path}' (volverá a ser incluido).")
+                continue
+
+            # Caso B: El objetivo es un archivo explícito de enfoque
             if rel_path in items["files"]:
                 items["files"].remove(rel_path)
                 removed += 1
+                UI.success(f"Se eliminó '{rel_path}' de los archivos enfocados.")
+                continue
+
+            # Caso C: El objetivo es una carpeta explícita de enfoque
             if rel_path in items["folders"]:
                 items["folders"].remove(rel_path)
                 removed += 1
+                UI.success(f"Se eliminó la carpeta '{rel_path}' del enfoque.")
+
+                # Ejecutar limpieza en cascada para remover exclusiones dependientes de esta carpeta
+                parent_path = Path(rel_path)
+                updated_exclusions = []
+                cascade_count = 0
+
+                for exclusion in items["exclusions"]:
+                    exc_path = Path(exclusion)
+                    try:
+                        exc_path.relative_to(parent_path)
+                        cascade_count += 1
+                    except ValueError:
+                        # No pertenece al directorio eliminado, se conserva
+                        updated_exclusions.append(exclusion)
+
+                items["exclusions"] = updated_exclusions
+                if cascade_count > 0:
+                    UI.info(f"Limpieza en cascada: Se eliminaron {cascade_count} exclusiones huérfanas bajo '{rel_path}'.")
+                continue
+
+            # Caso D: El objetivo no está en el enfoque actual pero pertenece a una carpeta del enfoque.
+            # Se agrega como una exclusión dinámica
+            target_path = Path(rel_path)
+            is_sub_element = False
+            for folder in items["folders"]:
+                folder_path = Path(folder)
+                try:
+                    target_path.relative_to(folder_path)
+                    is_sub_element = True
+                    break
+                except ValueError:
+                    pass
+
+            if is_sub_element:
+                if rel_path not in items["exclusions"]:
+                    items["exclusions"].append(rel_path)
+                    removed += 1
+                    UI.success(f"Se excluyó '{rel_path}' del análisis de su carpeta contenedora.")
+            else:
+                UI.warn(f"El elemento '{rel_path}' no está en el enfoque ni pertenece a ninguna carpeta activa.")
 
         if removed > 0:
             ctx.update_state(ctx.state)
-            UI.success(f"Se eliminaron {removed} elementos del contexto.")
             UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
-        else:
-            UI.info("No se encontraron esos elementos en el contexto actual.")
 
     elif subcmd in ["ls", "list"]:
         has_files = len(items["files"]) > 0
         has_folders = len(items["folders"]) > 0
+        has_exclusions = len(items["exclusions"]) > 0
 
         if not has_files and not has_folders:
             UI.info("Contexto actual: [bold green]Proyecto Completo[/] (No hay filtros específicos).")
@@ -679,18 +741,21 @@ def cmd_context(ctx: SessionContext, args: str):
 
         console.print("\n[bold cyan]Contexto Específico (Stage):[/]")
         if has_files:
-            console.print("  [bold]Archivos:[/]")
+            console.print("  [bold]Archivos enfocados:[/]")
             for f in items["files"]:
                 console.print(f"    - {f}")
         if has_folders:
-            console.print("  [bold]Carpetas:[/]")
+            console.print("  [bold]Carpetas enfocadas:[/]")
             for d in items["folders"]:
                 console.print(f"    - {d}/")
-        print("") # Salto de línea
+        if has_exclusions:
+            console.print("  [bold red]Exclusiones aplicadas (Descartes):[/]")
+            for exc in items["exclusions"]:
+                console.print(f"    - {exc}")
+        print("")  # Salto de línea
 
     elif subcmd == "reset":
-        ctx.state["context_items"] = {"files": [], "folders": []}
-        # Limpiamos el legacy config por si acaso
+        ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
         if "context_scope" in ctx.state:
             ctx.state["context_scope"] = None
 
@@ -700,7 +765,6 @@ def cmd_context(ctx: SessionContext, args: str):
 
     else:
         UI.warn("Subcomando desconocido. Usa: add, rm, ls, reset.")
-
 
 @registry.register("transfer")
 def cmd_transfer(ctx: SessionContext, args: str):
@@ -771,8 +835,8 @@ def cmd_story(ctx: SessionContext, args: str):
     if not args:
         if ctx.state.get("story_mode"):
             UI.info(f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]")
-        else:
-            UI.warn("Uso: story <archivo.md> o story exit")
+
+        UI.warn("Uso: story <archivo.md> o story exit")
         return
 
     if args.lower() in ["exit", "quit", "off"]:
