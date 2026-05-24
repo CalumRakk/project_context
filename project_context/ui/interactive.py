@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.exceptions import ProjectContextError
 from project_context.history import SnapshotManager
 from project_context.server import BrowserBridgeServer
 from project_context.ui.commands import SessionContext, registry
@@ -51,34 +52,34 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
             command_name = parts[0].lower()
             args = parts[1] if len(parts) > 1 else ""
 
-            if ctx.state.get("vanished") and command_name not in ["vanish", "exit", "quit", "help"]:
-                UI.warn("La consola está congelada en modo vanish. Usa 'vanish off' para restaurar la sesión.")
-                continue
+            # Ejecución centralizada a través del despachador
+            should_continue = registry.execute(command_name, ctx, args)
+            consecutive_errors = 0  # Se reinicia el contador si se completó la instrucción
 
-            handler = registry.commands.get(command_name)
-
-            if handler:
-                consecutive_errors = 0
-                should_continue = handler(ctx, args)
-                if should_continue is False:
-                    bridge_server.stop()
-                    break
-            else:
-                print(f"Comando desconocido: '{command_name}'")
+            if should_continue is False:
+                bridge_server.stop()
+                break
 
         except (EOFError, KeyboardInterrupt):
             UI.info("Saliendo...")
             ctx.stop_monitor()
             bridge_server.stop()
             break
-        except Exception as e:
-            UI.error(f"Error de ejecución: {e}")
-
+        except ProjectContextError as e:
+            # Captura de excepciones específicas de negocio
+            UI.error(str(e))
             consecutive_errors += 1
             if consecutive_errors > 10:
-                UI.error("Demasiados errores consecutivos. Saliendo...")
+                UI.error("Demasiados errores consecutivos. Saliendo de forma segura...")
                 ctx.stop_monitor()
                 bridge_server.stop()
                 sys.exit(1)
-
-            ctx.start_monitor()
+        except Exception as e:
+            # Fallos generales imprevistos o de comunicación profunda
+            UI.error(f"Error inesperado de ejecución: {e}")
+            consecutive_errors += 1
+            if consecutive_errors > 10:
+                UI.error("Demasiados errores inesperados consecutivos. Saliendo de forma segura...")
+                ctx.stop_monitor()
+                bridge_server.stop()
+                sys.exit(1)

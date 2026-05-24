@@ -7,6 +7,12 @@ import typer
 from rich.table import Table
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.exceptions import (
+    InvalidCommandArgumentError,
+    MissingStateError,
+    ProjectContextError,
+    VanishModeActiveError,
+)
 from project_context.history import SnapshotManager
 from project_context.ops import (
     apply_story_update,
@@ -34,7 +40,6 @@ from project_context.utils import (
     load_vanish_stash,
     save_chat_stash,
     save_project_context_state,
-    # Nuevas importaciones:
     save_vanish_stash,
     stage_all_changes,
 )
@@ -95,6 +100,7 @@ def command_help():
         "  [bold]story exit[/]        - Salir del modo co-escritura.\n"
     )
     console.print(help_text)
+
 @dataclass
 class SessionContext:
     api: AIStudioDriveManager
@@ -118,32 +124,85 @@ class SessionContext:
         save_project_context_state(self.project_path, new_state)
 
 
+class CommandMetadata:
+    """Encapsula la configuración y requerimientos de seguridad de un comando."""
+    def __init__(
+        self,
+        handler: Callable[[SessionContext, str], Optional[bool]],
+        require_chat: bool,
+        allow_in_vanish: bool,
+        manage_monitor: bool,
+    ):
+        self.handler = handler
+        self.require_chat = require_chat
+        self.allow_in_vanish = allow_in_vanish
+        self.manage_monitor = manage_monitor
+
+
 class CommandRegistry:
     def __init__(self):
-        # La función devuelve False si se debe detener el bucle principal
-        self.commands: Dict[str, Callable[[SessionContext, str], Optional[bool]]] = {}
+        self.commands: Dict[str, CommandMetadata] = {}
 
-    def register(self, *names: str):
+    def register(
+        self,
+        *names: str,
+        require_chat: bool = False,
+        allow_in_vanish: bool = False,
+        manage_monitor: bool = True,
+    ):
         def decorator(func: Callable[[SessionContext, str], Optional[bool]]):
+            meta = CommandMetadata(
+                handler=func,
+                require_chat=require_chat,
+                allow_in_vanish=allow_in_vanish,
+                manage_monitor=manage_monitor,
+            )
             for name in names:
-                self.commands[name] = func
+                self.commands[name] = meta
             return func
         return decorator
+
+    def execute(self, name: str, ctx: SessionContext, raw_args: str) -> Optional[bool]:
+        """Orquestador central de ejecución, validación y control de ciclo de vida."""
+        cmd_meta = self.commands.get(name)
+        if not cmd_meta:
+            raise InvalidCommandArgumentError(f"Comando desconocido: '{name}'")
+
+        # 1. Comprobación preventiva de Modo Vanish
+        if ctx.state.get("vanished") and not cmd_meta.allow_in_vanish:
+            raise VanishModeActiveError(
+                "La consola está congelada en modo vanish. Usa 'vanish off' para restaurar la sesión."
+            )
+
+        # 2. Comprobación de Chat ID activo en Drive
+        if cmd_meta.require_chat and not ctx.state.get("chat_id"):
+            raise MissingStateError("No se encontró una sesión de chat activa en este proyecto.")
+
+        # 3. Control atómico del monitor de guardados automáticos
+        if cmd_meta.manage_monitor:
+            ctx.stop_monitor()
+
+        try:
+            return cmd_meta.handler(ctx, raw_args)
+        finally:
+            if cmd_meta.manage_monitor:
+                ctx.start_monitor()
+
 
 registry = CommandRegistry()
 
 
-@registry.register("exit", "quit")
+@registry.register("exit", "quit", manage_monitor=False, allow_in_vanish=True)
 def cmd_exit(ctx: SessionContext, args: str):
     ctx.stop_monitor()
     UI.info("Cerrando sesión...")
     return False
 
-@registry.register("help")
+@registry.register("help", allow_in_vanish=True)
 def cmd_help(ctx: SessionContext, args: str):
     command_help()
 
-@registry.register("edit")
+@registry.register("edit", require_chat=True)
 def cmd_edit(ctx: SessionContext, args: str):
     ctx.stop_monitor()
     run_editor_mode(ctx.api, ctx.state["chat_id"])
@@ -151,14 +210,14 @@ def cmd_edit(ctx: SessionContext, args: str):
     command_help()
     ctx.start_monitor()
 
-@registry.register("save")
+@registry.register("save", require_chat=True)
 def cmd_save(ctx: SessionContext, args: str):
     if not args.strip():
         UI.warn("Debes proveer un mensaje: `save mi_cambio_importante`")
     else:
         ctx.monitor.create_named_snapshot(args.strip())
 
-@registry.register("monitor")
+@registry.register("monitor", require_chat=True)
 def cmd_monitor(ctx: SessionContext, args: str):
     if args == "on":
         ctx.monitor.start_monitoring()
@@ -173,7 +232,7 @@ def cmd_monitor(ctx: SessionContext, args: str):
     else:
         UI.warn("Uso: monitor on | off")
 
-@registry.register("history")
+@registry.register("history", require_chat=True)
 def cmd_history(ctx: SessionContext, args: str):
     page_size = 10
     current_page = 0
@@ -274,7 +333,7 @@ def cmd_history(ctx: SessionContext, args: str):
                 UI.error("ID no encontrado en el historial.")
             console.input("\nPresiona ENTER para continuar...")
 
-@registry.register("restore")
+@registry.register("restore", require_chat=True)
 def cmd_restore(ctx: SessionContext, args: str):
     if not args:
         UI.warn("Especifica el ID del snapshot.")
@@ -292,7 +351,7 @@ def cmd_restore(ctx: SessionContext, args: str):
                 UI.success("Chat restaurado de forma local y en Drive. Recarga AI Studio (F5).")
         ctx.start_monitor()
 
-@registry.register("clear")
+@registry.register("clear", require_chat=True)
 def cmd_clear(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
@@ -306,7 +365,7 @@ def cmd_clear(ctx: SessionContext, args: str):
         else:
             UI.success("Historial de mensajes limpiado en Drive.")
 
-@registry.register("update")
+@registry.register("update", require_chat=True)
 def cmd_update(ctx: SessionContext, args: str):
     ctx.stop_monitor()
 
@@ -389,8 +448,7 @@ def cmd_update(ctx: SessionContext, args: str):
 
     ctx.start_monitor()
 
-
-@registry.register("reset")
+@registry.register("reset", require_chat=True)
 def cmd_reset(ctx: SessionContext, args: str):
     confirm = console.input("[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]")
     if confirm.lower() == "s":
@@ -399,7 +457,7 @@ def cmd_reset(ctx: SessionContext, args: str):
         ctx.update_state(new_state)
         ctx.start_monitor()
 
-@registry.register("commit")
+@registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: str):
     subcommand = args.strip().lower()
     is_commit_mode = ctx.state.get("commit_mode", False)
@@ -520,7 +578,8 @@ def cmd_commit(ctx: SessionContext, args: str):
         UI.error("Error al subir el chat de commit temporal a Drive.")
 
     ctx.start_monitor()
-@registry.register("images")
+
+@registry.register("images", require_chat=True)
 def cmd_images(ctx: SessionContext, args: str):
     if not args:
         UI.warn("Uso: images <archivo.md>")
@@ -581,7 +640,7 @@ def cmd_images(ctx: SessionContext, args: str):
     except Exception as e:
         UI.error(f"Error procesando imágenes: {e}")
 
-@registry.register("fix")
+@registry.register("fix", require_chat=True)
 def cmd_fix(ctx: SessionContext, args: str):
     UI.info("Analizando chat...")
     ctx.stop_monitor()
@@ -595,7 +654,7 @@ def cmd_fix(ctx: SessionContext, args: str):
 
     ctx.start_monitor()
 
-@registry.register("context")
+@registry.register("context", require_chat=True)
 def cmd_context(ctx: SessionContext, args: str):
     if "context_items" not in ctx.state:
         ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
@@ -766,7 +825,7 @@ def cmd_context(ctx: SessionContext, args: str):
     else:
         UI.warn("Subcomando desconocido. Usa: add, rm, ls, reset.")
 
-@registry.register("transfer")
+@registry.register("transfer", require_chat=True)
 def cmd_transfer(ctx: SessionContext, args: str):
     target_profile = args.strip()
     if not target_profile:
@@ -821,14 +880,14 @@ def cmd_transfer(ctx: SessionContext, args: str):
         profile_manager.set_active_profile(current_profile)
         ctx.start_monitor()
 
-@registry.register("tree")
+@registry.register("tree", require_chat=True)
 def cmd_tree(ctx: SessionContext, args: str):
     """Muestra el árbol de directorio que la IA está viendo actualmente."""
     UI.info("Generando árbol del contexto actual...")
     tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
     console.print(f"\n[cyan]{tree_str}[/cyan]\n")
 
-@registry.register("story")
+@registry.register("story", require_chat=True)
 def cmd_story(ctx: SessionContext, args: str):
     args = args.strip()
 
@@ -895,7 +954,7 @@ def cmd_story(ctx: SessionContext, args: str):
 
     ctx.start_monitor()
 
-@registry.register("tokens")
+@registry.register("tokens", require_chat=True)
 def cmd_tokens(ctx: SessionContext, args: str):
     val = args.strip()
     if not val:
@@ -939,7 +998,7 @@ def cmd_tokens(ctx: SessionContext, args: str):
     finally:
         ctx.start_monitor()
 
-@registry.register("insert", "msg")
+@registry.register("insert", "msg", require_chat=True)
 def cmd_insert(ctx: SessionContext, args: str):
     args = args.strip()
     if not args:
@@ -1025,7 +1084,7 @@ def cmd_insert(ctx: SessionContext, args: str):
 
     ctx.start_monitor()
 
-@registry.register("run", "r")
+@registry.register("run", "r", require_chat=True)
 def cmd_run(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
@@ -1045,7 +1104,7 @@ def cmd_run(ctx: SessionContext, args: str):
         UI.error(f"No se pudo completar la ejecución: {status.get('message')}")
 
 
-@registry.register("vanish")
+@registry.register("vanish", require_chat=True, allow_in_vanish=True)
 def cmd_vanish(ctx: SessionContext, args: str):
     subcommand = args.strip().lower()
 
