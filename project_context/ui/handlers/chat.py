@@ -22,11 +22,7 @@ def cmd_clear(ctx: SessionContext, args: str):
         raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
 
     if ctx.api.clear_chat_ia_studio(chat_id):
-        if ctx.bridge_server and ctx.bridge_server.clients:
-            UI.success("Historial de mensajes limpiado en Drive. Recargando pestaña...")
-            ctx.bridge_server.broadcast_reload(chat_id)
-        else:
-            UI.success("Historial de mensajes limpiado en Drive.")
+        UI.success("Historial de mensajes limpiado en Drive.")
     else:
         raise ChatSessionError("No se pudo limpiar el historial del chat en Google Drive.")
 
@@ -45,21 +41,6 @@ def cmd_update(ctx: SessionContext, args: str):
 
     tab_is_focused = False
 
-    if ctx.bridge_server and chat_id and not force:
-        status = ctx.bridge_server.check_if_input_empty(chat_id, timeout=1.5)
-        tab_is_focused = status.get("focused", False)
-
-        if tab_is_focused:
-            if not status.get("isEmpty", True):
-                raise InvalidCommandArgumentError(
-                    "Sincronización abortada: Tienes texto escrito en el input de AI Studio.\n"
-                    "Usa 'update --force' para ignorar este aviso o limpia el input en el navegador."
-                )
-        else:
-            UI.warn("La pestaña del chat no está activa/enfocada en tu navegador.")
-            if run_after_update:
-                raise InvalidCommandArgumentError("No se puede ejecutar de forma automática si la pestaña no está enfocada.")
-            UI.info("El contexto se sincronizará en Google Drive, pero deberás recargar manualmente (F5) al regresar al navegador.")
 
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
@@ -79,20 +60,6 @@ def cmd_update(ctx: SessionContext, args: str):
             UI.info("Árbol de archivos enviado:")
             tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
-
-    if ctx.bridge_server and chat_id and tab_is_focused:
-        UI.info("Enviando señal de recarga al navegador...")
-        ctx.bridge_server.broadcast_reload(chat_id)
-
-        if run_after_update:
-            time.sleep(1.0)
-            UI.info("Esperando que la página recargue para presionar RUN automáticamente...")
-            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
-            if run_status.get("success"):
-                UI.success(run_status.get("message", ""))
-            else:
-                raise ChatSessionError(f"Fallo en la ejecución automática: {run_status.get('message')}")
-
 
 @registry.register("tokens", require_chat=True)
 def cmd_tokens(ctx: SessionContext, args: str):
@@ -186,20 +153,8 @@ def cmd_insert(ctx: SessionContext, args: str):
 
     if success:
         UI.success(f"Mensaje insertado con rol '{role}'.")
-        if ctx.bridge_server and ctx.bridge_server.clients:
-            UI.info("Puente activo detectado. Recargando pestaña...")
-            ctx.bridge_server.broadcast_reload(chat_id)
 
-            if role == "user":
-                time.sleep(1.2)
-                UI.info("Iniciando ejecución remota en Google AI Studio...")
-                run_status = ctx.bridge_server.trigger_browser_run(chat_id)
-                if run_status.get("success"):
-                    UI.success(run_status.get("message", ""))
-                else:
-                    raise ChatSessionError(f"Fallo en ejecución automática: {run_status.get('message')}")
-        else:
-            UI.info("Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios.")
+        UI.info("Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios.")
     else:
         raise ChatSessionError("Error al escribir el mensaje en Google Drive.")
 
@@ -209,17 +164,6 @@ def cmd_run(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No se encontró el chat_id en el estado actual.")
-
-    if not ctx.bridge_server:
-        raise ChatSessionError("El servidor de puente no está activo o inicializado.")
-
-    UI.info("Iniciando ejecución remota en AI Studio (esperando activación del botón)...")
-    status = ctx.bridge_server.trigger_browser_run(chat_id)
-
-    if status.get("success"):
-        UI.success(status.get("message", "Ejecución iniciada con éxito."))
-    else:
-        raise ChatSessionError(f"No se pudo completar la ejecución: {status.get('message')}")
 
 
 @registry.register("vanish", require_chat=True, allow_in_vanish=True)
@@ -261,11 +205,8 @@ def cmd_vanish(ctx: SessionContext, args: str):
             ctx.update_state(ctx.state)
             UI.success("Modo Vanish activado. La conversación se encuentra oculta en Drive.")
 
-            if ctx.bridge_server and ctx.bridge_server.clients:
-                UI.info("Enviando señal de recarga al navegador...")
-                ctx.bridge_server.broadcast_reload(chat_id)
-            else:
-                UI.info("Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia.")
+
+            UI.info("Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia.")
         else:
             clear_vanish_stash(ctx.project_path)
             raise ChatSessionError("Ocurrió un problema al actualizar el chat en Drive para activar vanish.")
@@ -297,11 +238,7 @@ def cmd_vanish(ctx: SessionContext, args: str):
             ctx.update_state(ctx.state)
             UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
 
-            if ctx.bridge_server and ctx.bridge_server.clients:
-                UI.info("Enviando señal de recarga al navegador...")
-                ctx.bridge_server.broadcast_reload(chat_id)
-            else:
-                UI.info("Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado.")
+            UI.info("Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado.")
         else:
             raise ChatSessionError("No se pudo escribir el archivo original en Drive para desactivar vanish.")
     else:

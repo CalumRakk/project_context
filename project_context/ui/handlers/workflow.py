@@ -105,11 +105,7 @@ def cmd_commit(ctx: SessionContext, args: str):
         ctx.update_state(ctx.state)
 
         UI.success("¡Chat original restaurado!")
-        if ctx.bridge_server and ctx.bridge_server.clients:
-            UI.info("Enviando señal de recarga para restaurar el chat en el navegador...")
-            ctx.bridge_server.broadcast_reload(ctx.state["chat_id"])
-        else:
-            UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+        UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
         return
 
     if is_commit_mode:
@@ -173,19 +169,7 @@ def cmd_commit(ctx: SessionContext, args: str):
         ctx.state["commit_mode"] = True
         ctx.update_state(ctx.state)
         UI.success("¡Modo commit activado!")
-
-        if ctx.bridge_server and ctx.bridge_server.clients:
-            UI.info("Enviando señal de recarga al navegador...")
-            ctx.bridge_server.broadcast_reload(chat_id)
-            time.sleep(1.2)
-            UI.info("Iniciando ejecución remota del commit...")
-            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
-            if run_status.get("success"):
-                UI.success(run_status.get("message", ""))
-            else:
-                raise ChatSessionError(f"Fallo en ejecución: {run_status.get('message')}")
-        else:
-            UI.info("Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
+        UI.info("Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
     else:
         raise ChatSessionError("Error al subir el chat de commit temporal a Drive.")
 
@@ -286,19 +270,6 @@ def cmd_story(ctx: SessionContext, args: str):
         media_root_hint=ctx.session_media_root
     )
     ctx.update_state(new_state)
-
-    chat_id = ctx.state.get("chat_id")
-    if ctx.bridge_server and ctx.bridge_server.clients and chat_id:
-        UI.info("Recargando pestaña en el navegador...")
-        ctx.bridge_server.broadcast_reload(chat_id)
-        time.sleep(1.2)
-        UI.info("Iniciando generación automática...")
-        run_status = ctx.bridge_server.trigger_browser_run(chat_id)
-
-        if run_status.get("success"):
-            UI.success(run_status.get("message", ""))
-        else:
-            raise ChatSessionError(f"No se pudo ejecutar automáticamente: {run_status.get('message')}")
 
 
 @registry.register("transfer", require_chat=True)

@@ -9,7 +9,6 @@ from project_context.exceptions import (
     VanishModeActiveError,
 )
 from project_context.history import SnapshotManager
-from project_context.server import BrowserBridgeServer
 from project_context.utils import save_project_context_state
 
 
@@ -20,7 +19,6 @@ class SessionContext:
     project_path: Path
     monitor: SnapshotManager
     session_media_root: Optional[Path] = None
-    bridge_server: Optional[BrowserBridgeServer] = None
 
     def stop_monitor(self):
         self.monitor.stop_monitoring()

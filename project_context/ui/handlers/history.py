@@ -133,10 +133,5 @@ def cmd_restore(ctx: SessionContext, args: str):
     if confirm.lower() == "s":
         ctx.stop_monitor()
         if ctx.monitor.restore_snapshot(args.strip()):
-            chat_id = ctx.state.get("chat_id")
-            if ctx.bridge_server and ctx.bridge_server.clients and chat_id:
-                UI.success("Chat restaurado en Drive. Recargando pestaña en navegador...")
-                ctx.bridge_server.broadcast_reload(chat_id)
-            else:
-                UI.success("Chat restaurado de forma local y en Drive. Recarga AI Studio (F5).")
+            UI.success("Chat restaurado de forma local y en Drive. Recarga AI Studio (F5).")
         ctx.start_monitor()
