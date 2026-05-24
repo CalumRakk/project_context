@@ -14,7 +14,7 @@ def format_chunk_row(index: int, chunk) -> str:
     if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
         ctype = "FILE"
         tokens = f"{getattr(chunk, 'tokenCount', 0)}t"
-        snippet = f"[ID: {chunk.driveDocument.id}] (Contexto/Archivo)"
+        snippet = f"[ID: {chunk.file_id}] (Contexto/Archivo)"
     elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
         ctype = "IMG "
         tokens = f"{getattr(chunk, 'tokenCount', 0)}t"
@@ -42,7 +42,7 @@ def get_full_content_for_pager(chunk) -> str:
 
     if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
         output.append("TIPO: DOCUMENTO DRIVE")
-        output.append(f"ID: {chunk.driveDocument.id}")
+        output.append(f"ID: {chunk.file_id}")
         output.append(f"TOKENS: {getattr(chunk, 'tokenCount', 'N/A')}")
         output.append(
             "\n(El contenido es un archivo vinculado en Drive, no texto plano editable aquí)"

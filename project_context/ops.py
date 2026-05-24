@@ -7,7 +7,6 @@ from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
-    ChunksImage,
     ChunksText,
     RunSettings,
     SystemInstruction,
@@ -86,7 +85,7 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
         "last_modified": project_path.stat().st_mtime,
         "md5": content_md5,
         "chat_id": chat_id,
-        "file_id": context_chunk.driveDocument.id,
+        "file_id": context_chunk.file_id,
     }
     UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
     return initial_state
@@ -129,7 +128,7 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
             for chunk in chat_data.chunkedPrompt.chunks:
                 if (
                     isinstance(chunk, ChunksDocument)
-                    and chunk.driveDocument.id == file_id
+                    and chunk.file_id == file_id
                 ):
                     chunk.tokenCount = new_tokens
                     updated_metadata = True

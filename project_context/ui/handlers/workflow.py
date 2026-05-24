@@ -1,0 +1,367 @@
+import time
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+from project_context.ops import (
+    apply_story_update,
+    generate_commit_prompt_text,
+    rebuild_project_context,
+    resolve_image_paths,
+    sync_images,
+)
+from project_context.schema import ChunksText
+from project_context.ui.editor import run_editor_mode
+from project_context.ui.registry import SessionContext, registry
+from project_context.utils import (
+    IMAGE_INSERTION_PROMPT,
+    IMAGE_INSERTION_RESPONSE,
+    UI,
+    clear_chat_stash,
+    console,
+    get_potential_media_folders,
+    has_unstaged_changes,
+    load_chat_stash,
+    save_chat_stash,
+    stage_all_changes,
+)
+
+
+def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
+    """Interfaz de usuario para resolver el vacío de la carpeta de imágenes."""
+    typer.secho(
+        "\n[?] Se detectaron referencias tipo WikiLink (Obsidian).",
+        fg=typer.colors.CYAN,
+    )
+    candidates = get_potential_media_folders(project_path)
+
+    typer.echo("¿En qué carpeta debería buscar los archivos adjuntos?")
+    for i, folder in enumerate(candidates, 1):
+        typer.echo(f" {i}) {folder.relative_to(project_path)}")
+    typer.echo(" n) Escribir ruta manualmente")
+    typer.echo(" s) Saltar estas imágenes")
+
+    choice = input("Selección: ").strip().lower()
+
+    if choice == "s":
+        return None
+    if choice == "n":
+        manual = input("Ruta desde la raíz del proyecto: ").strip()
+        return project_path / manual
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(candidates):
+            return candidates[idx]
+    except ValueError:
+        pass
+    return None
+
+
+@registry.register("edit", require_chat=True)
+def cmd_edit(ctx: SessionContext, args: str):
+    from project_context.ui.handlers.base import command_help
+    run_editor_mode(ctx.api, ctx.state["chat_id"])
+    UI.info("Reactivando monitor de historial automático...")
+    command_help()
+
+
+@registry.register("reset", require_chat=True)
+def cmd_reset(ctx: SessionContext, args: str):
+    confirm = console.input("[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]")
+    if confirm.lower() == "s":
+        new_state = rebuild_project_context(ctx.api, ctx.project_path, ctx.state)
+        ctx.update_state(new_state)
+
+
+@registry.register("commit", require_chat=True)
+def cmd_commit(ctx: SessionContext, args: str):
+    subcommand = args.strip().lower()
+    is_commit_mode = ctx.state.get("commit_mode", False)
+
+    if subcommand in ["clear", "done", "restore", "rm"]:
+        if not is_commit_mode:
+            UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
+            return
+
+        UI.info("Restaurando chat original desde copia de seguridad...")
+        stashed_json = load_chat_stash(ctx.project_path)
+
+        if not stashed_json:
+            UI.error("No se encontró el respaldo del chat.")
+            ctx.state["commit_mode"] = False
+            ctx.update_state(ctx.state)
+            return
+
+        ctx.api.gdm.update_file_from_memory(
+            file_id=ctx.state["chat_id"],
+            content=stashed_json,
+            mime_type=ctx.api.MIME_PROMPT
+        )
+
+        clear_chat_stash(ctx.project_path)
+        ctx.state["commit_mode"] = False
+        ctx.update_state(ctx.state)
+
+        UI.success("¡Chat original restaurado!")
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.info("Enviando señal de recarga para restaurar el chat en el navegador...")
+            ctx.bridge_server.broadcast_reload(ctx.state["chat_id"])
+        else:
+            UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+        return
+
+    if is_commit_mode:
+        UI.warn("Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar.")
+        return
+
+    if subcommand in ["-a", "--all", "all"]:
+        UI.info("Añadiendo todos los cambios al stage (git add -A)...")
+        stage_all_changes(ctx.project_path)
+        subcommand = ""
+
+    UI.info("Obteniendo cambios de Git...")
+    prompt_text = generate_commit_prompt_text(ctx.project_path)
+
+    if not prompt_text:
+        if has_unstaged_changes(ctx.project_path):
+            UI.warn("No hay archivos en stage (git add), pero hay modificaciones locales.")
+            confirm = console.input("[bold yellow]¿Quieres añadirlos todos al stage ahora? (s/n): [/]")
+            if confirm.lower() == "s":
+                stage_all_changes(ctx.project_path)
+                prompt_text = generate_commit_prompt_text(ctx.project_path)
+                if not prompt_text:
+                    UI.error("No se pudo generar el diff.")
+                    return
+            else:
+                UI.info("Operación cancelada.")
+                return
+        else:
+            UI.warn("El repositorio está limpio. No hay cambios pendientes.")
+            return
+
+    UI.info("Guardando copia de seguridad del chat actual (Stash)...")
+    chat_id = ctx.state["chat_id"]
+    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    if not chat_data:
+        UI.error("No se pudo descargar el chat para respaldo.")
+        return
+
+    save_chat_stash(ctx.project_path, chat_data.model_dump_json())
+
+    context_chunk = None
+    for chunk in chat_data.chunkedPrompt.chunks:
+        if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
+            if chunk.file_id == ctx.state.get("file_id"):
+                context_chunk = chunk
+                break
+
+    UI.info("Configurando chat minimalista con modelo rápido...")
+    fast_chunks = []
+    if context_chunk:
+        fast_chunks.append(context_chunk)
+
+    fast_chunks.append(ChunksText(text=prompt_text, role="user"))
+    chat_data.runSettings.model = "models/gemini-2.5-flash"
+    chat_data.chunkedPrompt.chunks = fast_chunks
+    chat_data.chunkedPrompt.pendingInputs = []
+
+    if ctx.api.update_chat_file(chat_id, chat_data):
+        ctx.state["commit_mode"] = True
+        ctx.update_state(ctx.state)
+        UI.success("¡Modo commit activado!")
+
+        if ctx.bridge_server and ctx.bridge_server.clients:
+            UI.info("Enviando señal de recarga al navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+            time.sleep(1.2)
+            UI.info("Iniciando ejecución remota del commit...")
+            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+            if run_status.get("success"):
+                UI.success(run_status.get("message",""))
+            else:
+                UI.error(f"Fallo en ejecución: {run_status.get('message')}")
+        else:
+            UI.info("Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
+    else:
+        UI.error("Error al subir el chat de commit temporal a Drive.")
+
+
+@registry.register("images", require_chat=True)
+def cmd_images(ctx: SessionContext, args: str):
+    if not args:
+        UI.warn("Uso: images <archivo.md>")
+        return
+
+    try:
+        found_paths, missing = resolve_image_paths(
+            ctx.project_path, args, ctx.session_media_root
+        )
+        if missing and not ctx.session_media_root:
+            UI.warn(f"No se encontraron: {', '.join(missing[:3])}...")
+            ctx.session_media_root = prompt_for_media_folder(ctx.project_path)
+
+            if ctx.session_media_root:
+                found_paths_2, missing_2 = resolve_image_paths(
+                    ctx.project_path, args, ctx.session_media_root
+                )
+                found_paths = list(set(found_paths + found_paths_2))
+                missing = missing_2
+
+        if not found_paths:
+            UI.warn("No se pudo resolver ninguna ruta de imagen válida.")
+            if missing:
+                UI.info(f"Faltantes: {missing}")
+            return
+
+        chunks_to_add = []
+        chunks_to_add.append(
+            ChunksText(
+                text=IMAGE_INSERTION_PROMPT.format(filename=args),
+                role="user",
+            )
+        )
+
+        image_chunks = sync_images(
+            ctx.api, ctx.project_path, specific_files=found_paths
+        )
+        chunks_to_add.extend(image_chunks)
+
+        chunks_to_add.append(
+            ChunksText(
+                text=IMAGE_INSERTION_RESPONSE.format(filename=args),
+                role="model",
+            )
+        )
+
+        if ctx.api.append_chunks(ctx.state["chat_id"], chunks_to_add):
+            typer.secho(f"¡{len(found_paths)} imágenes inyectadas!", fg=typer.colors.GREEN)
+        else:
+            UI.error("Error al subir imágenes al chat.")
+
+    except FileNotFoundError:
+        UI.error(f"El archivo '{args}' no existe en el proyecto.")
+    except Exception as e:
+        UI.error(f"Error procesando imágenes: {e}")
+
+
+@registry.register("story", require_chat=True)
+def cmd_story(ctx: SessionContext, args: str):
+    args = args.strip()
+
+    if not args:
+        if ctx.state.get("story_mode"):
+            UI.info(f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]")
+        UI.warn("Uso: story <archivo.md> o story exit")
+        return
+
+    if args.lower() in ["exit", "quit", "off"]:
+        ctx.state["story_mode"] = False
+        ctx.state["story_anchor"] = None
+        ctx.update_state(ctx.state)
+        UI.success("Has salido del modo historia.")
+        return
+
+    target_file = ctx.project_path / args
+    if not target_file.exists():
+        UI.error(f"El archivo '{args}' no existe en el proyecto.")
+        return
+
+    rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
+    context_items = ctx.state.get("context_items", {"files": [], "folders": []})
+    has_specific_focus = bool(context_items.get("files") or context_items.get("folders"))
+
+    if has_specific_focus:
+        if rel_path not in context_items["files"]:
+            context_items["files"].append(rel_path)
+            ctx.state["context_items"] = context_items
+            ctx.update_state(ctx.state)
+            UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico.")
+
+    UI.info("Iniciando Modo Historia...")
+    ctx.state["story_mode"] = True
+    ctx.state["story_anchor"] = rel_path
+    ctx.update_state(ctx.state)
+
+    try:
+        new_state = apply_story_update(
+            ctx.api,
+            ctx.project_path,
+            ctx.state,
+            media_root_hint=ctx.session_media_root
+        )
+        ctx.update_state(new_state)
+
+        chat_id = ctx.state.get("chat_id")
+        if ctx.bridge_server and ctx.bridge_server.clients and chat_id:
+            UI.info("Recargando pestaña en el navegador...")
+            ctx.bridge_server.broadcast_reload(chat_id)
+            time.sleep(1.2)
+            UI.info("Iniciando generación automática...")
+            run_status = ctx.bridge_server.trigger_browser_run(chat_id)
+
+            if run_status.get("success"):
+                UI.success(run_status.get("message",""))
+            else:
+                UI.error(f"No se pudo ejecutar automáticamente: {run_status.get('message')}")
+    except Exception as e:
+        UI.error(f"Error inicializando modo historia: {e}")
+
+
+@registry.register("transfer", require_chat=True)
+def cmd_transfer(ctx: SessionContext, args: str):
+    target_profile = args.strip()
+    if not target_profile:
+        UI.warn("Uso: transfer <perfil_destino>")
+        return
+
+    from project_context.utils import profile_manager
+    current_profile = profile_manager.get_active_profile_name()
+
+    if target_profile == current_profile:
+        UI.warn("El perfil destino no puede ser el mismo que el actual.")
+        return
+
+    if target_profile not in profile_manager.list_profiles():
+        UI.error(f"El perfil '{target_profile}' no existe.")
+        UI.info(f"Perfiles disponibles: {', '.join(profile_manager.list_profiles())}")
+        return
+
+    confirm = console.input(f"[bold red]¿Migrar sesión de '{current_profile}' hacia '{target_profile}'? (s/n): [/]")
+    if confirm.lower() != "s":
+        UI.info("Transferencia cancelada.")
+        return
+
+    try:
+        from project_context.ops import transfer_chat_to_profile
+
+        new_api, new_state = transfer_chat_to_profile(
+            ctx.api, ctx.state, ctx.project_path, target_profile
+        )
+
+        ctx.api = new_api
+        ctx.state = new_state
+
+        from project_context.history import SnapshotManager
+        ctx.monitor = SnapshotManager(new_api, ctx.project_path, new_state)
+
+        ctx.update_state(new_state)
+
+        UI.success(f"¡Migración completada! Ahora estás operando nativamente como [bold]{target_profile}[].")
+        UI.warn("RECUERDA: Ve a Google AI Studio, asegúrate de haber cambiado de cuenta de Google y abre el nuevo chat.")
+
+    except Exception as e:
+        UI.error(f"Error crítico durante la transferencia: {e}")
+        profile_manager.set_active_profile(current_profile)
+
+
+@registry.register("fix", require_chat=True)
+def cmd_fix(ctx: SessionContext, args: str):
+    UI.info("Analizando chat...")
+    fixed_count = ctx.api.repair_chat_structure(ctx.state["chat_id"])
+
+    if fixed_count > 0:
+        UI.success(f"¡Sanación completada! {fixed_count} bloques corregidos.")
+    else:
+        UI.success("El chat está sano o no se pudo acceder.")

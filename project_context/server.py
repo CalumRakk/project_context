@@ -1,17 +1,20 @@
 import asyncio
 import json
 import threading
-from typing import Dict, Set
+from typing import Dict, Optional, Set
+
 import websockets
+
 from project_context.utils import UI
+
 
 class BrowserBridgeServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         self.host = host
         self.port = port
-        self.clients: Set[websockets.WebSocketServerProtocol] = set()
-        self._loop: asyncio.AbstractEventLoop = None
-        self._thread: threading.Thread = None
+        self.clients: Set[websockets.WebSocketServerProtocol] = set() # type: ignore
+        self._loop: Optional[asyncio.AbstractEventLoop ] = None
+        self._thread: Optional[threading.Thread ]= None
         self._server = None
 
         self._response_events: Dict[str, threading.Event] = {}
@@ -72,7 +75,7 @@ class BrowserBridgeServer:
         asyncio.run_coroutine_threadsafe(send_query(), self._loop)
 
         # Esperamos a que la extensión haga el polling e intente dar clic
-        completed = event.wait(timeout=timeout)
+        event.wait(timeout=timeout)
 
         status = self._responses.pop(chat_id, default_status)
         self._response_events.pop(chat_id, None)
@@ -161,7 +164,7 @@ class BrowserBridgeServer:
         asyncio.run_coroutine_threadsafe(send_query(), self._loop)
 
         # Esperar respuesta de la extensión
-        completed = event.wait(timeout=timeout)
+        event.wait(timeout=timeout)
 
         status = self._responses.pop(chat_id, default_status)
         self._response_events.pop(chat_id, None)
