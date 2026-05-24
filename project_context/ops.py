@@ -28,6 +28,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 def create_default_run_settings() -> RunSettings:
     """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
+    thinkingLevel="THINKING_MEDIUM"
     return RunSettings(
         model="models/gemini-3.5-flash",
         temperature=1.0,
@@ -35,7 +36,7 @@ def create_default_run_settings() -> RunSettings:
         topK=64,
         maxOutputTokens=65536,
         thinkingBudget=None,
-        thinkingLevel=None
+        thinkingLevel=thinkingLevel
     )
 
 def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
