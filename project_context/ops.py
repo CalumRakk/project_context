@@ -26,6 +26,17 @@ from project_context.utils import (
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
+def create_default_run_settings() -> RunSettings:
+    """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
+    return RunSettings(
+        model="models/gemini-3.5-flash",
+        temperature=1.0,
+        topP=0.95,
+        topK=64,
+        maxOutputTokens=65536,
+        thinkingBudget=None,
+        thinkingLevel=None
+    )
 
 def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
     """
@@ -53,7 +64,7 @@ def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
 
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
     UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
-    # Genera el contexto y las imágenes asociadas
+
     chunks = []
     context_chunk, content_md5 = sync_context(api, project_path)
 
@@ -64,9 +75,8 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     chunks.append(prompt_chunk)
     chunks.append(model_chunk)
 
-    # Crea el chat en AI Studio
     chat_data = ChatIAStudio(
-        runSettings=RunSettings(),
+        runSettings=create_default_run_settings(),
         systemInstruction=SystemInstruction(),
         chunkedPrompt=ChunkedPrompt(
             chunks=chunks,
@@ -79,7 +89,6 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
     if not chat_id:
         raise ValueError("No se pudo crear el chat en Google Drive.")
 
-    # Define el estado inicial del proyecto
     initial_state = {
         "path": str(project_path),
         "last_modified": project_path.stat().st_mtime,

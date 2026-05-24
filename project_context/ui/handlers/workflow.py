@@ -161,7 +161,11 @@ def cmd_commit(ctx: SessionContext, args: str):
         fast_chunks.append(context_chunk)
 
     fast_chunks.append(ChunksText(text=prompt_text, role="user"))
-    chat_data.runSettings.model = "models/gemini-2.5-flash"
+
+    # Se actualiza el modelo y se ejecuta el saneamiento de campos para el modo rápido
+    chat_data.runSettings.model = "models/gemini-flash-lite-latest"
+    chat_data.runSettings.sanitize()
+
     chat_data.chunkedPrompt.chunks = fast_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 

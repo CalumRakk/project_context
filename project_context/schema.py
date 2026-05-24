@@ -154,8 +154,9 @@ class RunSettings(BaseModel):
     model: str = Field(
         default="models/gemini-3.5-flash",
         description="Model name used in the chat.",
-        examples=["models/gemini-3.1-flash-lite", "gemini-3.1-pro-preview","gemini-flash-latest","models/gemini-2.5-flash"],
+        examples=["models/gemini-3.1-flash-lite", "gemini-3.1-pro-preview","gemini-flash-latest","models/gemini-2.5-flash","models/gemini-flash-lite-latest"],
     )
+    # TODO: los modelos "pequeños" de gemini-2* ahora son de pago.
     temperature: float = 1.0
     topP: float = 0.95
     topK: int = 64
@@ -180,6 +181,29 @@ class RunSettings(BaseModel):
 
     environmentMode: Optional[str] = None
     googleSearch: Optional[dict] = None
+
+    def sanitize(self):
+        """
+        Sanea la configuración actual basándose en el modelo seleccionado.
+        Evita que parámetros avanzados queden como 'ruido' al cambiar a modelos más simples.
+        """
+        model_lower = self.model.lower()
+
+        # Determinamos de manera general si el modelo soporta razonamiento avanzado (Thinking)
+        # por lo común, las variantes 'pro' de las series 2.5 y modelos específicos de razonamiento
+        supports_thinking = "pro" in model_lower or "thinking" in model_lower
+
+        if not supports_thinking:
+            # Al cambiar a un modelo estándar (como gemini-2.5-flash o gemini-3.5-flash),
+            # limpiamos los campos de control de pensamiento para no generar un esquema corrupto.
+            self.thinkingBudget = None
+            self.thinkingLevel = None
+            self.enableAgentThinkingSummariesControl = None
+            self.enableAgentCollaborativePlanningControl = None
+
+            # Ajuste de temperatura sugerida para modelos estándar rápidos
+            if "flash" in model_lower:
+                self.temperature = 1.0
 
 class SystemInstruction(BaseModel):
     model_config = ConfigDict(extra="allow")
