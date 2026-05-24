@@ -1,5 +1,6 @@
 import time
 
+from project_context.exceptions import ChatSessionError, InvalidCommandArgumentError
 from project_context.ops import apply_story_update, update_context
 from project_context.schema import ChunksDocument, ChunksText
 from project_context.ui.registry import SessionContext, registry
@@ -18,8 +19,7 @@ from project_context.utils import (
 def cmd_clear(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
-        UI.error("No hay un chat activo.")
-        return
+        raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
 
     if ctx.api.clear_chat_ia_studio(chat_id):
         if ctx.bridge_server and ctx.bridge_server.clients:
@@ -27,6 +27,8 @@ def cmd_clear(ctx: SessionContext, args: str):
             ctx.bridge_server.broadcast_reload(chat_id)
         else:
             UI.success("Historial de mensajes limpiado en Drive.")
+    else:
+        raise ChatSessionError("No se pudo limpiar el historial del chat en Google Drive.")
 
 
 @registry.register("update", require_chat=True)
@@ -34,17 +36,13 @@ def cmd_update(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     args_list = args.strip().split()
 
-    force = False
-    if any(f in args_list for f in ["--force", "-f", "force"]):
-        force = True
-        args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force"]]
+    force = "--force" in args_list or "-f" in args_list or "force" in args_list
+    run_after_update = "--run" in args_list or "-r" in args_list
 
-    run_after_update = False
-    if any(r in args_list for r in ["--run", "-r"]):
-        run_after_update = True
-        args_list = [arg for arg in args_list if arg not in ["--run", "-r"]]
+    # Filtrar argumentos para limpiar la presentación
+    clean_args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force", "--run", "-r"]]
+    clean_args = " ".join(clean_args_list)
 
-    clean_args = " ".join(args_list)
     tab_is_focused = False
 
     if ctx.bridge_server and chat_id and not force:
@@ -53,28 +51,25 @@ def cmd_update(ctx: SessionContext, args: str):
 
         if tab_is_focused:
             if not status.get("isEmpty", True):
-                UI.error("Sincronización abortada: Tienes texto escrito en el input de AI Studio.")
-                UI.info("Usa 'update --force' para ignorar este aviso o limpia el input en el navegador.")
-                return
+                raise InvalidCommandArgumentError(
+                    "Sincronización abortada: Tienes texto escrito en el input de AI Studio.\n"
+                    "Usa 'update --force' para ignorar este aviso o limpia el input en el navegador."
+                )
         else:
             UI.warn("La pestaña del chat no está activa/enfocada en tu navegador.")
             if run_after_update:
-                UI.error("No se puede ejecutar de forma automática si la pestaña no está enfocada.")
-                return
+                raise InvalidCommandArgumentError("No se puede ejecutar de forma automática si la pestaña no está enfocada.")
             UI.info("El contexto se sincronizará en Google Drive, pero deberás recargar manualmente (F5) al regresar al navegador.")
 
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
-        try:
-            new_state = apply_story_update(
-                ctx.api,
-                ctx.project_path,
-                ctx.state,
-                media_root_hint=ctx.session_media_root
-            )
-            ctx.update_state(new_state)
-        except Exception as e:
-            UI.error(f"Fallo en la actualización de historia: {e}")
+        new_state = apply_story_update(
+            ctx.api,
+            ctx.project_path,
+            ctx.state,
+            media_root_hint=ctx.session_media_root
+        )
+        ctx.update_state(new_state)
     else:
         new_state = update_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
@@ -94,9 +89,9 @@ def cmd_update(ctx: SessionContext, args: str):
             UI.info("Esperando que la página recargue para presionar RUN automáticamente...")
             run_status = ctx.bridge_server.trigger_browser_run(chat_id)
             if run_status.get("success"):
-                UI.success(run_status.get("message",""))
+                UI.success(run_status.get("message", ""))
             else:
-                UI.error(f"Fallo en la ejecución: {run_status.get('message')}")
+                raise ChatSessionError(f"Fallo en la ejecución automática: {run_status.get('message')}")
 
 
 @registry.register("tokens", require_chat=True)
@@ -109,25 +104,20 @@ def cmd_tokens(ctx: SessionContext, args: str):
     try:
         tokens = human_to_int(val)
     except Exception:
-        UI.error("Formato de tokens no válido. Usa números enteros o notaciones como '150k'.")
-        return
+        raise InvalidCommandArgumentError("Formato de tokens no válido. Usa números enteros o notaciones como '150k'.")
 
     chat_id = ctx.state.get("chat_id")
     file_id = ctx.state.get("file_id")
 
     if not chat_id or not file_id:
-        UI.error("Falta información del chat o del archivo de contexto en el estado actual.")
-        return
+        raise ChatSessionError("Falta información del chat o del archivo de contexto en el estado actual.")
 
     UI.info(f"Actualizando contador de tokens a [bold]{tokens}[/] en Google Drive...")
     try:
         with ctx.api.modify_chat(chat_id) as chat_data:
             updated_metadata = False
             for chunk in chat_data.chunkedPrompt.chunks:
-                if (
-                    isinstance(chunk, ChunksDocument)
-                    and chunk.file_id == file_id
-                ):
+                if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
                     chunk.tokenCount = tokens
                     updated_metadata = True
                     break
@@ -137,7 +127,7 @@ def cmd_tokens(ctx: SessionContext, args: str):
             else:
                 UI.warn("No se encontró el bloque de contexto del archivo en el chat actual.")
     except Exception as e:
-        UI.error(f"Error al intentar modificar los tokens en el chat: {e}")
+        raise ChatSessionError(f"Error al intentar modificar los tokens en el chat: {e}")
 
 
 @registry.register("insert", "msg", require_chat=True)
@@ -164,19 +154,16 @@ def cmd_insert(ctx: SessionContext, args: str):
         message = args
 
     if not message:
-        UI.warn("El cuerpo del mensaje no puede estar vacío.")
-        return
+        raise InvalidCommandArgumentError("El cuerpo del mensaje no puede estar vacío.")
 
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
-        UI.error("No se encontró un chat_id válido en el estado actual.")
-        return
+        raise ChatSessionError("No se encontró un chat_id válido en el estado actual.")
 
     UI.info("Verificando la estructura del chat en Google Drive...")
     chat_data = ctx.api.get_chat_ia_studio(chat_id)
     if not chat_data:
-        UI.error("No se pudo obtener el historial del chat desde Drive.")
-        return
+        raise ChatSessionError("No se pudo obtener el historial del chat desde Drive.")
 
     chunks = chat_data.chunkedPrompt.chunks
     if chunks:
@@ -184,13 +171,15 @@ def cmd_insert(ctx: SessionContext, args: str):
         last_role = getattr(last_chunk, "role", None)
 
         if role == "user" and last_role == "user":
-            UI.error("Validación fallida: El último bloque del chat ya es de tipo [bold]Usuario[/].")
-            UI.info("Ejecuta 'RUN' en AI Studio para obtener la respuesta o inserta un mensaje de tipo 'ia' primero.")
-            return
+            raise InvalidCommandArgumentError(
+                "El último bloque del chat ya es de tipo Usuario.\n"
+                "Ejecuta 'RUN' en AI Studio para obtener la respuesta o inserta un mensaje de tipo 'ia' primero."
+            )
         elif role == "model" and last_role == "model":
-            UI.error("Validación fallida: El último bloque del chat ya es de tipo [bold]IA (Model)[/].")
-            UI.info("Inserta un mensaje de tipo 'user' primero para mantener la alternancia.")
-            return
+            raise InvalidCommandArgumentError(
+                "El último bloque del chat ya es de tipo IA (Model).\n"
+                "Inserta un mensaje de tipo 'user' primero para mantener la alternancia."
+            )
 
     UI.info(f"Insertando bloque con rol '{role}'...")
     success = ctx.api.append_message(chat_id, message, role=role)
@@ -206,25 +195,23 @@ def cmd_insert(ctx: SessionContext, args: str):
                 UI.info("Iniciando ejecución remota en Google AI Studio...")
                 run_status = ctx.bridge_server.trigger_browser_run(chat_id)
                 if run_status.get("success"):
-                    UI.success(run_status.get("message",""))
+                    UI.success(run_status.get("message", ""))
                 else:
-                    UI.error(f"Fallo en ejecución automática: {run_status.get('message')}")
+                    raise ChatSessionError(f"Fallo en ejecución automática: {run_status.get('message')}")
         else:
             UI.info("Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios.")
     else:
-        UI.error("Error al escribir el mensaje en Google Drive.")
+        raise ChatSessionError("Error al escribir el mensaje en Google Drive.")
 
 
 @registry.register("run", "r", require_chat=True)
 def cmd_run(ctx: SessionContext, args: str):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
-        UI.error("No se encontró el chat_id en el estado actual.")
-        return
+        raise ChatSessionError("No se encontró el chat_id en el estado actual.")
 
     if not ctx.bridge_server:
-        UI.error("El servidor de puente no está activo o inicializado.")
-        return
+        raise ChatSessionError("El servidor de puente no está activo o inicializado.")
 
     UI.info("Iniciando ejecución remota en AI Studio (esperando activación del botón)...")
     status = ctx.bridge_server.trigger_browser_run(chat_id)
@@ -232,7 +219,7 @@ def cmd_run(ctx: SessionContext, args: str):
     if status.get("success"):
         UI.success(status.get("message", "Ejecución iniciada con éxito."))
     else:
-        UI.error(f"No se pudo completar la ejecución: {status.get('message')}")
+        raise ChatSessionError(f"No se pudo completar la ejecución: {status.get('message')}")
 
 
 @registry.register("vanish", require_chat=True, allow_in_vanish=True)
@@ -250,14 +237,12 @@ def cmd_vanish(ctx: SessionContext, args: str):
 
         chat_id = ctx.state.get("chat_id")
         if not chat_id:
-            UI.error("No se detectó un chat activo en el estado del proyecto.")
-            return
+            raise ChatSessionError("No se detectó un chat activo en el estado del proyecto.")
 
         UI.info("Guardando copia de seguridad del chat (Vanish Stash)...")
         chat_data = ctx.api.get_chat_ia_studio(chat_id)
         if not chat_data:
-            UI.error("No se pudo descargar el chat desde Drive para realizar el respaldo.")
-            return
+            raise ChatSessionError("No se pudo descargar el chat desde Drive para realizar el respaldo.")
 
         save_vanish_stash(ctx.project_path, chat_data.model_dump_json())
 
@@ -268,7 +253,7 @@ def cmd_vanish(ctx: SessionContext, args: str):
                 role="user"
             )
         ]
-        chat_data.chunkedPrompt.chunks = vanish_chunks # type:ignore
+        chat_data.chunkedPrompt.chunks = vanish_chunks  # type:ignore
         chat_data.chunkedPrompt.pendingInputs = []
 
         if ctx.api.update_chat_file(chat_id, chat_data):
@@ -282,8 +267,8 @@ def cmd_vanish(ctx: SessionContext, args: str):
             else:
                 UI.info("Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia.")
         else:
-            UI.error("Ocurrió un problema al actualizar el chat en Drive.")
             clear_vanish_stash(ctx.project_path)
+            raise ChatSessionError("Ocurrió un problema al actualizar el chat en Drive para activar vanish.")
 
     elif subcommand == "off":
         if not ctx.state.get("vanished", False):
@@ -294,10 +279,9 @@ def cmd_vanish(ctx: SessionContext, args: str):
         stashed_json = load_vanish_stash(ctx.project_path)
 
         if not stashed_json:
-            UI.error("No se encontró el archivo de respaldo de Vanish para restaurar.")
             ctx.state["vanished"] = False
             ctx.update_state(ctx.state)
-            return
+            raise ChatSessionError("No se encontró el archivo de respaldo de Vanish para restaurar.")
 
         UI.info("Restaurando conversación y contexto original...")
         assert chat_id is not None
@@ -319,6 +303,6 @@ def cmd_vanish(ctx: SessionContext, args: str):
             else:
                 UI.info("Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado.")
         else:
-            UI.error("No se pudo escribir el archivo original en Drive.")
+            raise ChatSessionError("No se pudo escribir el archivo original en Drive para desactivar vanish.")
     else:
-        UI.warn("Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'")
+        raise InvalidCommandArgumentError("Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'")
