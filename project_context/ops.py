@@ -334,11 +334,7 @@ def extract_chat_assets(api: AIStudioDriveManager, chat_id: str) -> Tuple[ChatIA
 
     assets = {}
     for chunk in chat_data.chunkedPrompt.chunks:
-        file_id = None
-        if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
-            file_id = chunk.driveDocument.id # type: ignore
-        elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
-            file_id = chunk.driveImage.id # type: ignore
+        file_id =  chunk.file_id if chunk.is_file_reference else None
 
         if file_id and file_id not in assets:
             try:
@@ -412,12 +408,8 @@ def transfer_chat_to_profile(
 
     UI.info("Parcheando JSON del chat con los nuevos IDs de Drive...")
     for chunk in chat_data.chunkedPrompt.chunks:
-        if isinstance(chunk, ChunksDocument) or hasattr(chunk, "driveDocument"):
-            if chunk.driveDocument.id in id_map: # type: ignore
-                chunk.driveDocument.id = id_map[chunk.driveDocument.id] # type: ignore
-        elif isinstance(chunk, ChunksImage) or hasattr(chunk, "driveImage"):
-            if chunk.driveImage.id in id_map: # type: ignore
-                chunk.driveImage.id = id_map[chunk.driveImage.id] # type: ignore
+        if chunk.is_file_reference and chunk.file_id in id_map:
+            chunk.file_id = id_map[chunk.file_id]
 
     UI.info("Generando nuevo entorno de chat en Google AI Studio...")
     chat_filename = project_path.name + "_chat.prompt"

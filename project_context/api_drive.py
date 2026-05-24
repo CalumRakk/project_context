@@ -328,9 +328,7 @@ class AIStudioDriveManager:
                 if cut_idx == -1:
                     doc_idx = -1
                     for i, chunk in enumerate(chunks):
-                        if isinstance(chunk, (ChunksDocument, ChunksImage)) or hasattr(
-                            chunk, "driveDocument"
-                        ):
+                        if chunk.is_file_reference:
                             doc_idx = i
 
                     if doc_idx != -1:

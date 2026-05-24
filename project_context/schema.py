@@ -38,36 +38,73 @@ class Parts(BaseModel):
 
 Role = Literal["user", "model"]
 
-
-class ChunksText(BaseModel):
-    text: str
+class BaseChunk(BaseModel):
     role: Role
-    tokenCount: Optional[int] = None
-    finishReason: Optional[str] = None  # STOP, PROHIBITED_CONTENT,
-    isThought: Optional[bool] = None
-    thinkingBudget: Optional[int] = -1
-    parts: Optional[list[Parts]] = None
+
+    @property
+    def file_id(self) -> Optional[str]:
+        """Retorna el ID del archivo de Google Drive asociado si aplica."""
+        return None
+
+    @file_id.setter
+    def file_id(self, val: str):
+        """Permite modificar el ID de Drive de forma transparente."""
+        pass
+
+    @property
+    def is_file_reference(self) -> bool:
+        """Determina si este bloque representa un recurso binario en Drive."""
+        return False
 
 
 class DriveDocument(BaseModel):
     id: str
 
-
-class ChunksDocument(BaseModel):
-    driveDocument: DriveDocument
-    role: Role
-    tokenCount: int
-
-
-class ChunksImage(BaseModel):
-    driveImage: DriveDocument
-    role: Role
-    tokenCount: Optional[int] = None
-
-
 class PendingInputs(BaseModel):
     text: str
     role: Role = "user"
+
+class ChunksText(BaseChunk):
+    text: str
+    tokenCount: Optional[int] = None
+    finishReason: Optional[str] = None
+    isThought: Optional[bool] = None
+    thinkingBudget: Optional[int] = -1
+    parts: Optional[list[Parts]] = None
+
+
+class ChunksDocument(BaseChunk):
+    driveDocument: DriveDocument
+    tokenCount: int
+
+    @property
+    def file_id(self) -> Optional[str]:
+        return self.driveDocument.id
+
+    @file_id.setter
+    def file_id(self, val: str):
+        self.driveDocument.id = val
+
+    @property
+    def is_file_reference(self) -> bool:
+        return True
+
+
+class ChunksImage(BaseChunk):
+    driveImage: DriveDocument
+    tokenCount: Optional[int] = None
+
+    @property
+    def file_id(self) -> Optional[str]:
+        return self.driveImage.id
+
+    @file_id.setter
+    def file_id(self, val: str):
+        self.driveImage.id = val
+
+    @property
+    def is_file_reference(self) -> bool:
+        return True
 
 
 Chunk = Union[ChunksText, ChunksDocument, ChunksImage]
