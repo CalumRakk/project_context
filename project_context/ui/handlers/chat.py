@@ -28,9 +28,9 @@ def cmd_clear(ctx: SessionContext, args: list[str]):
         )
 
 
-@registry.register("tree", require_chat=True)
-def cmd_tree(ctx: SessionContext, args: list[str]):
-    """Muestra el árbol de directorios que el modelo puede visualizar actualmente."""
+@registry.register("update", require_chat=True)
+def cmd_update(ctx: SessionContext, args: list[str]):
+    """Actualiza el contenido del archivo de contexto en Drive."""
     # args ya es una lista limpia
     clean_args_list = [
         arg for arg in args if arg not in ["--force", "-f", "force", "--run", "-r"]
