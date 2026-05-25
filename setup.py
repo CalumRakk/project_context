@@ -16,10 +16,10 @@ setup(
     install_requires=[
         "typer==0.21.1",
         "gitingest @ git+https://github.com/CalumRakk/gitingest.git@fix/windows-encoding-support",
-        "google-api-python-client==2.187.0",
-        "google-auth-oauthlib==1.2.3",
+        "google-api-python-client>=2.187.0",
+        "google-auth-oauthlib>=1.2.3",
         "GitPython==3.1.45",
-        "websockets>=12.0"
+        "prompt-toolkit>=3.0.52",
     ],
     keywords="cli google-ai-studio project-context",
     include_package_data=True,

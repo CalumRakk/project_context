@@ -3,11 +3,68 @@ import signal
 import sys
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import NestedCompleter, PathCompleter, WordCompleter
+from prompt_toolkit.history import InMemoryHistory
+
 from project_context.api_drive import AIStudioDriveManager
 from project_context.exceptions import ProjectContextError
 from project_context.history import SnapshotManager
 from project_context.ui.commands import SessionContext, registry
-from project_context.utils import UI, console
+from project_context.utils import UI, profile_manager
+
+
+def create_interactive_completer(
+    project_path: Path, commands: list[str]
+) -> NestedCompleter:
+    """
+    Construye un completador jerárquico dinámico mapeando subcomandos y
+    archivos relativos al proyecto bajo análisis.
+    """
+    # Obtener los perfiles creados para autocompletar en el comando 'transfer'
+    profiles = profile_manager.list_profiles()
+
+    # Configurar el completador de rutas para que solo busque dentro del proyecto actual
+    project_path_completer = PathCompleter(
+        expanduser=True, get_paths=lambda: [str(project_path)]
+    )
+
+    # Mapear la estructura de comandos con sus respectivos sub-autocompletadores
+    nested_dict = {
+        "context": {
+            "add": project_path_completer,
+            "rm": project_path_completer,
+            "remove": project_path_completer,
+            "ls": None,
+            "list": None,
+            "reset": None,
+        },
+        "monitor": {
+            "on": None,
+            "off": None,
+        },
+        "vanish": {
+            "on": None,
+            "off": None,
+        },
+        "commit": {
+            "clear": None,
+            "done": None,
+            "restore": None,
+            "rm": None,
+            "all": None,
+        },
+        "story": project_path_completer,
+        "images": project_path_completer,
+        "transfer": WordCompleter(profiles),
+    }
+
+    # Registrar de manera plana el resto de los comandos que no tienen lógica anidada
+    for cmd in commands:
+        if cmd not in nested_dict:
+            nested_dict[cmd] = None
+
+    return NestedCompleter.from_nested_dict(nested_dict)
 
 
 def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Path):
@@ -32,11 +89,19 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
     ctx.start_monitor()
 
     UI.info(f"[Chat] Iniciando sesión con chat_id {state.get('chat_id')}...")
+
+    # Extraer lista de comandos directamente del registro del proyecto
+    commands_list = list(registry.commands.keys())
+    completer = create_interactive_completer(project_path, commands_list)
+
+    # Inicializar la sesión de prompt_toolkit con completador e historial en memoria
+    session = PromptSession(completer=completer, history=InMemoryHistory())
+
     consecutive_errors = 0
 
     while True:
         try:
-            command_line = console.input("[bold green]>> [/]").strip()
+            command_line = session.prompt(">> ").strip()
             if not command_line:
                 continue
 
