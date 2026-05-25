@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
@@ -86,11 +87,12 @@ def get_app_root_dir() -> Path:
         base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "project_context"
 
-
 class ProfileManager:
     def __init__(self):
         self.root_dir = get_app_root_dir()
         self.profiles_dir = self.root_dir / "profiles"
+        self.secrets_dir = self.root_dir / "secrets"
+        self.tokens_dir = self.root_dir / "tokens"
         self.config_file = self.root_dir / "global_config.json"
         self._temp_profile: Optional[str] = None
         self._ensure_structure()
@@ -99,31 +101,29 @@ class ProfileManager:
         """Crea la estructura base y migra datos antiguos si existen."""
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(exist_ok=True)
+        self.secrets_dir.mkdir(exist_ok=True)
+        self.tokens_dir.mkdir(exist_ok=True)
 
-        # Lógica de Migración Automática
-        old_token = self.root_dir / "token.json"
-        # Buscamos carpetas que parezcan contextos (tienen guiones, ej: "2050-343")
-        # y que no sean la carpeta 'profiles'.
-        old_items = [
-            x
-            for x in self.root_dir.iterdir()
-            if x.is_dir() and "-" in x.name and x.name != "profiles"
-        ]
+        # Migración ligera: Si existía un secreto en la raíz, moverlo al banco de secretos
+        legacy_secret = self.root_dir / "client_secrets.json"
+        target_secret = self.secrets_dir / "client_secrets.json"
+        if legacy_secret.exists() and not target_secret.exists():
+            try:
+                shutil.copy2(str(legacy_secret), str(target_secret))
+                # Dejamos el viejo por si acaso o lo eliminamos tras confirmar estabilidad
+            except Exception as e:
+                logger.warning(f"No se pudo migrar el secreto legacy: {e}")
 
-        # Si encontramos datos viejos en la raíz, los movemos a 'default'
-        if (old_token.exists() or old_items) and not (
-            self.profiles_dir / "default"
-        ).exists():
-            print("Detectada estructura antigua. Migrando al perfil 'default'...")
-            default_dir = self.profiles_dir / "default"
-            default_dir.mkdir(parents=True, exist_ok=True)
+        # Garantizar perfil por defecto
+        default_profile_file = self.profiles_dir / "default.json"
+        if not default_profile_file.exists():
+            self.save_profile_data("default", {
+                "email": None,
+                "associated_secret": "client_secrets",
+                "created_at": time.time()
+            })
 
-            if old_token.exists():
-                shutil.move(str(old_token), str(default_dir / "token.json"))
-
-            for item in old_items:
-                shutil.move(str(item), str(default_dir / item.name))
-
+        if not self.config_file.exists():
             self.set_active_profile("default")
 
     def set_temporary_profile(self, profile_name: str):
@@ -137,45 +137,78 @@ class ProfileManager:
         if not self.config_file.exists():
             return "default"
 
-        config = json.loads(self.config_file.read_text())
-        return config.get("current_profile", "default")
-
+        try:
+            config = json.loads(self.config_file.read_text(encoding="utf-8"))
+            return config.get("current_profile", "default")
+        except Exception:
+            return "default"
 
     def set_active_profile(self, profile_name: str):
         self._temp_profile = None
 
         config = {"current_profile": profile_name}
-        self.config_file.write_text(json.dumps(config))
-        (self.profiles_dir / profile_name).mkdir(parents=True, exist_ok=True)
+        self.config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        # Crear descriptor de perfil si no existe
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        if not profile_file.exists():
+            self.save_profile_data(profile_name, {
+                "email": None,
+                "associated_secret": profile_name,
+                "created_at": time.time()
+            })
 
     def get_working_dir(self) -> Path:
-        """Devuelve la ruta donde se guardan los datos del perfil actual."""
-        profile = self.get_active_profile_name()
-        path = self.profiles_dir / profile
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        """
+        Retorna la raíz del perfil global para almacenamiento temporal heredado.
+        Nota: Se mantiene por compatibilidad temporal en fases de transición.
+        """
+        return self.root_dir
 
     def list_profiles(self) -> list[str]:
-        return [d.name for d in self.profiles_dir.iterdir() if d.is_dir()]
+        """Lista los aliases de perfiles (nombres de archivos .json sin extensión)."""
+        return [f.stem for f in self.profiles_dir.glob("*.json")]
+
+    def load_profile_data(self, profile_name: str) -> dict:
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        if not profile_file.exists():
+            return {}
+        try:
+            return json.loads(profile_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def save_profile_data(self, profile_name: str, data: dict):
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        profile_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def get_active_profile_data(self) -> dict:
+        return self.load_profile_data(self.get_active_profile_name())
+
+    def save_active_profile_data(self, data: dict):
+        self.save_profile_data(self.get_active_profile_name(), data)
 
     def resolve_secrets_file(self) -> Tuple[Path, str]:
         """
-        Estrategia de Cascada:
-        1. Busca client_secrets.json en la carpeta del perfil.
-        2. Si no está, busca en la carpeta global.
-        Retorna (Path, Tipo_Origen)
+        Resuelve el secreto asociado al perfil activo.
         """
-        profile_dir = self.get_working_dir()
-        specific_secrets = profile_dir / "client_secrets.json"
+        profile_data = self.get_active_profile_data()
+        secret_name = profile_data.get("associated_secret", "client_secrets")
 
-        if specific_secrets.exists():
-            return specific_secrets, "Perfil (Específico)"
+        if not secret_name.endswith(".json"):
+            secret_name += ".json"
 
-        global_secrets = self.root_dir / "client_secrets.json"
-        return global_secrets, "Global (Compartido)"
+        secret_path = self.secrets_dir / secret_name
 
+        # Fallback a client_secrets.json general si el específico no se encuentra
+        if not secret_path.exists() and secret_name != "client_secrets.json":
+            fallback_path = self.secrets_dir / "client_secrets.json"
+            if fallback_path.exists():
+                return fallback_path, "Global (Fallback 'client_secrets.json')"
 
-profile_manager = ProfileManager()
+        return secret_path, f"Perfil ({secret_name})"
+
+profile_manager= ProfileManager()
 
 
 def compute_md5(file_path):
@@ -212,6 +245,45 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
             if i.strip() and not i.strip().startswith("#")
         ]
     return []
+
+def get_local_context_dir(project_path: Union[str, Path]) -> Path:
+    """Obtiene y garantiza la existencia del directorio de metadatos local."""
+    path = Path(project_path)
+    local_dir = path / ".project_context"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    return local_dir
+
+
+def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] = None):
+    """
+    Verifica y añade la regla de exclusión del directorio local a .gitignore.
+    Respeta la opción 'auto_gitignore': false si está presente en el estado.
+    """
+    project_path = Path(project_path)
+
+    if state_data and state_data.get("auto_gitignore") is False:
+        return
+
+    gitignore_path = project_path / ".gitignore"
+    rule = ".project_context/"
+
+    try:
+        content = ""
+        if gitignore_path.exists():
+            content = gitignore_path.read_text(encoding="utf-8")
+
+        # Comprobación de existencia de la regla
+        lines = [line.strip() for line in content.splitlines()]
+        if any(line == rule or line == ".project_context" for line in lines):
+            return
+
+        UI.info("Añadiendo '.project_context/' a .gitignore...")
+        suffix = "\n" if content and not content.endswith("\n") else ""
+        new_content = content + suffix + f"# Metadatos locales de project-context-cli\n{rule}\n"
+        gitignore_path.write_text(new_content, encoding="utf-8")
+        UI.success(".gitignore actualizado automáticamente.")
+    except Exception as e:
+        UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
 
 
 def generate_context(
@@ -284,14 +356,12 @@ def generate_context(
 
     full_context = final_tree + "\n" + final_content
     return full_context, total_tokens
-def save_context(project_path: Union[str, Path], context: str) -> Path:
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
 
-    # USAMOS EL DIRECTORIO DEL PERFIL
-    base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / "project_context.txt"
-    output.parent.mkdir(parents=True, exist_ok=True)
+def save_context(project_path: Union[str, Path], context: str) -> Path:
+    """Guarda el contexto consolidado en last_context.txt."""
+    project_path = Path(project_path)
+    local_dir = get_local_context_dir(project_path)
+    output = local_dir / "last_context.txt"
     output.write_text(context, encoding="utf-8")
     return output
 
@@ -299,27 +369,74 @@ def save_context(project_path: Union[str, Path], context: str) -> Path:
 def save_project_context_state(
     project_path: Union[str, Path], project_context_state: dict
 ):
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
+    """Guarda el estado del proyecto en el archivo state.json local."""
+    project_path = Path(project_path)
+    local_dir = get_local_context_dir(project_path)
+    output_path = local_dir / "state.json"
 
-    base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / "project_context_state.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(project_context_state), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(project_context_state, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    ensure_gitignore(project_path, project_context_state)
 
 
 def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]:
-    """Devuelve un diccionario con el estado del proyecto."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    # TODO: Cambiar inodo por otra forma de identificar el proyecto.
-    inodo = generate_unique_id(project_path)
+    """Carga el archivo state.json local o migra el estado anterior basado en inodos."""
+    project_path = Path(project_path)
+    local_dir = get_local_context_dir(project_path)
+    state_path = local_dir / "state.json"
 
+    if state_path.exists():
+        try:
+            return json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            UI.error(f"Error cargando state.json: {e}")
+            return None
+
+    # --- Lógica de Migración desde el formato heredado (legacy) ---
+    inodo = generate_unique_id(project_path)
     base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / "project_context_state.json"
-    if not input_path.exists():
-        return None
-    content = input_path.read_text(encoding="utf-8")
-    return json.loads(content)
+    legacy_path = base_dir / inodo / "project_context_state.json"
+
+    if legacy_path.exists():
+        try:
+            UI.info("Migrando datos del formato de almacenamiento anterior al entorno local...")
+            legacy_data = json.loads(legacy_path.read_text(encoding="utf-8"))
+
+            new_state = {
+                "path": str(project_path),
+                "last_modified": legacy_data.get("last_modified", project_path.stat().st_mtime),
+                "global_md5": legacy_data.get("md5"),
+                "context_items": legacy_data.get("context_items", {"files": [], "folders": [], "exclusions": []}),
+                "story_mode": legacy_data.get("story_mode", False),
+                "story_anchor": legacy_data.get("story_anchor", None),
+                "profiles_data": {}
+            }
+
+            # Conservamos datos anteriores para que el primer arranque los asocie al perfil actual
+            legacy_chat_id = legacy_data.get("chat_id")
+            legacy_file_id = legacy_data.get("file_id")
+            if legacy_chat_id:
+                new_state["legacy_migration_data"] = {
+                    "chat_id": legacy_chat_id,
+                    "file_id": legacy_file_id,
+                    "md5": legacy_data.get("md5")
+                }
+
+            save_project_context_state(project_path, new_state)
+
+            # Migrar el archivo de contexto anterior
+            legacy_context_file = base_dir / inodo / "project_context.txt"
+            if legacy_context_file.exists():
+                shutil.copy2(legacy_context_file, local_dir / "last_context.txt")
+
+            UI.success("Migración finalizada con éxito.")
+            return new_state
+        except Exception as e:
+            UI.warn(f"No se pudo completar la migración automática del estado: {e}")
+
+    return None
 
 
 def has_files_modified_since(
@@ -491,10 +608,6 @@ def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
     return list(dict.fromkeys(results))
 
 
-# ==========================================
-# UTILIDADES DE GIT
-# ==========================================
-
 def has_unstaged_changes(project_path: Path) -> bool:
     """Verifica si hay archivos modificados o untracked que no están en stage."""
     try:
@@ -518,60 +631,45 @@ def stage_all_changes(project_path: Path):
         UI.error(f"Error al hacer git add: {e}")
 
 
-
 def save_chat_stash(project_path: Union[str, Path], chat_json: str):
-    """Guarda una copia de seguridad del chat actual en disco."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / "chat_stash.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
+    project_path = Path(project_path)
+    local_dir = get_local_context_dir(project_path)
+    output = local_dir / "chat_stash.json"
     output.write_text(chat_json, encoding="utf-8")
 
 def load_chat_stash(project_path: Union[str, Path]) -> Optional[str]:
-    """Recupera la copia de seguridad del chat desde el disco."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / "chat_stash.json"
+    project_path = Path(project_path)
+    input_path = get_local_context_dir(project_path) / "chat_stash.json"
     if not input_path.exists():
         return None
     return input_path.read_text(encoding="utf-8")
 
+
 def clear_chat_stash(project_path: Union[str, Path]):
-    """Elimina el archivo de copia de seguridad."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / "chat_stash.json"
+    project_path = Path(project_path)
+    input_path = get_local_context_dir(project_path) / "chat_stash.json"
     if input_path.exists():
         input_path.unlink()
 
+
 def save_vanish_stash(project_path: Union[str, Path], chat_json: str):
-    """Guarda una copia de seguridad del chat actual para el modo vanish."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    output = base_dir / inodo / "vanish_stash.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
+    project_path = Path(project_path)
+    local_dir = get_local_context_dir(project_path)
+    output = local_dir / "vanish_stash.json"
     output.write_text(chat_json, encoding="utf-8")
 
+
 def load_vanish_stash(project_path: Union[str, Path]) -> Optional[str]:
-    """Recupera la copia de seguridad del chat guardada por el modo vanish."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / "vanish_stash.json"
+    project_path = Path(project_path)
+    input_path = get_local_context_dir(project_path) / "vanish_stash.json"
     if not input_path.exists():
         return None
     return input_path.read_text(encoding="utf-8")
 
+
 def clear_vanish_stash(project_path: Union[str, Path]):
-    """Elimina el archivo de copia de seguridad del modo vanish."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    input_path = base_dir / inodo / "vanish_stash.json"
+    project_path = Path(project_path)
+    input_path = get_local_context_dir(project_path) / "vanish_stash.json"
     if input_path.exists():
         input_path.unlink()
 

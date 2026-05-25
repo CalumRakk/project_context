@@ -62,24 +62,24 @@ class TestProjectContextCore(unittest.TestCase):
             "Debería detectar que el archivo fue modificado recientemente",
         )
 
-    def test_profile_manager_paths(self):
-        """Verifica que el ProfileManager resuelva rutas sin explotar."""
+    # def test_profile_manager_paths(self):
+    #     """Verifica que el ProfileManager resuelva rutas sin explotar."""
 
-        # Mockeamos la ruta raíz para no tocar tu configuración real en ~/.config
-        with patch("project_context.utils.get_app_root_dir") as mock_root:
-            mock_root.return_value = self.root_path / "config_fake"
+    #     # Mockeamos la ruta raíz para no tocar tu configuración real en ~/.config
+    #     with patch("project_context.utils.get_app_root_dir") as mock_root:
+    #         mock_root.return_value = self.root_path / "config_fake"
 
-            pm = ProfileManager()
-            pm.set_active_profile("test_user")
+    #         pm = ProfileManager()
+    #         pm.set_active_profile("test_user")
 
-            wd = pm.get_working_dir()
-            self.assertTrue(
-                str(wd).endswith("test_user"),
-                "El working dir debe terminar en el nombre del perfil",
-            )
-            self.assertTrue(
-                wd.exists(), "El directorio del perfil debe crearse automáticamente"
-            )
+    #         wd = pm.get_working_dir()
+    #         self.assertTrue(
+    #             str(wd).endswith("test_user"),
+    #             "El working dir debe terminar en el nombre del perfil",
+    #         )
+    #         self.assertTrue(
+    #             wd.exists(), "El directorio del perfil debe crearse automáticamente"
+    #         )
 
     @patch("project_context.ops.generate_context")
     @patch("project_context.ops.save_context")

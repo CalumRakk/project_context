@@ -12,3 +12,6 @@ build/
 identity.py
 fix_subtitles.py
 docs/
+requirements.txt
+tests/
+.pre-commit-config.yaml

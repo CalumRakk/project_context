@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from project_context.api_drive import AIStudioDriveManager
-from project_context.utils import generate_unique_id, profile_manager
 
 
 class SnapshotManager:
@@ -19,17 +18,18 @@ class SnapshotManager:
         self.thread: Optional[threading.Thread] = None
         self.interval = 10
 
-        self.inode = generate_unique_id(project_path)
+        # DIRECCIÓN LOCAL DEL PROYECTO
+        self.base_dir = project_path / ".project_context"
 
-        self.base_dir = profile_manager.get_working_dir() / self.inode
-
+        # Ubicación física en la estructura local
         self.snapshots_dir = self.base_dir / "snapshots"
-        self.context_store_dir = self.base_dir / "context_store"
+        self.context_store_dir = self.snapshots_dir / "context_store"
 
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         self.context_store_dir.mkdir(parents=True, exist_ok=True)
 
         self.last_known_chat_mod_time = None
+
 
     def start_monitoring(self):
         if self.running:
@@ -84,7 +84,7 @@ class SnapshotManager:
         if store_path.exists():
             return True
 
-        current_context_path = self.base_dir / "project_context.txt"
+        current_context_path = self.base_dir / "last_context.txt"
         if current_context_path.exists():
             shutil.copy2(current_context_path, store_path)
             return True

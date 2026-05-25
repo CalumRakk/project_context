@@ -1,5 +1,3 @@
-import time
-
 from project_context.exceptions import ChatSessionError, InvalidCommandArgumentError
 from project_context.ops import apply_story_update, update_context
 from project_context.schema import ChunksDocument, ChunksText
@@ -29,18 +27,11 @@ def cmd_clear(ctx: SessionContext, args: str):
 
 @registry.register("update", require_chat=True)
 def cmd_update(ctx: SessionContext, args: str):
-    chat_id = ctx.state.get("chat_id")
     args_list = args.strip().split()
-
-    force = "--force" in args_list or "-f" in args_list or "force" in args_list
-    run_after_update = "--run" in args_list or "-r" in args_list
 
     # Filtrar argumentos para limpiar la presentación
     clean_args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force", "--run", "-r"]]
     clean_args = " ".join(clean_args_list)
-
-    tab_is_focused = False
-
 
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
