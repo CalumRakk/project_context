@@ -40,11 +40,20 @@ class CommandMetadata:
         require_chat: bool,
         allow_in_vanish: bool,
         manage_monitor: bool,
+        description: Optional[str] = None,
     ):
         self.handler = handler
         self.require_chat = require_chat
         self.allow_in_vanish = allow_in_vanish
         self.manage_monitor = manage_monitor
+
+        # Intentar extraer la primera línea del docstring si no se pasa descripción explícita
+        if description:
+            self.description = description
+        elif handler.__doc__:
+            self.description = handler.__doc__.strip().split("\n")[0]
+        else:
+            self.description = "Sin descripción disponible."
 
 
 class CommandRegistry:
@@ -57,6 +66,7 @@ class CommandRegistry:
         require_chat: bool = False,
         allow_in_vanish: bool = False,
         manage_monitor: bool = True,
+        description: Optional[str] = None,
     ):
         def decorator(func: Callable[[SessionContext, List[str]], Optional[bool]]):
             meta = CommandMetadata(
@@ -64,6 +74,7 @@ class CommandRegistry:
                 require_chat=require_chat,
                 allow_in_vanish=allow_in_vanish,
                 manage_monitor=manage_monitor,
+                description=description,
             )
             for name in names:
                 self.commands[name] = meta

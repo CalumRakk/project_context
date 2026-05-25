@@ -15,6 +15,7 @@ from project_context.utils import (
 
 @registry.register("clear", require_chat=True)
 def cmd_clear(ctx: SessionContext, args: list[str]):
+    """Limpia el historial de la conversación manteniendo el contexto inicial."""
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
@@ -27,8 +28,9 @@ def cmd_clear(ctx: SessionContext, args: list[str]):
         )
 
 
-@registry.register("update", require_chat=True)
-def cmd_update(ctx: SessionContext, args: list[str]):
+@registry.register("tree", require_chat=True)
+def cmd_tree(ctx: SessionContext, args: list[str]):
+    """Muestra el árbol de directorios que el modelo puede visualizar actualmente."""
     # args ya es una lista limpia
     clean_args_list = [
         arg for arg in args if arg not in ["--force", "-f", "force", "--run", "-r"]
@@ -58,6 +60,7 @@ def cmd_update(ctx: SessionContext, args: list[str]):
 
 @registry.register("tokens", require_chat=True)
 def cmd_tokens(ctx: SessionContext, args: list[str]):
+    """Actualiza manualmente el contador de tokens del archivo de contexto en Drive."""
     if not args:
         UI.warn("Uso: tokens <cantidad> (ej: tokens 150000 o tokens 150k)")
         return
@@ -104,6 +107,7 @@ def cmd_tokens(ctx: SessionContext, args: list[str]):
 
 @registry.register("insert", "msg", require_chat=True)
 def cmd_insert(ctx: SessionContext, args: list[str]):
+    """Inserta un mensaje con rol de usuario o modelo en el historial de Drive."""
     if not args:
         UI.warn("Uso: insert [user|ia|model] <mensaje>")
         return
@@ -164,6 +168,7 @@ def cmd_insert(ctx: SessionContext, args: list[str]):
 
 @registry.register("run", "r", require_chat=True)
 def cmd_run(ctx: SessionContext, args: list[str]):
+    """Ejecuta o procesa la sesión actual (reservado para coordinación de API)."""
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No se encontró el chat_id en el estado actual.")
@@ -171,6 +176,7 @@ def cmd_run(ctx: SessionContext, args: list[str]):
 
 @registry.register("vanish", require_chat=True, allow_in_vanish=True)
 def cmd_vanish(ctx: SessionContext, args: list[str]):
+    """Activa o desactiva el modo vanish para ocultar temporalmente la conversación."""
     subcommand = args[0].lower() if args else ""
 
     if not subcommand:

@@ -6,6 +6,7 @@ from project_context.utils import UI, console, get_context_tree
 
 @registry.register("tree", require_chat=True)
 def cmd_tree(ctx: SessionContext, args: list[str]):
+    """Muestra el árbol de directorios que el modelo puede visualizar actualmente."""
     UI.info("Generando árbol del contexto actual...")
     tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
     console.print(f"\n[cyan]{tree_str}[/cyan]\n")
@@ -13,6 +14,7 @@ def cmd_tree(ctx: SessionContext, args: list[str]):
 
 @registry.register("context", require_chat=True)
 def cmd_context(ctx: SessionContext, args: list[str]):
+    """Gestiona el enfoque específico de archivos y carpetas (add, rm, ls, reset)."""
     if "context_items" not in ctx.state:
         ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
 

@@ -7,6 +7,7 @@ from project_context.utils import UI, console
 
 @registry.register("save", require_chat=True)
 def cmd_save(ctx: SessionContext, args: list[str]):
+    """Crea de forma manual un snapshot de respaldo etiquetado con un mensaje."""
     if not args:
         UI.warn("Debes proveer un mensaje: `save mi_cambio_importante`")
     else:
@@ -15,6 +16,7 @@ def cmd_save(ctx: SessionContext, args: list[str]):
 
 @registry.register("monitor", require_chat=True)
 def cmd_monitor(ctx: SessionContext, args: list[str]):
+    """Activa o desactiva el monitoreo automático de cambios en segundo plano."""
     subcommand = args[0].lower() if args else ""
     if subcommand == "on":
         ctx.monitor.start_monitoring()
@@ -32,6 +34,7 @@ def cmd_monitor(ctx: SessionContext, args: list[str]):
 
 @registry.register("history", require_chat=True)
 def cmd_history(ctx: SessionContext, args: list[str]):
+    """Muestra de forma paginada y administra los snapshots disponibles."""
     page_size = 10
     current_page = 0
 
@@ -142,6 +145,7 @@ def cmd_history(ctx: SessionContext, args: list[str]):
 
 @registry.register("restore", require_chat=True)
 def cmd_restore(ctx: SessionContext, args: list[str]):
+    """Restaura un estado de chat y contexto previo a partir de su identificador."""
     if not args:
         UI.warn("Especifica el ID del snapshot.")
         return

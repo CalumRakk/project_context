@@ -61,15 +61,13 @@ def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
 
 @registry.register("edit", require_chat=True)
 def cmd_edit(ctx: SessionContext, args: list[str]):
-    from project_context.ui.handlers.base import command_help
-
+    """Abre el editor visual de bloques para depurar el prompt en Drive."""
     run_editor_mode(ctx.api, ctx.state["chat_id"])
-    UI.info("Reactivando monitor de historial automático...")
-    command_help()
 
 
 @registry.register("reset", require_chat=True)
 def cmd_reset(ctx: SessionContext, args: list[str]):
+    """Reconstruye por completo el chat y el contexto utilizando los mismos archivos."""
     confirm = console.input(
         "[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]"
     )
@@ -80,6 +78,7 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
 
 @registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: list[str]):
+    """Genera una sugerencia de commit con base en el diff de Git actual."""
     subcommand = args[0].lower() if args else ""
     is_commit_mode = ctx.state.get("commit_mode", False)
 
@@ -189,6 +188,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
 
 @registry.register("images", require_chat=True)
 def cmd_images(ctx: SessionContext, args: list[str]):
+    """Detecta, sincroniza e inyecta las imágenes referenciadas en un archivo markdown."""
     if not args:
         UI.warn("Uso: images <archivo.md>")
         return
@@ -244,6 +244,7 @@ def cmd_images(ctx: SessionContext, args: list[str]):
 
 @registry.register("story", require_chat=True)
 def cmd_story(ctx: SessionContext, args: list[str]):
+    """Configura o procesa las intenciones del modo historia interactivo."""
     if not args:
         if ctx.state.get("story_mode"):
             UI.info(
@@ -295,6 +296,7 @@ def cmd_story(ctx: SessionContext, args: list[str]):
 
 @registry.register("transfer", require_chat=True)
 def cmd_transfer(ctx: SessionContext, args: list[str]):
+    """Migra el chat y sus dependencias de forma segura a otra cuenta de Google."""
     if not args:
         UI.warn("Uso: transfer <perfil_destino>")
         return
@@ -349,6 +351,7 @@ def cmd_transfer(ctx: SessionContext, args: list[str]):
 
 @registry.register("fix", require_chat=True)
 def cmd_fix(ctx: SessionContext, args: list[str]):
+    """Analiza y repara inconsistencias en el esquema del chat de Drive."""
     UI.info("Analizando chat...")
     fixed_count = ctx.api.repair_chat_structure(ctx.state["chat_id"])
 
