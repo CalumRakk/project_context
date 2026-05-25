@@ -1,6 +1,7 @@
 import io
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator, List, Optional, cast
 
 from google.auth.transport.requests import Request
@@ -45,16 +46,46 @@ class ChunkFactory:
 class GoogleDriveManager:
     SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-    def __init__(self):
-        """Inicializa el cliente de Drive y se autentica usando el perfil activo."""
-        self.profile_name = profile_manager.get_active_profile_name()
-        self.client_secrets_file, source_type = profile_manager.resolve_secrets_file()
+    def __init__(
+        self, secrets_file: Optional[Path] = None, profile_name: Optional[str] = None
+    ):
+        """
+        Inicializa el cliente. Si se provee secrets_file, se utiliza para validación directa.
+        """
+        if secrets_file:
+            self.client_secrets_file = secrets_file
+            self.profile_name = profile_name or "temp_validation"
+            self.credentials = self._authenticate_explicit()
+        else:
+            self.profile_name = profile_manager.get_active_profile_name()
+            self.client_secrets_file, _ = profile_manager.resolve_secrets_file()
+            self.credentials = self._authenticate()
 
-        UI.info(f"Perfil activo: [bold]{self.profile_name}[/]")
-
-        self.credentials = self._authenticate()
         self.service = build("drive", "v3", credentials=self.credentials)
         UI.success("Google Drive Manager inicializado con éxito.")
+
+    def _authenticate_explicit(self) -> Credentials:
+        """Flujo simplificado que autentica directamente usando un archivo de secretos."""
+        if not self.client_secrets_file.exists():
+            raise FileNotFoundError(
+                f"No se encontró el archivo de secretos: {self.client_secrets_file}"
+            )
+
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(self.client_secrets_file), self.SCOPES
+        )
+        creds = cast(Credentials, flow.run_local_server(port=0))
+
+        temp_service = build("drive", "v3", credentials=creds)
+        about_info = temp_service.about().get(fields="user(emailAddress)").execute()
+        self.fetched_email = about_info.get("user", {}).get("emailAddress")
+
+        if not self.fetched_email:
+            raise ValueError(
+                "No se pudo recuperar el correo asociado a estas credenciales."
+            )
+
+        return creds
 
     def _authenticate(self) -> Credentials:
         profile_data = profile_manager.get_active_profile_data()
@@ -68,10 +99,16 @@ class GoogleDriveManager:
             token_path = profile_manager.tokens_dir / token_name
             if token_path.exists():
                 try:
-                    creds = Credentials.from_authorized_user_file(str(token_path), self.SCOPES)
-                    UI.info(f"Cargado token existente para [bold]{registered_email}[/].")
+                    creds = Credentials.from_authorized_user_file(
+                        str(token_path), self.SCOPES
+                    )
+                    UI.info(
+                        f"Cargado token existente para [bold]{registered_email}[/]."
+                    )
                 except Exception as e:
-                    UI.warn(f"No se pudieron cargar las credenciales desde {token_name}: {e}")
+                    UI.warn(
+                        f"No se pudieron cargar las credenciales desde {token_name}: {e}"
+                    )
                     creds = None
 
         if creds and not creds.valid:
@@ -80,9 +117,10 @@ class GoogleDriveManager:
                     creds.refresh(Request())
                     UI.info("Credenciales de Drive refrescadas automáticamente.")
                 except Exception as e:
-                    UI.error(f"Error al refrescar el token de acceso: {e}. Se requiere re-autenticación.")
+                    UI.error(
+                        f"Error al refrescar el token de acceso: {e}. Se requiere re-autenticación."
+                    )
                     creds = None
-
 
         if not creds:
             if not self.client_secrets_file.exists():
@@ -98,17 +136,19 @@ class GoogleDriveManager:
             creds = cast(Credentials, flow.run_local_server(port=0))
             UI.success("Autenticación externa completada con éxito.")
 
-
         try:
             temp_service = build("drive", "v3", credentials=creds)
             about_info = temp_service.about().get(fields="user(emailAddress)").execute()
             fetched_email = about_info.get("user", {}).get("emailAddress")
         except Exception as e:
-            raise RuntimeError(f"No se pudo recuperar los metadatos de usuario desde Google API: {e}")
+            raise RuntimeError(
+                f"No se pudo recuperar los metadatos de usuario desde Google API: {e}"
+            )
 
         if not fetched_email:
-            raise ValueError("La API de Google no devolvió una dirección de correo válida para esta sesión.")
-
+            raise ValueError(
+                "La API de Google no devolvió una dirección de correo válida para esta sesión."
+            )
 
         if registered_email and fetched_email.lower() != registered_email.lower():
             raise ValueError(
@@ -117,12 +157,12 @@ class GoogleDriveManager:
                 f"Por favor, cambia de perfil o vuelve a configurar las credenciales."
             )
 
-
         if not registered_email:
             profile_data["email"] = fetched_email
             profile_manager.save_active_profile_data(profile_data)
-            UI.info(f"Correo electrónico [bold]{fetched_email}[/] asociado al perfil '[bold]{self.profile_name}[/]'.")
-
+            UI.info(
+                f"Correo electrónico [bold]{fetched_email}[/] asociado al perfil '[bold]{self.profile_name}[/]'."
+            )
 
         token_name = f"{fetched_email}__{secret_name}"
         token_path = profile_manager.tokens_dir / token_name
@@ -317,7 +357,9 @@ class AIStudioDriveManager:
         Serializa y actualiza un objeto chat directamente en Drive.
         """
         try:
-            content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
+            content_json = chat_data.model_dump_json(
+                exclude_none=True, exclude_unset=True
+            )
             result = self.gdm.update_file_from_memory(
                 file_id=chat_id,
                 content=content_json,
@@ -345,7 +387,6 @@ class AIStudioDriveManager:
             UI.error(f"Error procesando chat (cambios descartados): {e}")
             raise e
         else:
-
             if not self.update_chat_file(chat_id, chat):
                 raise IOError("Falló la escritura del chat en Google Drive.")
 

@@ -87,6 +87,7 @@ def get_app_root_dir() -> Path:
         base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "project_context"
 
+
 class ProfileManager:
     def __init__(self):
         self.root_dir = get_app_root_dir()
@@ -117,11 +118,14 @@ class ProfileManager:
         # Garantizar perfil por defecto
         default_profile_file = self.profiles_dir / "default.json"
         if not default_profile_file.exists():
-            self.save_profile_data("default", {
-                "email": None,
-                "associated_secret": "client_secrets",
-                "created_at": time.time()
-            })
+            self.save_profile_data(
+                "default",
+                {
+                    "email": None,
+                    "associated_secret": "client_secrets",
+                    "created_at": time.time(),
+                },
+            )
 
         if not self.config_file.exists():
             self.set_active_profile("default")
@@ -152,11 +156,14 @@ class ProfileManager:
         # Crear descriptor de perfil si no existe
         profile_file = self.profiles_dir / f"{profile_name}.json"
         if not profile_file.exists():
-            self.save_profile_data(profile_name, {
-                "email": None,
-                "associated_secret": profile_name,
-                "created_at": time.time()
-            })
+            self.save_profile_data(
+                profile_name,
+                {
+                    "email": None,
+                    "associated_secret": profile_name,
+                    "created_at": time.time(),
+                },
+            )
 
     def get_working_dir(self) -> Path:
         """
@@ -180,7 +187,9 @@ class ProfileManager:
 
     def save_profile_data(self, profile_name: str, data: dict):
         profile_file = self.profiles_dir / f"{profile_name}.json"
-        profile_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        profile_file.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def get_active_profile_data(self) -> dict:
         return self.load_profile_data(self.get_active_profile_name())
@@ -190,25 +199,64 @@ class ProfileManager:
 
     def resolve_secrets_file(self) -> Tuple[Path, str]:
         """
-        Resuelve el secreto asociado al perfil activo.
+        Resuelve el secreto asociado al perfil activo aplicando la siguiente prioridad:
+        1. Si hay un secreto asociado explícitamente y este existe físicamente, se utiliza.
+        2. Si no hay secreto asociado (o el asociado no existe):
+           - Si en secrets/ hay exactamente 1 secreto .json instalado, se asocia automáticamente.
+           - Si hay 2 o más secretos, falla pidiendo al usuario que lo especifique.
+           - Si no hay secretos, retorna la ruta esperada por defecto para que el flujo estándar
+             guíe al usuario con los pasos de instalación.
         """
+        profile_name = self.get_active_profile_name()
         profile_data = self.get_active_profile_data()
-        secret_name = profile_data.get("associated_secret", "client_secrets")
+        secret_name = profile_data.get("associated_secret")
 
-        if not secret_name.endswith(".json"):
-            secret_name += ".json"
+        # Escanear el directorio para ver qué secretos físicos están disponibles
+        available_secrets = sorted(
+            [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
+        )
 
-        secret_path = self.secrets_dir / secret_name
+        # Si existe una asociación explícita y es válida, usarla
+        if secret_name:
+            if not secret_name.endswith(".json"):
+                secret_name += ".json"
 
-        # Fallback a client_secrets.json general si el específico no se encuentra
-        if not secret_path.exists() and secret_name != "client_secrets.json":
-            fallback_path = self.secrets_dir / "client_secrets.json"
-            if fallback_path.exists():
-                return fallback_path, "Global (Fallback 'client_secrets.json')"
+            specific_path = self.secrets_dir / secret_name
+            if specific_path.exists():
+                return specific_path, f"Asociado al perfil ({secret_name})"
 
-        return secret_path, f"Perfil ({secret_name})"
+        # Resolución inteligente de contingencias
+        if len(available_secrets) == 1:
+            # Auto-asociación persistente en los metadatos del perfil activo
+            auto_secret = available_secrets[0]
+            profile_data["associated_secret"] = auto_secret.name
+            self.save_profile_data(profile_name, profile_data)
 
-profile_manager= ProfileManager()
+            UI.info(
+                f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]"
+            )
+            return auto_secret, f"Auto-detectado ({auto_secret.name})"
+
+        elif len(available_secrets) > 1:
+            # Conflicto multicuenta: Exigimos clarificación al usuario
+            secret_names = [f.name for f in available_secrets]
+            raise ValueError(
+                f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos en el almacén "
+                f"({', '.join(secret_names)}) pero el perfil '{profile_name}' no tiene un secreto asociado.\n"
+                f"Para solucionarlo, asocia uno explícitamente ejecutando:\n"
+                f"  project_context profile set-secrets <ruta_archivo.json> --secret-name <nombre_deseado>\n"
+                f"O bien cambia a un perfil que ya esté configurado."
+            )
+
+        else:
+            # No hay secretos disponibles en el disco: Se asume el comportamiento por defecto
+            fallback_name = secret_name if secret_name else f"{profile_name}.json"
+            if not fallback_name.endswith(".json"):
+                fallback_name += ".json"
+            return self.secrets_dir / fallback_name, "Predeterminado (Faltante)"
+
+
+profile_manager = ProfileManager()
 
 
 def compute_md5(file_path):
@@ -246,6 +294,7 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
         ]
     return []
 
+
 def get_local_context_dir(project_path: Union[str, Path]) -> Path:
     """Obtiene y garantiza la existencia del directorio de metadatos local."""
     path = Path(project_path)
@@ -279,7 +328,9 @@ def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] 
 
         UI.info("Añadiendo '.project_context/' a .gitignore...")
         suffix = "\n" if content and not content.endswith("\n") else ""
-        new_content = content + suffix + f"# Metadatos locales de project-context-cli\n{rule}\n"
+        new_content = (
+            content + suffix + f"\n# Metadatos locales de project-context-cli\n{rule}\n"
+        )
         gitignore_path.write_text(new_content, encoding="utf-8")
         UI.success(".gitignore actualizado automáticamente.")
     except Exception as e:
@@ -291,7 +342,9 @@ def generate_context(
 ) -> tuple[str, int]:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    if not context_items or (not context_items.get("files") and not context_items.get("folders")):
+    if not context_items or (
+        not context_items.get("files") and not context_items.get("folders")
+    ):
         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
         summary, tree, content = gitingest.ingest(
             str(project_path), exclude_patterns=set(custom_ignores)
@@ -322,7 +375,6 @@ def generate_context(
                 except Exception as e:
                     final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
 
-    # -- Procesa Carpetas Explícitas aplicando Exclusiones Relativas --
     folders = context_items.get("folders", [])
     exclusions = context_items.get("exclusions", [])
     if folders:
@@ -333,7 +385,6 @@ def generate_context(
                 folder_path_obj = Path(folder)
                 folder_specific_ignores = list(custom_ignores)
 
-                # Traducir exclusiones aplicables a esta carpeta
                 for exc in exclusions:
                     exc_path = Path(exc)
                     try:
@@ -357,6 +408,7 @@ def generate_context(
     full_context = final_tree + "\n" + final_content
     return full_context, total_tokens
 
+
 def save_context(project_path: Union[str, Path], context: str) -> Path:
     """Guarda el contexto consolidado en last_context.txt."""
     project_path = Path(project_path)
@@ -376,7 +428,7 @@ def save_project_context_state(
 
     output_path.write_text(
         json.dumps(project_context_state, indent=2, ensure_ascii=False),
-        encoding="utf-8"
+        encoding="utf-8",
     )
     ensure_gitignore(project_path, project_context_state)
 
@@ -394,24 +446,29 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
             UI.error(f"Error cargando state.json: {e}")
             return None
 
-    # --- Lógica de Migración desde el formato heredado (legacy) ---
     inodo = generate_unique_id(project_path)
     base_dir = profile_manager.get_working_dir()
     legacy_path = base_dir / inodo / "project_context_state.json"
 
     if legacy_path.exists():
         try:
-            UI.info("Migrando datos del formato de almacenamiento anterior al entorno local...")
+            UI.info(
+                "Migrando datos del formato de almacenamiento anterior al entorno local..."
+            )
             legacy_data = json.loads(legacy_path.read_text(encoding="utf-8"))
 
             new_state = {
                 "path": str(project_path),
-                "last_modified": legacy_data.get("last_modified", project_path.stat().st_mtime),
+                "last_modified": legacy_data.get(
+                    "last_modified", project_path.stat().st_mtime
+                ),
                 "global_md5": legacy_data.get("md5"),
-                "context_items": legacy_data.get("context_items", {"files": [], "folders": [], "exclusions": []}),
+                "context_items": legacy_data.get(
+                    "context_items", {"files": [], "folders": [], "exclusions": []}
+                ),
                 "story_mode": legacy_data.get("story_mode", False),
                 "story_anchor": legacy_data.get("story_anchor", None),
-                "profiles_data": {}
+                "profiles_data": {},
             }
 
             # Conservamos datos anteriores para que el primer arranque los asocie al perfil actual
@@ -421,7 +478,7 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
                 new_state["legacy_migration_data"] = {
                     "chat_id": legacy_chat_id,
                     "file_id": legacy_file_id,
-                    "md5": legacy_data.get("md5")
+                    "md5": legacy_data.get("md5"),
                 }
 
             save_project_context_state(project_path, new_state)
@@ -452,8 +509,6 @@ def has_files_modified_since(
                 for i in path_gitignore.read_text(encoding="utf-8").splitlines()
                 if i.strip() and not i.strip().startswith("#")
             ]
-
-
 
     if target_path.is_file():
         fecha_mod = target_path.stat().st_mtime
@@ -622,6 +677,7 @@ def has_unstaged_changes(project_path: Path) -> bool:
     except exc.InvalidGitRepositoryError:
         return False
 
+
 def stage_all_changes(project_path: Path):
     """Ejecuta git add . en el repositorio."""
     try:
@@ -636,6 +692,7 @@ def save_chat_stash(project_path: Union[str, Path], chat_json: str):
     local_dir = get_local_context_dir(project_path)
     output = local_dir / "chat_stash.json"
     output.write_text(chat_json, encoding="utf-8")
+
 
 def load_chat_stash(project_path: Union[str, Path]) -> Optional[str]:
     project_path = Path(project_path)
@@ -673,12 +730,17 @@ def clear_vanish_stash(project_path: Union[str, Path]):
     if input_path.exists():
         input_path.unlink()
 
-def get_context_tree(project_path: Union[str, Path], context_items: Optional[dict] = None) -> str:
+
+def get_context_tree(
+    project_path: Union[str, Path], context_items: Optional[dict] = None
+) -> str:
     """Genera solo la representación visual del árbol (sin el contenido de los archivos)."""
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
     # Si no hay enfoque específico, devolvemos el árbol de todo el proyecto
-    if not context_items or (not context_items.get("files") and not context_items.get("folders")):
+    if not context_items or (
+        not context_items.get("files") and not context_items.get("folders")
+    ):
         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
         summary, tree, content = gitingest.ingest(
             str(project_path), exclude_patterns=set(custom_ignores)
@@ -723,6 +785,7 @@ def get_context_tree(project_path: Union[str, Path], context_items: Optional[dic
 
     return final_tree
 
+
 def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     """
     Extrae referencias de imágenes desde una cadena de texto plano.
@@ -737,7 +800,11 @@ def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     for pat in std_patterns:
         matches = re.findall(pat, content, re.IGNORECASE)
         results.extend(
-            [(m.strip().lstrip("/"), False) for m in matches if not m.startswith(("http", "data:"))]
+            [
+                (m.strip().lstrip("/"), False)
+                for m in matches
+                if not m.startswith(("http", "data:"))
+            ]
         )
 
     # WikiLinks (estilo Obsidian): ![[imagen.png|237]]

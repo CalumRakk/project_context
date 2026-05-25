@@ -13,5 +13,11 @@
         "**/*.rpa": true,
         "**/*.rpymc": true,
         "**/cache/": true
-    }
+    },
+    "python.terminal.activateEnvironment": true,
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true
+    },
+    "ruff.nativeServer": true
 }

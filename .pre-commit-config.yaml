@@ -8,12 +8,23 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
 
-  # Tests Unitarios (Localmente)
+  # Tests Unitarios windows
+  # - repo: local
+  #   hooks:
+  #     - id: run-tests
+  #       name: Ejecutar Tests Unitarios
+  #       entry: python -m unittest discover tests
+  #       language: system
+  #       types: [python]
+  #       pass_filenames: false
+  #       always_run: true
+
+  # Tests Unitarios linux
   - repo: local
     hooks:
       - id: run-tests
         name: Ejecutar Tests Unitarios
-        entry: python -m unittest discover tests
+        entry: .venv/bin/python -m unittest discover tests
         language: system
         types: [python]
         pass_filenames: false
