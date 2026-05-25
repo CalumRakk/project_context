@@ -18,51 +18,42 @@ def create_interactive_completer(
     project_path: Path, commands: list[str]
 ) -> NestedCompleter:
     """
-    Construye un completador jerárquico dinámico mapeando subcomandos y
-    archivos relativos al proyecto bajo análisis.
+    Construye un completador jerárquico dinámico a partir de las claves del registro.
     """
-    # Obtener los perfiles creados para autocompletar en el comando 'transfer'
     profiles = profile_manager.list_profiles()
-
-    # Configurar el completador de rutas para que solo busque dentro del proyecto actual
     project_path_completer = PathCompleter(
         expanduser=True, get_paths=lambda: [str(project_path)]
     )
 
-    # Mapear la estructura de comandos con sus respectivos sub-autocompletadores
-    nested_dict = {
-        "context": {
-            "add": project_path_completer,
-            "rm": project_path_completer,
-            "remove": project_path_completer,
-            "ls": None,
-            "list": None,
-            "reset": None,
-        },
-        "monitor": {
-            "on": None,
-            "off": None,
-        },
-        "vanish": {
-            "on": None,
-            "off": None,
-        },
-        "commit": {
-            "clear": None,
-            "done": None,
-            "restore": None,
-            "rm": None,
-            "all": None,
-        },
-        "story": project_path_completer,
-        "images": project_path_completer,
-        "transfer": WordCompleter(profiles),
-    }
+    nested_dict = {}
 
-    # Registrar de manera plana el resto de los comandos que no tienen lógica anidada
-    for cmd in commands:
-        if cmd not in nested_dict:
-            nested_dict[cmd] = None
+    # Agrupar subcomandos definidos por namespace (separados por ':')
+    for cmd_name in commands:
+        if ":" in cmd_name:
+            parent, sub = cmd_name.split(":", 1)
+            if parent not in nested_dict or not isinstance(nested_dict[parent], dict):
+                nested_dict[parent] = {}
+
+            # Asociar el completador adecuado según la semántica
+            if parent in ["context", "story", "images"] and sub in [
+                "add",
+                "rm",
+                "remove",
+            ]:
+                nested_dict[parent][sub] = project_path_completer
+            else:
+                nested_dict[parent][sub] = None
+
+    # Agregar comandos planos (que no actúan como padres de subcomandos)
+    for cmd_name in commands:
+        if ":" not in cmd_name:
+            if cmd_name not in nested_dict:
+                if cmd_name in ["story", "images"]:
+                    nested_dict[cmd_name] = project_path_completer
+                elif cmd_name == "transfer":
+                    nested_dict[cmd_name] = WordCompleter(profiles)
+                else:
+                    nested_dict[cmd_name] = None
 
     return NestedCompleter.from_nested_dict(nested_dict)
 
@@ -90,13 +81,10 @@ def interactive_session(api: AIStudioDriveManager, state: dict, project_path: Pa
 
     UI.info(f"[Chat] Iniciando sesión con chat_id {state.get('chat_id')}...")
 
-    # Extraer lista de comandos directamente del registro del proyecto
     commands_list = list(registry.commands.keys())
     completer = create_interactive_completer(project_path, commands_list)
 
-    # Inicializar la sesión de prompt_toolkit con completador e historial en memoria
     session = PromptSession(completer=completer, history=InMemoryHistory())
-
     consecutive_errors = 0
 
     while True:

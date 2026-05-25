@@ -24,20 +24,18 @@ def cmd_help(ctx: SessionContext, args: list[str]):
     table.add_column("Comando(s)", style="bold green", width=25)
     table.add_column("Descripción", style="white")
 
-    # Agrupamos los nombres que comparten la misma función de manejo (alias)
     handler_to_names = {}
     for name, meta in registry.commands.items():
         handler_to_names.setdefault(meta.handler, []).append(name)
 
-    # Ordenamos los grupos alfabéticamente por su alias principal
     sorted_groups = sorted(
         handler_to_names.items(), key=lambda item: sorted(item[1])[0]
     )
 
     for handler, names in sorted_groups:
         meta = registry.commands[names[0]]
-        # Formato de alias: "exit, quit"
-        aliases_str = ", ".join(sorted(names))
+        # Representa visualmente los namespaces internos con un formato amigable para terminal
+        aliases_str = ", ".join(sorted(names)).replace(":", " ")
         table.add_row(aliases_str, meta.description)
 
     console.print("")

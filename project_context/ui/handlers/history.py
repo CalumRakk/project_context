@@ -16,20 +16,28 @@ def cmd_save(ctx: SessionContext, args: list[str]):
 
 @registry.register("monitor", require_chat=True)
 def cmd_monitor(ctx: SessionContext, args: list[str]):
-    """Activa o desactiva el monitoreo automático de cambios en segundo plano."""
-    subcommand = args[0].lower() if args else ""
-    if subcommand == "on":
-        ctx.monitor.start_monitoring()
-        if not ctx.state.get("monitor_active"):
-            ctx.state["monitor_active"] = True
-            ctx.update_state(ctx.state)
-    elif subcommand == "off":
-        ctx.stop_monitor()
-        if ctx.state.get("monitor_active"):
-            ctx.state["monitor_active"] = False
-            ctx.update_state(ctx.state)
-    else:
-        UI.warn("Uso: monitor on | off")
+    """Muestra instrucciones de uso para el monitoreo en segundo plano."""
+    UI.warn("Uso: monitor on | off")
+
+
+@registry.register("monitor:on", require_chat=True)
+def cmd_monitor_on(ctx: SessionContext, args: list[str]):
+    """Activa el monitoreo automático de cambios en segundo plano."""
+    ctx.monitor.start_monitoring()
+    if not ctx.state.get("monitor_active"):
+        ctx.state["monitor_active"] = True
+        ctx.update_state(ctx.state)
+        UI.success("Monitoreo automático activado.")
+
+
+@registry.register("monitor:off", require_chat=True)
+def cmd_monitor_off(ctx: SessionContext, args: list[str]):
+    """Desactiva el monitoreo automático de cambios en segundo plano."""
+    ctx.stop_monitor()
+    if ctx.state.get("monitor_active"):
+        ctx.state["monitor_active"] = False
+        ctx.update_state(ctx.state)
+        UI.success("Monitoreo automático desactivado.")
 
 
 @registry.register("history", require_chat=True)

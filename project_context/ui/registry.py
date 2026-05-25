@@ -47,7 +47,6 @@ class CommandMetadata:
         self.allow_in_vanish = allow_in_vanish
         self.manage_monitor = manage_monitor
 
-        # Intentar extraer la primera línea del docstring si no se pasa descripción explícita
         if description:
             self.description = description
         elif handler.__doc__:
@@ -85,7 +84,20 @@ class CommandRegistry:
     def execute(
         self, name: str, ctx: SessionContext, args_list: List[str]
     ) -> Optional[bool]:
-        cmd_meta = self.commands.get(name)
+        cmd_meta = None
+        resolved_args = args_list
+
+        # Enrutamiento jerárquico dinámico (Option B Namespace Routing)
+        if args_list:
+            subcommand_candidate = f"{name}:{args_list[0].lower()}"
+            if subcommand_candidate in self.commands:
+                cmd_meta = self.commands[subcommand_candidate]
+                resolved_args = args_list[1:]  # Consumimos el subcomando
+
+        # Fallback al comando base en caso de no haber subcomando
+        if not cmd_meta:
+            cmd_meta = self.commands.get(name)
+
         if not cmd_meta:
             raise InvalidCommandArgumentError(f"Comando desconocido: '{name}'")
 
@@ -103,7 +115,7 @@ class CommandRegistry:
             ctx.stop_monitor()
 
         try:
-            return cmd_meta.handler(ctx, args_list)
+            return cmd_meta.handler(ctx, resolved_args)
         finally:
             if cmd_meta.manage_monitor:
                 ctx.start_monitor()

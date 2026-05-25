@@ -26,9 +26,10 @@ from project_context.utils import (
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
+
 def create_default_run_settings() -> RunSettings:
     """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
-    thinkingLevel="THINKING_MEDIUM"
+    thinkingLevel = "THINKING_MEDIUM"
     return RunSettings(
         model="models/gemini-3.5-flash",
         temperature=1.0,
@@ -36,8 +37,9 @@ def create_default_run_settings() -> RunSettings:
         topK=64,
         maxOutputTokens=65536,
         thinkingBudget=None,
-        thinkingLevel=thinkingLevel
+        thinkingLevel=thinkingLevel,
     )
+
 
 def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
     """
@@ -110,7 +112,9 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     context_items = state.get("context_items", {"files": [], "folders": []})
     has_custom_focus = bool(context_items.get("files") or context_items.get("folders"))
 
-    scope_name = "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
+    scope_name = (
+        "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
+    )
 
     UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
 
@@ -136,10 +140,7 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         with api.modify_chat(chat_id) as chat_data:
             updated_metadata = False
             for chunk in chat_data.chunkedPrompt.chunks:
-                if (
-                    isinstance(chunk, ChunksDocument)
-                    and chunk.file_id == file_id
-                ):
+                if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
                     chunk.tokenCount = new_tokens
                     updated_metadata = True
                     break
@@ -158,6 +159,8 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
 
     return state
+
+
 def sync_context(
     api: AIStudioDriveManager, project_path: Path
 ) -> Tuple[ChunksDocument, str]:
@@ -332,7 +335,9 @@ def resolve_image_paths(
     return found_paths, missing_refs
 
 
-def extract_chat_assets(api: AIStudioDriveManager, chat_id: str) -> Tuple[ChatIAStudio, Dict]:
+def extract_chat_assets(
+    api: AIStudioDriveManager, chat_id: str
+) -> Tuple[ChatIAStudio, Dict]:
     """
     Descarga el JSON del chat y los contenidos binarios referenciados.
     Retorna el chat y un diccionario con los assets en memoria.
@@ -343,21 +348,25 @@ def extract_chat_assets(api: AIStudioDriveManager, chat_id: str) -> Tuple[ChatIA
 
     assets = {}
     for chunk in chat_data.chunkedPrompt.chunks:
-        file_id =  chunk.file_id if chunk.is_file_reference else None
+        file_id = chunk.file_id if chunk.is_file_reference else None
 
         if file_id and file_id not in assets:
             try:
                 # Obtener la metadata explícita para asegurar que tenemos el mimeType original
-                metadata = api.gdm.service.files().get(
-                    fileId=file_id, fields="id, name, mimeType"
-                ).execute()
+                metadata = (
+                    api.gdm.service.files()
+                    .get(fileId=file_id, fields="id, name, mimeType")
+                    .execute()
+                )
 
                 content_bytes = api.gdm.get_file_content(file_id)
                 if content_bytes:
                     assets[file_id] = {
                         "name": metadata.get("name", f"asset_{file_id}"),
-                        "mimeType": metadata.get("mimeType", "application/octet-stream"),
-                        "bytes": content_bytes
+                        "mimeType": metadata.get(
+                            "mimeType", "application/octet-stream"
+                        ),
+                        "bytes": content_bytes,
                     }
                 else:
                     UI.warn(f"No se pudo descargar el binario del archivo: {file_id}")
@@ -368,10 +377,7 @@ def extract_chat_assets(api: AIStudioDriveManager, chat_id: str) -> Tuple[ChatIA
 
 
 def transfer_chat_to_profile(
-    api: AIStudioDriveManager,
-    state: Dict,
-    project_path: Path,
-    target_profile: str
+    api: AIStudioDriveManager, state: Dict, project_path: Path, target_profile: str
 ) -> Tuple[AIStudioDriveManager, Dict]:
     """
     Realiza la migración de cuenta, sube los archivos, parchea el JSON
@@ -397,7 +403,9 @@ def transfer_chat_to_profile(
     # Snapshot de seguridad si el Perfil B ya tenía un historial para este proyecto
     target_state = load_project_context_state(project_path)
     if target_state and target_state.get("chat_id"):
-        UI.warn("El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo...")
+        UI.warn(
+            "El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo..."
+        )
         backup_monitor = SnapshotManager(new_api, project_path, target_state)
         backup_monitor.create_named_snapshot("Backup previo a migración entrante")
 
@@ -408,12 +416,14 @@ def transfer_chat_to_profile(
             folder_id=new_api.ai_studio_folder,
             file_name=asset_data["name"],
             content=asset_data["bytes"],
-            mime_type=asset_data["mimeType"]
+            mime_type=asset_data["mimeType"],
         )
         if new_file and "id" in new_file:
             id_map[old_id] = new_file["id"]
         else:
-            raise ValueError(f"Fallo al subir el archivo {asset_data['name']} al nuevo perfil.")
+            raise ValueError(
+                f"Fallo al subir el archivo {asset_data['name']} al nuevo perfil."
+            )
 
     UI.info("Parcheando JSON del chat con los nuevos IDs de Drive...")
     for chunk in chat_data.chunkedPrompt.chunks:
@@ -434,11 +444,10 @@ def transfer_chat_to_profile(
         "md5": old_md5,
         "chat_id": new_chat_id,
         "file_id": id_map.get(old_file_id) if old_file_id else None,
-        "context_items": state.get("context_items", {"files": [], "folders": []})
+        "context_items": state.get("context_items", {"files": [], "folders": []}),
     }
 
     return new_api, new_state
-
 
 
 def parse_story_file(file_path: Path) -> Dict:
@@ -452,24 +461,30 @@ def parse_story_file(file_path: Path) -> Dict:
     content = file_path.read_text(encoding="utf-8")
 
     # Buscar todas las etiquetas para advertir si hay más de una
-    matches = list(re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE))
+    matches = list(
+        re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE)
+    )
 
     if not matches:
-        raise ValueError(f"No se encontró la etiqueta <mejora>...</mejora> en {file_path.name}.")
+        raise ValueError(
+            f"No se encontró la etiqueta <mejora>...</mejora> en {file_path.name}."
+        )
 
     if len(matches) > 1:
-        UI.warn(f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada.")
+        UI.warn(
+            f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada."
+        )
 
     # Tomamos la última etiqueta como la activa
     match = matches[-1]
     instruction = match.group(1).strip()
 
-    pre_text = content[:match.start()]
-    post_text = content[match.end():]
+    pre_text = content[: match.start()]
+    post_text = content[match.end() :]
 
     # Función auxiliar para limpiar encabezados markdown y ver si realmente hay texto
     def clean_md(text: str) -> str:
-        return re.sub(r'(?m)^#+ .*$', '', text).strip()
+        return re.sub(r"(?m)^#+ .*$", "", text).strip()
 
     clean_pre = clean_md(pre_text)
     clean_post = clean_md(post_text)
@@ -493,7 +508,7 @@ def parse_story_file(file_path: Path) -> Dict:
         "mode": mode,
         "instruction": instruction,
         "anchor_pre": anchor_pre.split("\n")[-1],
-        "anchor_post": anchor_post
+        "anchor_post": anchor_post,
     }
 
 
@@ -505,7 +520,7 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
     instruction = parsed_data["instruction"]
 
     base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
-    base_rule= (
+    base_rule = (
         "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
         "Mantén la coherencia con el contexto global y pioriza escribir dialogos.\n\n"
     )
@@ -515,8 +530,8 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
 
     elif mode == "continuacion":
         return (
-            f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}" +
-            "La mejora empieza exactamente despues del siguiente texto:\n"
+            f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}"
+            + "La mejora empieza exactamente despues del siguiente texto:\n"
             "```text\n"
             f"{parsed_data['anchor_pre']}\n"
             "```\n\n"
@@ -524,8 +539,8 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
 
     elif mode == "edicion":
         return (
-            base_prompt +
-            "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
+            base_prompt
+            + "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
             "Tienes que desarrollar y mejorar el siguiente borrador, agregando diálogos o descripciones si es necesario, "
             "y hacer que encaje perfectamente como puente entre el texto anterior y el texto posterior.\n\n"
             "Instrucciones / Borrador a mejorar:\n"
@@ -547,7 +562,7 @@ def apply_story_update(
     api: AIStudioDriveManager,
     project_path: Path,
     state: Dict,
-    media_root_hint: Optional[Path] = None
+    media_root_hint: Optional[Path] = None,
 ) -> Dict:
     """
     Actualiza el contexto general, analiza el archivo de historia ancla,
@@ -563,7 +578,7 @@ def apply_story_update(
     anchor_file = project_path / anchor_rel_path
     UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
 
-    # 1. Parsear el archivo local
+    # Parsear el archivo local
     try:
         parsed_data = parse_story_file(anchor_file)
     except Exception as e:
@@ -573,7 +588,7 @@ def apply_story_update(
     UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
     instruction_text = parsed_data["instruction"]
 
-    # 2. Extraer y resolver referencias a imágenes de la etiqueta <mejora>
+    # Extraer y resolver referencias a imágenes de la etiqueta <mejora>
     refs = extract_image_references_from_text(instruction_text)
     resolved_images = []
 
@@ -592,22 +607,24 @@ def apply_story_update(
         if candidate.exists() and candidate.is_file():
             resolved_images.append((candidate, ref_text))
         else:
-            UI.warn(f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'")
+            UI.warn(
+                f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'"
+            )
 
-    # 3. Sincronizar las imágenes en Drive (Reutilizando existentes)
+    # Sincronizar las imágenes en Drive (Reutilizando existentes)
     image_chunks = []
     if resolved_images:
         UI.info(f"Sincronizando {len(resolved_images)} recursos visuales detectados...")
         image_chunks = sync_story_images(api, project_path, resolved_images)
 
-    # 4. Generar el Prompt de Texto Dinámico
+    # Generar el Prompt de Texto Dinámico
     anchor_file_path = anchor_file.relative_to(project_path).as_posix()
     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
 
-    # 5. Sincronizar contexto global del código fuente (SSoT)
+    # Sincronizar contexto global del código fuente (SSoT)
     state = update_context(api, project_path, state)
 
-    # 6. Modificar el Chat en Drive
+    # Modificar el Chat en Drive
     chat_id = state["chat_id"]
     chat_data = api.get_chat_ia_studio(chat_id)
     if not chat_data:
@@ -632,16 +649,19 @@ def apply_story_update(
 
     # Escribir el nuevo JSON en Drive
     if api.update_chat_file(chat_id, chat_data):
-        UI.success("¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
+        UI.success(
+            "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
+        )
     else:
         UI.error("Error al actualizar el chat de historia en Drive.")
 
     return state
 
+
 def sync_story_images(
     api: AIStudioDriveManager,
     project_path: Path,
-    resolved_images: List[Tuple[Path, str]]
+    resolved_images: List[Tuple[Path, str]],
 ) -> list:
     """
     Sincroniza un listado de imágenes locales con Drive de forma ligera.
@@ -652,12 +672,12 @@ def sync_story_images(
     for img_path, original_ref in resolved_images:
         drive_name = f"ctx_{img_path.name}"
 
-        # 1. Comprobar existencia previa usando metadatos rápidos
+        # Comprobar existencia previa usando metadatos rápidos
         drive_file = api.gdm.find_item_by_name(
             drive_name, parent_id=api.ai_studio_folder
         )
 
-        # 2. Subir binario únicamente si no existía en la carpeta de Drive
+        # Subir binario únicamente si no existía en la carpeta de Drive
         if not drive_file:
             UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
             with open(img_path, "rb") as f:

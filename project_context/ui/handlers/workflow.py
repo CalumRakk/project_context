@@ -76,51 +76,65 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
         ctx.update_state(new_state)
 
 
+@registry.register(
+    "commit:done", "commit:restore", "commit:clear", "commit:rm", require_chat=True
+)
+def cmd_commit_restore(ctx: SessionContext, args: list[str]):
+    """Restaura el chat original desactivando el modo de commit rápido."""
+    is_commit_mode = ctx.state.get("commit_mode", False)
+    if not is_commit_mode:
+        UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
+        return
+
+    UI.info("Restaurando chat original desde copia de seguridad...")
+    stashed_json = load_chat_stash(ctx.project_path)
+
+    if not stashed_json:
+        ctx.state["commit_mode"] = False
+        ctx.update_state(ctx.state)
+        raise ChatSessionError(
+            "No se encontró el respaldo del chat en almacenamiento local."
+        )
+
+    ctx.api.gdm.update_file_from_memory(
+        file_id=ctx.state["chat_id"],
+        content=stashed_json,
+        mime_type=ctx.api.MIME_PROMPT,
+    )
+
+    clear_chat_stash(ctx.project_path)
+    ctx.state["commit_mode"] = False
+    ctx.update_state(ctx.state)
+
+    UI.success("¡Chat original restaurado!")
+    UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+
+
+@registry.register("commit:all", require_chat=True)
+def cmd_commit_all(ctx: SessionContext, args: list[str]):
+    """Añade todas las modificaciones al stage de git y genera la sugerencia."""
+    UI.info("Añadiendo todos los cambios al stage (git add -A)...")
+    stage_all_changes(ctx.project_path)
+    return cmd_commit(ctx, [])
+
+
 @registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: list[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
-    subcommand = args[0].lower() if args else ""
     is_commit_mode = ctx.state.get("commit_mode", False)
-
-    if subcommand in ["clear", "done", "restore", "rm"]:
-        if not is_commit_mode:
-            UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
-            return
-
-        UI.info("Restaurando chat original desde copia de seguridad...")
-        stashed_json = load_chat_stash(ctx.project_path)
-
-        if not stashed_json:
-            ctx.state["commit_mode"] = False
-            ctx.update_state(ctx.state)
-            raise ChatSessionError(
-                "No se encontró el respaldo del chat en almacenamiento local."
-            )
-
-        ctx.api.gdm.update_file_from_memory(
-            file_id=ctx.state["chat_id"],
-            content=stashed_json,
-            mime_type=ctx.api.MIME_PROMPT,
-        )
-
-        clear_chat_stash(ctx.project_path)
-        ctx.state["commit_mode"] = False
-        ctx.update_state(ctx.state)
-
-        UI.success("¡Chat original restaurado!")
-        UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
-        return
-
     if is_commit_mode:
         UI.warn(
             "Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar."
         )
         return
 
-    if subcommand in ["-a", "--all", "all"]:
-        UI.info("Añadiendo todos los cambios al stage (git add -A)...")
-        stage_all_changes(ctx.project_path)
-        subcommand = ""
+    # Preservar compatibilidad con el paso de subcomandos heredados sin espacio de nombres
+    if args:
+        sub = args[0].lower()
+        if sub in ["clear", "done", "restore", "rm"]:
+            return cmd_commit_restore(ctx, args[1:])
+        elif sub in ["-a", "--all", "all"]:
+            return cmd_commit_all(ctx, args[1:])
 
     UI.info("Obteniendo cambios de Git...")
     prompt_text = generate_commit_prompt_text(ctx.project_path)
