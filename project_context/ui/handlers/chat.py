@@ -14,7 +14,7 @@ from project_context.utils import (
 
 
 @registry.register("clear", require_chat=True)
-def cmd_clear(ctx: SessionContext, args: str):
+def cmd_clear(ctx: SessionContext, args: list[str]):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
@@ -22,53 +22,61 @@ def cmd_clear(ctx: SessionContext, args: str):
     if ctx.api.clear_chat_ia_studio(chat_id):
         UI.success("Historial de mensajes limpiado en Drive.")
     else:
-        raise ChatSessionError("No se pudo limpiar el historial del chat en Google Drive.")
+        raise ChatSessionError(
+            "No se pudo limpiar el historial del chat en Google Drive."
+        )
 
 
 @registry.register("update", require_chat=True)
-def cmd_update(ctx: SessionContext, args: str):
-    args_list = args.strip().split()
-
-    # Filtrar argumentos para limpiar la presentación
-    clean_args_list = [arg for arg in args_list if arg not in ["--force", "-f", "force", "--run", "-r"]]
-    clean_args = " ".join(clean_args_list)
+def cmd_update(ctx: SessionContext, args: list[str]):
+    # args ya es una lista limpia
+    clean_args_list = [
+        arg for arg in args if arg not in ["--force", "-f", "force", "--run", "-r"]
+    ]
 
     if ctx.state.get("story_mode"):
         UI.info("Modo historia activo. Procesando actualización...")
         new_state = apply_story_update(
-            ctx.api,
-            ctx.project_path,
-            ctx.state,
-            media_root_hint=ctx.session_media_root
+            ctx.api, ctx.project_path, ctx.state, media_root_hint=ctx.session_media_root
         )
         ctx.update_state(new_state)
     else:
         new_state = update_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
 
-        has_focus = bool(ctx.state.get("context_items", {}).get("files") or ctx.state.get("context_items", {}).get("folders"))
-        if clean_args == "tree" or has_focus:
+        has_focus = bool(
+            ctx.state.get("context_items", {}).get("files")
+            or ctx.state.get("context_items", {}).get("folders")
+        )
+        if "tree" in clean_args_list or has_focus:
             UI.info("Árbol de archivos enviado:")
-            tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
+            tree_str = get_context_tree(
+                ctx.project_path, ctx.state.get("context_items")
+            )
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
 
+
 @registry.register("tokens", require_chat=True)
-def cmd_tokens(ctx: SessionContext, args: str):
-    val = args.strip()
-    if not val:
+def cmd_tokens(ctx: SessionContext, args: list[str]):
+    if not args:
         UI.warn("Uso: tokens <cantidad> (ej: tokens 150000 o tokens 150k)")
         return
 
+    val = args[0]
     try:
         tokens = human_to_int(val)
     except Exception:
-        raise InvalidCommandArgumentError("Formato de tokens no válido. Usa números enteros o notaciones como '150k'.")
+        raise InvalidCommandArgumentError(
+            "Formato de tokens no válido. Usa números enteros o notaciones como '150k'."
+        )
 
     chat_id = ctx.state.get("chat_id")
     file_id = ctx.state.get("file_id")
 
     if not chat_id or not file_id:
-        raise ChatSessionError("Falta información del chat o del archivo de contexto en el estado actual.")
+        raise ChatSessionError(
+            "Falta información del chat o del archivo de contexto en el estado actual."
+        )
 
     UI.info(f"Actualizando contador de tokens a [bold]{tokens}[/] en Google Drive...")
     try:
@@ -81,35 +89,38 @@ def cmd_tokens(ctx: SessionContext, args: str):
                     break
 
             if updated_metadata:
-                UI.success(f"Contador de tokens actualizado en Drive a: [bold]{tokens}[/]")
+                UI.success(
+                    f"Contador de tokens actualizado en Drive a: [bold]{tokens}[/]"
+                )
             else:
-                UI.warn("No se encontró el bloque de contexto del archivo en el chat actual.")
+                UI.warn(
+                    "No se encontró el bloque de contexto del archivo en el chat actual."
+                )
     except Exception as e:
-        raise ChatSessionError(f"Error al intentar modificar los tokens en el chat: {e}")
+        raise ChatSessionError(
+            f"Error al intentar modificar los tokens en el chat: {e}"
+        )
 
 
 @registry.register("insert", "msg", require_chat=True)
-def cmd_insert(ctx: SessionContext, args: str):
-    args = args.strip()
+def cmd_insert(ctx: SessionContext, args: list[str]):
     if not args:
         UI.warn("Uso: insert [user|ia|model] <mensaje>")
         return
 
-    parts = args.split(" ", 1)
-    role_input = parts[0].lower()
-
+    role_input = args[0].lower()
     user_aliases = {"user", "usuario", "u"}
     model_aliases = {"model", "ia", "assistant", "modelo", "i"}
 
     if role_input in user_aliases:
         role = "user"
-        message = parts[1].strip() if len(parts) > 1 else ""
+        message = " ".join(args[1:])
     elif role_input in model_aliases:
         role = "model"
-        message = parts[1].strip() if len(parts) > 1 else ""
+        message = " ".join(args[1:])
     else:
         role = "user"
-        message = args
+        message = " ".join(args)
 
     if not message:
         raise InvalidCommandArgumentError("El cuerpo del mensaje no puede estar vacío.")
@@ -144,22 +155,23 @@ def cmd_insert(ctx: SessionContext, args: str):
 
     if success:
         UI.success(f"Mensaje insertado con rol '{role}'.")
-
-        UI.info("Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios.")
+        UI.info(
+            "Recuerda recargar la pestaña en Google AI Studio (F5) para aplicar los cambios."
+        )
     else:
         raise ChatSessionError("Error al escribir el mensaje en Google Drive.")
 
 
 @registry.register("run", "r", require_chat=True)
-def cmd_run(ctx: SessionContext, args: str):
+def cmd_run(ctx: SessionContext, args: list[str]):
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No se encontró el chat_id en el estado actual.")
 
 
 @registry.register("vanish", require_chat=True, allow_in_vanish=True)
-def cmd_vanish(ctx: SessionContext, args: str):
-    subcommand = args.strip().lower()
+def cmd_vanish(ctx: SessionContext, args: list[str]):
+    subcommand = args[0].lower() if args else ""
 
     if not subcommand:
         is_vanished = ctx.state.get("vanished", False)
@@ -172,35 +184,38 @@ def cmd_vanish(ctx: SessionContext, args: str):
 
         chat_id = ctx.state.get("chat_id")
         if not chat_id:
-            raise ChatSessionError("No se detectó un chat activo en el estado del proyecto.")
+            raise ChatSessionError(
+                "No se detectó un chat activo en el estado del proyecto."
+            )
 
         UI.info("Guardando copia de seguridad del chat (Vanish Stash)...")
         chat_data = ctx.api.get_chat_ia_studio(chat_id)
         if not chat_data:
-            raise ChatSessionError("No se pudo descargar el chat desde Drive para realizar el respaldo.")
+            raise ChatSessionError(
+                "No se pudo descargar el chat desde Drive para realizar el respaldo."
+            )
 
         save_vanish_stash(ctx.project_path, chat_data.model_dump_json())
 
         UI.info("Estableciendo pantalla limpia en Google Drive...")
-        vanish_chunks = [
-            ChunksText(
-                text="✨ vanish off ✨",
-                role="user"
-            )
-        ]
+        vanish_chunks = [ChunksText(text="✨ vanish off ✨", role="user")]
         chat_data.chunkedPrompt.chunks = vanish_chunks  # type:ignore
         chat_data.chunkedPrompt.pendingInputs = []
 
         if ctx.api.update_chat_file(chat_id, chat_data):
             ctx.state["vanished"] = True
             ctx.update_state(ctx.state)
-            UI.success("Modo Vanish activado. La conversación se encuentra oculta en Drive.")
-
-
-            UI.info("Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia.")
+            UI.success(
+                "Modo Vanish activado. La conversación se encuentra oculta en Drive."
+            )
+            UI.info(
+                "Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia."
+            )
         else:
             clear_vanish_stash(ctx.project_path)
-            raise ChatSessionError("Ocurrió un problema al actualizar el chat en Drive para activar vanish.")
+            raise ChatSessionError(
+                "Ocurrió un problema al actualizar el chat en Drive para activar vanish."
+            )
 
     elif subcommand == "off":
         if not ctx.state.get("vanished", False):
@@ -213,14 +228,14 @@ def cmd_vanish(ctx: SessionContext, args: str):
         if not stashed_json:
             ctx.state["vanished"] = False
             ctx.update_state(ctx.state)
-            raise ChatSessionError("No se encontró el archivo de respaldo de Vanish para restaurar.")
+            raise ChatSessionError(
+                "No se encontró el archivo de respaldo de Vanish para restaurar."
+            )
 
         UI.info("Restaurando conversación y contexto original...")
         assert chat_id is not None
         success = ctx.api.gdm.update_file_from_memory(
-            file_id=chat_id,
-            content=stashed_json,
-            mime_type=ctx.api.MIME_PROMPT
+            file_id=chat_id, content=stashed_json, mime_type=ctx.api.MIME_PROMPT
         )
 
         if success:
@@ -228,9 +243,14 @@ def cmd_vanish(ctx: SessionContext, args: str):
             ctx.state["vanished"] = False
             ctx.update_state(ctx.state)
             UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
-
-            UI.info("Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado.")
+            UI.info(
+                "Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado."
+            )
         else:
-            raise ChatSessionError("No se pudo escribir el archivo original en Drive para desactivar vanish.")
+            raise ChatSessionError(
+                "No se pudo escribir el archivo original en Drive para desactivar vanish."
+            )
     else:
-        raise InvalidCommandArgumentError("Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'")
+        raise InvalidCommandArgumentError(
+            "Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'"
+        )

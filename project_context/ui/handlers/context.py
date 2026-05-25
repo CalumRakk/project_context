@@ -5,25 +5,23 @@ from project_context.utils import UI, console, get_context_tree
 
 
 @registry.register("tree", require_chat=True)
-def cmd_tree(ctx: SessionContext, args: str):
-    """Muestra el árbol de directorio que la IA está viendo actualmente."""
+def cmd_tree(ctx: SessionContext, args: list[str]):
     UI.info("Generando árbol del contexto actual...")
     tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
     console.print(f"\n[cyan]{tree_str}[/cyan]\n")
 
 
 @registry.register("context", require_chat=True)
-def cmd_context(ctx: SessionContext, args: str):
+def cmd_context(ctx: SessionContext, args: list[str]):
     if "context_items" not in ctx.state:
         ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
 
-    parts = args.strip().split()
-    if not parts:
+    if not args:
         UI.warn("Uso: context <add|rm|ls|reset> [rutas...]")
         return
 
-    subcmd = parts[0].lower()
-    targets = parts[1:]
+    subcmd = args[0].lower()
+    targets = args[1:]
     items = ctx.state["context_items"]
 
     if "exclusions" not in items:
@@ -63,13 +61,17 @@ def cmd_context(ctx: SessionContext, args: str):
         if added_count > 0:
             ctx.update_state(ctx.state)
             UI.success(f"Se añadieron {added_count} elementos al contexto.")
-            UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
+            UI.info(
+                "Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive."
+            )
         else:
             UI.info("No se añadieron elementos nuevos.")
 
     elif subcmd in ["rm", "remove"]:
         if not targets:
-            UI.warn("Especifica qué quieres eliminar o excluir. Ej: context rm viajes/cascada")
+            UI.warn(
+                "Especifica qué quieres eliminar o excluir. Ej: context rm viajes/cascada"
+            )
             return
 
         removed = 0
@@ -83,7 +85,9 @@ def cmd_context(ctx: SessionContext, args: str):
             if rel_path in items["exclusions"]:
                 items["exclusions"].remove(rel_path)
                 removed += 1
-                UI.success(f"Se eliminó la exclusión sobre: '{rel_path}' (volverá a ser incluido).")
+                UI.success(
+                    f"Se eliminó la exclusión sobre: '{rel_path}' (volverá a ser incluido)."
+                )
                 continue
 
             if rel_path in items["files"]:
@@ -111,7 +115,9 @@ def cmd_context(ctx: SessionContext, args: str):
 
                 items["exclusions"] = updated_exclusions
                 if cascade_count > 0:
-                    UI.info(f"Limpieza en cascada: Se eliminaron {cascade_count} exclusiones huérfanas bajo '{rel_path}'.")
+                    UI.info(
+                        f"Limpieza en cascada: Se eliminaron {cascade_count} exclusiones huérfanas bajo '{rel_path}'."
+                    )
                 continue
 
             target_path = Path(rel_path)
@@ -129,13 +135,19 @@ def cmd_context(ctx: SessionContext, args: str):
                 if rel_path not in items["exclusions"]:
                     items["exclusions"].append(rel_path)
                     removed += 1
-                    UI.success(f"Se excluyó '{rel_path}' del análisis de su carpeta contenedora.")
+                    UI.success(
+                        f"Se excluyó '{rel_path}' del análisis de su carpeta contenedora."
+                    )
             else:
-                UI.warn(f"El elemento '{rel_path}' no está en el enfoque ni pertenece a ninguna carpeta activa.")
+                UI.warn(
+                    f"El elemento '{rel_path}' no está en el enfoque ni pertenece a ninguna carpeta activa."
+                )
 
         if removed > 0:
             ctx.update_state(ctx.state)
-            UI.info("Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive.")
+            UI.info(
+                "Ejecuta [bold cyan]update[/] para sincronizar los cambios con Drive."
+            )
 
     elif subcmd in ["ls", "list"]:
         has_files = len(items["files"]) > 0
@@ -143,7 +155,9 @@ def cmd_context(ctx: SessionContext, args: str):
         has_exclusions = len(items["exclusions"]) > 0
 
         if not has_files and not has_folders:
-            UI.info("Contexto actual: [bold green]Proyecto Completo[/] (No hay filtros específicos).")
+            UI.info(
+                "Contexto actual: [bold green]Proyecto Completo[/] (No hay filtros específicos)."
+            )
             return
 
         console.print("\n[bold cyan]Contexto Específico (Stage):[/]")

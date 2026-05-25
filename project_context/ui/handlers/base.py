@@ -30,12 +30,12 @@ def command_help():
 
 
 @registry.register("exit", "quit", manage_monitor=False, allow_in_vanish=True)
-def cmd_exit(ctx: SessionContext, args: str):
+def cmd_exit(ctx: SessionContext, args: list[str]):
     ctx.stop_monitor()
     UI.info("Cerrando sesión...")
     return False
 
 
 @registry.register("help", allow_in_vanish=True)
-def cmd_help(ctx: SessionContext, args: str):
+def cmd_help(ctx: SessionContext, args: list[str]):
     command_help()

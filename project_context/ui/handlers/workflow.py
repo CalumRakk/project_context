@@ -60,24 +60,27 @@ def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
 
 
 @registry.register("edit", require_chat=True)
-def cmd_edit(ctx: SessionContext, args: str):
+def cmd_edit(ctx: SessionContext, args: list[str]):
     from project_context.ui.handlers.base import command_help
+
     run_editor_mode(ctx.api, ctx.state["chat_id"])
     UI.info("Reactivando monitor de historial automático...")
     command_help()
 
 
 @registry.register("reset", require_chat=True)
-def cmd_reset(ctx: SessionContext, args: str):
-    confirm = console.input("[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]")
+def cmd_reset(ctx: SessionContext, args: list[str]):
+    confirm = console.input(
+        "[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]"
+    )
     if confirm.lower() == "s":
         new_state = rebuild_project_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
 
 
 @registry.register("commit", require_chat=True)
-def cmd_commit(ctx: SessionContext, args: str):
-    subcommand = args.strip().lower()
+def cmd_commit(ctx: SessionContext, args: list[str]):
+    subcommand = args[0].lower() if args else ""
     is_commit_mode = ctx.state.get("commit_mode", False)
 
     if subcommand in ["clear", "done", "restore", "rm"]:
@@ -91,12 +94,14 @@ def cmd_commit(ctx: SessionContext, args: str):
         if not stashed_json:
             ctx.state["commit_mode"] = False
             ctx.update_state(ctx.state)
-            raise ChatSessionError("No se encontró el respaldo del chat en almacenamiento local.")
+            raise ChatSessionError(
+                "No se encontró el respaldo del chat en almacenamiento local."
+            )
 
         ctx.api.gdm.update_file_from_memory(
             file_id=ctx.state["chat_id"],
             content=stashed_json,
-            mime_type=ctx.api.MIME_PROMPT
+            mime_type=ctx.api.MIME_PROMPT,
         )
 
         clear_chat_stash(ctx.project_path)
@@ -108,7 +113,9 @@ def cmd_commit(ctx: SessionContext, args: str):
         return
 
     if is_commit_mode:
-        UI.warn("Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar.")
+        UI.warn(
+            "Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar."
+        )
         return
 
     if subcommand in ["-a", "--all", "all"]:
@@ -121,13 +128,19 @@ def cmd_commit(ctx: SessionContext, args: str):
 
     if not prompt_text:
         if has_unstaged_changes(ctx.project_path):
-            UI.warn("No hay archivos en stage (git add), pero hay modificaciones locales.")
-            confirm = console.input("[bold yellow]¿Quieres añadirlos todos al stage ahora? (s/n): [/]")
+            UI.warn(
+                "No hay archivos en stage (git add), pero hay modificaciones locales."
+            )
+            confirm = console.input(
+                "[bold yellow]¿Quieres añadirlos todos al stage ahora? (s/n): [/]"
+            )
             if confirm.lower() == "s":
                 stage_all_changes(ctx.project_path)
                 prompt_text = generate_commit_prompt_text(ctx.project_path)
                 if not prompt_text:
-                    raise ChatSessionError("No se pudo generar el diff de Git después del stage forzado.")
+                    raise ChatSessionError(
+                        "No se pudo generar el diff de Git después del stage forzado."
+                    )
             else:
                 UI.info("Operación cancelada.")
                 return
@@ -139,7 +152,9 @@ def cmd_commit(ctx: SessionContext, args: str):
     chat_id = ctx.state["chat_id"]
     chat_data = ctx.api.get_chat_ia_studio(chat_id)
     if not chat_data:
-        raise ChatSessionError("No se pudo descargar el chat para realizar la copia de respaldo.")
+        raise ChatSessionError(
+            "No se pudo descargar el chat para realizar la copia de respaldo."
+        )
 
     save_chat_stash(ctx.project_path, chat_data.model_dump_json())
 
@@ -157,7 +172,6 @@ def cmd_commit(ctx: SessionContext, args: str):
 
     fast_chunks.append(ChunksText(text=prompt_text, role="user"))
 
-    # Se actualiza el modelo y se ejecuta el saneamiento de campos para el modo rápido
     chat_data.runSettings.model = "models/gemini-flash-lite-latest"
     chat_data.runSettings.sanitize()
 
@@ -174,17 +188,20 @@ def cmd_commit(ctx: SessionContext, args: str):
 
 
 @registry.register("images", require_chat=True)
-def cmd_images(ctx: SessionContext, args: str):
+def cmd_images(ctx: SessionContext, args: list[str]):
     if not args:
         UI.warn("Uso: images <archivo.md>")
         return
 
+    filename = args[0]
     try:
         found_paths, missing = resolve_image_paths(
-            ctx.project_path, args, ctx.session_media_root
+            ctx.project_path, filename, ctx.session_media_root
         )
     except FileNotFoundError:
-        raise InvalidCommandArgumentError(f"El archivo '{args}' no existe en el proyecto.")
+        raise InvalidCommandArgumentError(
+            f"El archivo '{filename}' no existe en el proyecto."
+        )
 
     if missing and not ctx.session_media_root:
         UI.warn(f"No se encontraron: {', '.join(missing[:3])}...")
@@ -192,29 +209,29 @@ def cmd_images(ctx: SessionContext, args: str):
 
         if ctx.session_media_root:
             found_paths_2, missing_2 = resolve_image_paths(
-                ctx.project_path, args, ctx.session_media_root
+                ctx.project_path, filename, ctx.session_media_root
             )
             found_paths = list(set(found_paths + found_paths_2))
 
     if not found_paths:
-        raise InvalidCommandArgumentError("No se pudo resolver ninguna ruta de imagen válida en el disco.")
+        raise InvalidCommandArgumentError(
+            "No se pudo resolver ninguna ruta de imagen válida en el disco."
+        )
 
     chunks_to_add = []
     chunks_to_add.append(
         ChunksText(
-            text=IMAGE_INSERTION_PROMPT.format(filename=args),
+            text=IMAGE_INSERTION_PROMPT.format(filename=filename),
             role="user",
         )
     )
 
-    image_chunks = sync_images(
-        ctx.api, ctx.project_path, specific_files=found_paths
-    )
+    image_chunks = sync_images(ctx.api, ctx.project_path, specific_files=found_paths)
     chunks_to_add.extend(image_chunks)
 
     chunks_to_add.append(
         ChunksText(
-            text=IMAGE_INSERTION_RESPONSE.format(filename=args),
+            text=IMAGE_INSERTION_RESPONSE.format(filename=filename),
             role="model",
         )
     )
@@ -226,36 +243,44 @@ def cmd_images(ctx: SessionContext, args: str):
 
 
 @registry.register("story", require_chat=True)
-def cmd_story(ctx: SessionContext, args: str):
-    args = args.strip()
-
+def cmd_story(ctx: SessionContext, args: list[str]):
     if not args:
         if ctx.state.get("story_mode"):
-            UI.info(f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]")
+            UI.info(
+                f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]"
+            )
         UI.warn("Uso: story <archivo.md> o story exit")
         return
 
-    if args.lower() in ["exit", "quit", "off"]:
+    target = args[0]
+
+    if target.lower() in ["exit", "quit", "off"]:
         ctx.state["story_mode"] = False
         ctx.state["story_anchor"] = None
         ctx.update_state(ctx.state)
         UI.success("Has salido del modo historia.")
         return
 
-    target_file = ctx.project_path / args
+    target_file = ctx.project_path / target
     if not target_file.exists():
-        raise InvalidCommandArgumentError(f"El archivo '{args}' no existe en el proyecto.")
+        raise InvalidCommandArgumentError(
+            f"El archivo '{target}' no existe en el proyecto."
+        )
 
     rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
     context_items = ctx.state.get("context_items", {"files": [], "folders": []})
-    has_specific_focus = bool(context_items.get("files") or context_items.get("folders"))
+    has_specific_focus = bool(
+        context_items.get("files") or context_items.get("folders")
+    )
 
     if has_specific_focus:
         if rel_path not in context_items["files"]:
             context_items["files"].append(rel_path)
             ctx.state["context_items"] = context_items
             ctx.update_state(ctx.state)
-            UI.info(f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico.")
+            UI.info(
+                f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico."
+            )
 
     UI.info("Iniciando Modo Historia...")
     ctx.state["story_mode"] = True
@@ -263,25 +288,24 @@ def cmd_story(ctx: SessionContext, args: str):
     ctx.update_state(ctx.state)
 
     new_state = apply_story_update(
-        ctx.api,
-        ctx.project_path,
-        ctx.state,
-        media_root_hint=ctx.session_media_root
+        ctx.api, ctx.project_path, ctx.state, media_root_hint=ctx.session_media_root
     )
     ctx.update_state(new_state)
 
 
 @registry.register("transfer", require_chat=True)
-def cmd_transfer(ctx: SessionContext, args: str):
-    target_profile = args.strip()
-    if not target_profile:
+def cmd_transfer(ctx: SessionContext, args: list[str]):
+    if not args:
         UI.warn("Uso: transfer <perfil_destino>")
         return
 
+    target_profile = args[0]
     current_profile = profile_manager.get_active_profile_name()
 
     if target_profile == current_profile:
-        raise InvalidCommandArgumentError("El perfil destino no puede ser el mismo que el actual.")
+        raise InvalidCommandArgumentError(
+            "El perfil destino no puede ser el mismo que el actual."
+        )
 
     if target_profile not in profile_manager.list_profiles():
         raise InvalidCommandArgumentError(
@@ -289,7 +313,9 @@ def cmd_transfer(ctx: SessionContext, args: str):
             f"Perfiles disponibles: {', '.join(profile_manager.list_profiles())}"
         )
 
-    confirm = console.input(f"[bold red]¿Migrar sesión de '{current_profile}' hacia '{target_profile}'? (s/n): [/]")
+    confirm = console.input(
+        f"[bold red]¿Migrar sesión de '{current_profile}' hacia '{target_profile}'? (s/n): [/]"
+    )
     if confirm.lower() != "s":
         UI.info("Transferencia cancelada.")
         return
@@ -305,20 +331,24 @@ def cmd_transfer(ctx: SessionContext, args: str):
         ctx.state = new_state
 
         from project_context.history import SnapshotManager
+
         ctx.monitor = SnapshotManager(new_api, ctx.project_path, new_state)
         ctx.update_state(new_state)
 
-        UI.success(f"¡Migración completada! Ahora estás operando nativamente como [bold]{target_profile}[/].")
-        UI.warn("RECUERDA: Ve a Google AI Studio, cambia a la cuenta correspondiente y abre el nuevo chat.")
+        UI.success(
+            f"¡Migración completada! Ahora estás operando nativamente como [bold]{target_profile}[]."
+        )
+        UI.warn(
+            "RECUERDA: Ve a Google AI Studio, cambia a la cuenta correspondiente y abre el nuevo chat."
+        )
 
     except Exception as e:
-        # Revertimos perfil activo en caso de excepción crítica para asegurar estado consistente
         profile_manager.set_active_profile(current_profile)
         raise ChatSessionError(f"Error crítico durante la transferencia: {e}")
 
 
 @registry.register("fix", require_chat=True)
-def cmd_fix(ctx: SessionContext, args: str):
+def cmd_fix(ctx: SessionContext, args: list[str]):
     UI.info("Analizando chat...")
     fixed_count = ctx.api.repair_chat_structure(ctx.state["chat_id"])
 

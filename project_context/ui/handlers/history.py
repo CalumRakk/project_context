@@ -6,21 +6,22 @@ from project_context.utils import UI, console
 
 
 @registry.register("save", require_chat=True)
-def cmd_save(ctx: SessionContext, args: str):
-    if not args.strip():
+def cmd_save(ctx: SessionContext, args: list[str]):
+    if not args:
         UI.warn("Debes proveer un mensaje: `save mi_cambio_importante`")
     else:
-        ctx.monitor.create_named_snapshot(args.strip())
+        ctx.monitor.create_named_snapshot(" ".join(args))
 
 
 @registry.register("monitor", require_chat=True)
-def cmd_monitor(ctx: SessionContext, args: str):
-    if args == "on":
+def cmd_monitor(ctx: SessionContext, args: list[str]):
+    subcommand = args[0].lower() if args else ""
+    if subcommand == "on":
         ctx.monitor.start_monitoring()
         if not ctx.state.get("monitor_active"):
             ctx.state["monitor_active"] = True
             ctx.update_state(ctx.state)
-    elif args == "off":
+    elif subcommand == "off":
         ctx.stop_monitor()
         if ctx.state.get("monitor_active"):
             ctx.state["monitor_active"] = False
@@ -30,7 +31,7 @@ def cmd_monitor(ctx: SessionContext, args: str):
 
 
 @registry.register("history", require_chat=True)
-def cmd_history(ctx: SessionContext, args: str):
+def cmd_history(ctx: SessionContext, args: list[str]):
     page_size = 10
     current_page = 0
 
@@ -90,9 +91,17 @@ def cmd_history(ctx: SessionContext, args: str):
         elif choice == "a" and current_page > 0:
             current_page -= 1
         elif choice == "d":
-            tid = console.input("\n[bold yellow]Ingresa el ID del snapshot a eliminar: [/]").strip()
+            tid = console.input(
+                "\n[bold yellow]Ingresa el ID del snapshot a eliminar: [/]"
+            ).strip()
             if tid in all_ids:
-                confirm = console.input(f"[bold red]¿Confirmas la eliminación definitiva del snapshot {tid}? (s/n): [/]").strip().lower()
+                confirm = (
+                    console.input(
+                        f"[bold red]¿Confirmas la eliminación definitiva del snapshot {tid}? (s/n): [/]"
+                    )
+                    .strip()
+                    .lower()
+                )
                 if confirm == "s":
                     if ctx.monitor.delete_snapshot(tid):
                         UI.success("Snapshot eliminado de forma definitiva.")
@@ -104,11 +113,19 @@ def cmd_history(ctx: SessionContext, args: str):
                 UI.error("ID no encontrado en el historial.")
             console.input("\nPresiona ENTER para continuar...")
         elif choice == "r":
-            tid = console.input("\n[bold yellow]Ingresa el ID del snapshot a renombrar: [/]").strip()
+            tid = console.input(
+                "\n[bold yellow]Ingresa el ID del snapshot a renombrar: [/]"
+            ).strip()
             if tid in all_ids:
-                new_msg = console.input("[bold yellow]Ingresa el nuevo mensaje o descripción: [/]").strip()
+                new_msg = console.input(
+                    "[bold yellow]Ingresa el nuevo mensaje o descripción: [/]"
+                ).strip()
                 if new_msg:
-                    confirm = console.input(f"¿Deseas renombrar a: '{new_msg}'? (s/n): ").strip().lower()
+                    confirm = (
+                        console.input(f"¿Deseas renombrar a: '{new_msg}'? (s/n): ")
+                        .strip()
+                        .lower()
+                    )
                     if confirm == "s":
                         if ctx.monitor.rename_snapshot(tid, new_msg):
                             UI.success("Snapshot renombrado exitosamente.")
@@ -124,14 +141,17 @@ def cmd_history(ctx: SessionContext, args: str):
 
 
 @registry.register("restore", require_chat=True)
-def cmd_restore(ctx: SessionContext, args: str):
+def cmd_restore(ctx: SessionContext, args: list[str]):
     if not args:
         UI.warn("Especifica el ID del snapshot.")
         return
 
-    confirm = console.input(f"[bold red]¿Restaurar snapshot {args}? (s/n): [/]")
+    snapshot_id = args[0]
+    confirm = console.input(f"[bold red]¿Restaurar snapshot {snapshot_id}? (s/n): [/]")
     if confirm.lower() == "s":
         ctx.stop_monitor()
-        if ctx.monitor.restore_snapshot(args.strip()):
-            UI.success("Chat restaurado de forma local y en Drive. Recarga AI Studio (F5).")
+        if ctx.monitor.restore_snapshot(snapshot_id):
+            UI.success(
+                "Chat restaurado de forma local y en Drive. Recarga AI Studio (F5)."
+            )
         ctx.start_monitor()
