@@ -40,6 +40,19 @@ def cmd_monitor_off(ctx: SessionContext, args: list[str]):
         UI.success("Monitoreo automático desactivado.")
 
 
+@registry.register("history:prune", require_chat=True)
+def cmd_history_prune(ctx: SessionContext, args: list[str]):
+    """Elimina del disco los archivos .z huérfanos sin referencias en la base de datos."""
+    UI.info("Iniciando recolección de basura en el almacén de objetos (CAS)...")
+    deleted = ctx.monitor.prune_objects()
+    if deleted > 0:
+        UI.success(
+            f"Recolección completada. Se eliminaron {deleted} archivos huérfanos del disco."
+        )
+    else:
+        UI.info("No se encontraron archivos huérfanos. El almacén está optimizado.")
+
+
 @registry.register("history", require_chat=True)
 def cmd_history(ctx: SessionContext, args: list[str]):
     """Muestra de forma paginada y administra los snapshots disponibles."""
