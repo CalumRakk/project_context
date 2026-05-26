@@ -24,6 +24,7 @@ class SessionContext:
         if self.state.get("monitor_active"):
             self.monitor.start_monitoring()
 
+
 class FileDrive(BaseModel):
     id: str
     name: str
@@ -37,6 +38,7 @@ class Parts(BaseModel):
 
 
 Role = Literal["user", "model"]
+
 
 class BaseChunk(BaseModel):
     role: Role
@@ -56,13 +58,20 @@ class BaseChunk(BaseModel):
         """Determina si este bloque representa un recurso binario en Drive."""
         return False
 
+    @property
+    def is_text(self) -> bool:
+        """Determina si este bloque representa un bloque de texto."""
+        return False
+
 
 class DriveDocument(BaseModel):
     id: str
 
+
 class PendingInputs(BaseModel):
     text: str
     role: Role = "user"
+
 
 class ChunksText(BaseChunk):
     text: str
@@ -72,10 +81,18 @@ class ChunksText(BaseChunk):
     thinkingBudget: Optional[int] = -1
     parts: Optional[list[Parts]] = None
 
+    @property
+    def is_text(self) -> bool:
+        return True
+
 
 class ChunksDocument(BaseChunk):
     driveDocument: DriveDocument
     tokenCount: int
+
+    @property
+    def is_text(self) -> bool:
+        return False
 
     @property
     def file_id(self) -> Optional[str]:
@@ -93,6 +110,10 @@ class ChunksDocument(BaseChunk):
 class ChunksImage(BaseChunk):
     driveImage: DriveDocument
     tokenCount: Optional[int] = None
+
+    @property
+    def is_text(self) -> bool:
+        return False
 
     @property
     def file_id(self) -> Optional[str]:
@@ -154,7 +175,13 @@ class RunSettings(BaseModel):
     model: str = Field(
         default="models/gemini-3.5-flash",
         description="Model name used in the chat.",
-        examples=["models/gemini-3.1-flash-lite", "gemini-3.1-pro-preview","gemini-flash-latest","models/gemini-2.5-flash","models/gemini-flash-lite-latest"],
+        examples=[
+            "models/gemini-3.1-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-flash-latest",
+            "models/gemini-2.5-flash",
+            "models/gemini-flash-lite-latest",
+        ],
     )
     # TODO: los modelos "pequeños" de gemini-2* ahora son de pago.
     temperature: float = 1.0
@@ -205,9 +232,11 @@ class RunSettings(BaseModel):
             if "flash" in model_lower:
                 self.temperature = 1.0
 
+
 class SystemInstruction(BaseModel):
     model_config = ConfigDict(extra="allow")
     text: Optional[str] = None
+
 
 class ChatIAStudio(BaseModel):
     model_config = ConfigDict(extra="allow")

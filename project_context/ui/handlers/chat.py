@@ -1,3 +1,6 @@
+import re
+from typing import cast
+
 from project_context.exceptions import ChatSessionError, InvalidCommandArgumentError
 from project_context.ops import apply_story_update, update_context
 from project_context.schema import ChunksDocument, ChunksText
@@ -26,6 +29,70 @@ def cmd_clear(ctx: SessionContext, args: list[str]):
         raise ChatSessionError(
             "No se pudo limpiar el historial del chat en Google Drive."
         )
+
+
+@registry.register("clear:code", require_chat=True)
+def cmd_clear_code(ctx: SessionContext, args: list[str]):
+    """Elimina bloques de código de los mensajes para reducir el tamaño del chat."""
+    clean_user = False
+    if args:
+        flag = args[0].lower()
+        if flag in ["--all", "all", "user", "--user"]:
+            clean_user = True
+
+    chat_id = ctx.state.get("chat_id")
+    if not chat_id:
+        raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
+
+    UI.info("Creando snapshot de seguridad antes de limpiar código...")
+    try:
+        ctx.monitor.create_named_snapshot(
+            "Backup automático antes de limpiar bloques de código"
+        )
+    except Exception as e:
+        UI.warn(
+            f"No se pudo crear el snapshot automático: {e}. Continuando con la operación..."
+        )
+
+    UI.info("Procesando bloques de texto en Google Drive...")
+    cleaned_blocks_count = 0
+    code_blocks_removed = 0
+
+    try:
+        with ctx.api.modify_chat(chat_id) as chat_data:
+            for idx, chunk in enumerate(chat_data.chunkedPrompt.chunks):
+                # Proteger los bloques iniciales de inicialización (handshake)
+                if idx <= 2:
+                    continue
+
+                if chunk.is_text:
+                    chunk = cast(ChunksText, chunk)
+
+                    role = getattr(chunk, "role", "user")
+                    if role == "model" or (role == "user" and clean_user):
+                        matches = re.findall(r"```[\s\S]*?```", chunk.text)
+                        if matches:
+                            code_blocks_removed += len(matches)
+                            chunk.text = re.sub(
+                                r"```[\s\S]*?```", "[Código omitido]", chunk.text
+                            )
+                            chunk.tokenCount = None  # parece forzar la actualizacion.
+                            cleaned_blocks_count += 1
+
+        if code_blocks_removed > 0:
+            UI.success(
+                f"Se eliminaron {code_blocks_removed} bloques de código en {cleaned_blocks_count} mensajes."
+            )
+            UI.info(
+                "Por favor, recarga la pestaña de Google AI Studio (F5) para aplicar la vista limpia."
+            )
+        else:
+            UI.info(
+                "No se encontraron bloques de código para eliminar en los roles seleccionados."
+            )
+
+    except Exception as e:
+        raise ChatSessionError(f"Error al limpiar los bloques de código: {e}")
 
 
 @registry.register("update", require_chat=True)
