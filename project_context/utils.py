@@ -79,6 +79,11 @@ class UI:
 
 def get_app_root_dir() -> Path:
     """Devuelve la raíz de configuración global (~/.config/project_context)."""
+
+    env_override = os.getenv("PROJECT_CONTEXT_HOME")
+    if env_override:
+        return Path(env_override)
+
     if sys.platform.startswith("win"):
         base = Path(cast(str, os.getenv("APPDATA")))
     elif sys.platform == "darwin":

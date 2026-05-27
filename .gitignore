@@ -18,3 +18,5 @@ tests/
 
 # Metadatos locales de project-context-cli
 .project_context/
+
+.project_context*
