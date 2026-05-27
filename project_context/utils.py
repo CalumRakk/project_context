@@ -231,6 +231,77 @@ class ProfileManager:
                 fallback_name += ".json"
             return self.secrets_dir / fallback_name, "Predeterminado (Faltante)"
 
+    def get_secrets_association_map(self) -> dict:
+        """
+        Escanea tanto el directorio de secretos como el de perfiles para cruzar
+        las dependencias y construir un mapa de asociaciones.
+
+        Retorna un diccionario con la estructura:
+        {
+            "nombre_secreto.json": {
+                "path": Path,
+                "associated_profiles": ["perfil1", "perfil2"],
+                "exists_on_disk": True/False
+            }
+        }
+        """
+        association_map = {}
+
+        if self.secrets_dir.exists():
+            for file in self.secrets_dir.glob("*.json"):
+                association_map[file.name] = {
+                    "path": file,
+                    "associated_profiles": [],
+                    "exists_on_disk": True,
+                }
+
+        profiles = self.list_profiles()
+        for profile_name in profiles:
+            profile_data = self.load_profile_data(profile_name)
+            secret_name = profile_data.get("associated_secret")
+
+            if secret_name:
+                if not secret_name.endswith(".json"):
+                    secret_name += ".json"
+
+                # Si el perfil hace referencia a un secreto que no existe físicamente en disco,
+                # lo agregamos al mapa marcándolo como 'exists_on_disk': False
+                if secret_name not in association_map:
+                    association_map[secret_name] = {
+                        "path": self.secrets_dir / secret_name,
+                        "associated_profiles": [],
+                        "exists_on_disk": False,
+                    }
+
+                association_map[secret_name]["associated_profiles"].append(profile_name)
+
+        return association_map
+
+    def remove_tokens_for_secret(self, secret_name: str) -> int:
+        """
+        Busca y elimina físicamente los tokens de acceso que dependan de un secreto específico.
+        Los tokens se almacenan bajo el formato: '{email}__{nombre_secreto.json}'
+
+        Retorna la cantidad de archivos de tokens eliminados con éxito.
+        """
+        if not secret_name.endswith(".json"):
+            secret_name += ".json"
+
+        removed_count = 0
+        if self.tokens_dir.exists():
+            for token_file in self.tokens_dir.iterdir():
+                if token_file.is_file() and token_file.name.endswith(
+                    f"__{secret_name}"
+                ):
+                    try:
+                        token_file.unlink()
+                        removed_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"No se pudo limpiar el token residual '{token_file.name}': {e}"
+                        )
+        return removed_count
+
 
 profile_manager = ProfileManager()
 
@@ -870,3 +941,25 @@ def safe_verify_profile(profile_name: str) -> None:
             spacing="bottom",
         )
         raise typer.Exit(code=1)
+
+
+def validate_google_secrets_file(path: Path) -> bool:
+    """
+    Verifica si el archivo en la ruta provista existe, es un JSON válido
+    y posee la estructura típica de un archivo de secretos de Google OAuth.
+    """
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        for key in ["installed", "web"]:
+            if key in data and isinstance(data[key], dict):
+                sub_data = data[key]
+                if "client_id" in sub_data and "client_secret" in sub_data:
+                    return True
+        return False
+    except Exception:
+        return False

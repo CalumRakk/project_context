@@ -6,6 +6,7 @@ from typing import Annotated, Optional
 import typer
 
 from project_context import __version__
+from project_context.commands import dev, profile, run, secrets, shell, update
 
 os.environ["LOG_LEVEL"] = "CRITICAL"
 
@@ -88,6 +89,7 @@ def global_options(
 # Registro de sub-grupos
 app.add_typer(profile.app, name="profile")
 app.add_typer(dev.app, name="dev")
+app.add_typer(secrets.app, name="secrets")
 
 # Registro de comandos principales de primer nivel
 app.command(name="run")(run.run_command)
