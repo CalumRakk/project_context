@@ -230,25 +230,15 @@ class GoogleDriveManager:
     def update_file_from_memory(
         self, file_id: str, content: str, mime_type: str
     ) -> Optional[dict]:
-        try:
-            content_stream = io.BytesIO(content.encode("utf-8"))
-            media_body = MediaIoBaseUpload(
-                content_stream, mimetype=mime_type, resumable=True
-            )
-            updated_file = (
-                self.service.files()
-                .update(
-                    fileId=file_id,
-                    media_body=media_body,
-                    fields="id, name, modifiedTime",
-                )
-                .execute()
-            )
+        updated_file = self._upload_to_drive(
+            content.encode("utf-8"),
+            mime_type,
+            file_id=file_id,
+            fields="id, name, modifiedTime",
+        )
+        if updated_file:
             UI.success("Archivo actualizado en Drive.")
-            return updated_file
-        except HttpError as error:
-            UI.error(f"Error al modificar archivo '{file_id}': {error}")
-            return None
+        return updated_file
 
     def create_file_from_memory(
         self, folder_id: str, file_name: str, content: str, mime_type: str
@@ -258,31 +248,75 @@ class GoogleDriveManager:
             "parents": [folder_id],
             "mimeType": mime_type,
         }
+        file = self._upload_to_drive(
+            content.encode("utf-8"), mime_type, metadata=file_metadata
+        )
+        if file:
+            print(f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")')
+        return file
+
+    def get_file_metadata(
+        self, file_id: str, fields: str = "id, name, modifiedTime, md5Checksum"
+    ) -> Optional[dict]:
+        """Obtiene metadatos de un archivo permitiendo personalizar los campos solicitados."""
         try:
-            content_stream = io.BytesIO(content.encode("utf-8"))
+            return self.service.files().get(fileId=file_id, fields=fields).execute()
+        except HttpError as error:
+            print(f"Error al obtener metadata de '{file_id}': {error}")
+            return None
+
+    def find_files_by_query(
+        self, query: str, fields: str = "files(id, name, mimeType)"
+    ) -> list[dict]:
+        """Busca archivos en Drive utilizando un filtro query estándar."""
+        try:
+            response = (
+                self.service.files()
+                .list(q=query, spaces="drive", fields=fields)
+                .execute()
+            )
+            return response.get("files", [])
+        except HttpError as error:
+            print(f"Error al buscar archivos por consulta '{query}': {error}")
+            return []
+
+    def delete_file(self, file_id: str) -> bool:
+        """Elimina un archivo de Google Drive dado su ID."""
+        try:
+            self.service.files().delete(fileId=file_id).execute()
+            return True
+        except HttpError as error:
+            print(f"Error al eliminar archivo '{file_id}': {error}")
+            return False
+
+    def _upload_to_drive(
+        self,
+        content: bytes,
+        mime_type: str,
+        metadata: Optional[dict] = None,
+        file_id: Optional[str] = None,
+        fields: str = "id, name",
+    ) -> Optional[dict]:
+        """Centraliza el flujo de subida y actualización de archivos en Google Drive."""
+        try:
+            content_stream = io.BytesIO(content)
             media = MediaIoBaseUpload(
                 content_stream, mimetype=mime_type, resumable=True
             )
-            file = (
-                self.service.files()
-                .create(body=file_metadata, media_body=media, fields="id, name")
-                .execute()
-            )
-            print(f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")')
-            return file
+            if file_id:
+                return (
+                    self.service.files()
+                    .update(fileId=file_id, media_body=media, fields=fields)
+                    .execute()
+                )
+            else:
+                return (
+                    self.service.files()
+                    .create(body=metadata, media_body=media, fields=fields)
+                    .execute()
+                )
         except HttpError as error:
-            print(f"Error al crear archivo '{file_name}': {error}")
-            return None
-
-    def get_file_metadata(self, file_id: str) -> Optional[dict]:
-        try:
-            return (
-                self.service.files()
-                .get(fileId=file_id, fields="id, name, modifiedTime, md5Checksum")
-                .execute()
-            )
-        except HttpError as error:
-            print(f"Error al obtener metadata de '{file_id}': {error}")
+            UI.error(f"Error en operación de subida/actualización de Drive: {error}")
             return None
 
     def upload_binary_to_drive(
@@ -293,20 +327,7 @@ class GoogleDriveManager:
             "parents": [folder_id],
             "mimeType": mime_type,
         }
-        try:
-            content_stream = io.BytesIO(content)
-            media = MediaIoBaseUpload(
-                content_stream, mimetype=mime_type, resumable=True
-            )
-            file = (
-                self.service.files()
-                .create(body=file_metadata, media_body=media, fields="id, name")
-                .execute()
-            )
-            return file
-        except HttpError as error:
-            print(f"Error al subir binario '{file_name}': {error}")
-            return None
+        return self._upload_to_drive(content, mime_type, metadata=file_metadata)
 
 
 class AIStudioDriveManager:

@@ -376,7 +376,7 @@ def migrate_legacy(
 
     UI.info("Copiando archivos al proyecto local...")
 
-    # 1. Copiar y sanitizar el archivo de estado
+    # Copiar y sanitizar el archivo de estado
     try:
         old_state = json.loads(global_state_path.read_text(encoding="utf-8"))
     except Exception as e:
@@ -388,7 +388,7 @@ def migrate_legacy(
     old_state["file_id"] = None
     old_state["path"] = str(project_path)
 
-    # 2. Copiar snapshots individuales
+    # Copiar snapshots individuales
     if global_snapshots_dir.exists() and global_snapshots_dir.is_dir():
         local_snapshots_dir = local_dir / "snapshots"
         local_snapshots_dir.mkdir(parents=True, exist_ok=True)
@@ -418,7 +418,7 @@ def migrate_legacy(
                     if chat_file.exists():
                         shutil.copy2(chat_file, target_snap_dir / "chat.prompt")
 
-    # 3. Copiar archivo de contexto
+    # Copiar archivo de contexto
     legacy_ctx_file = global_state_path.parent / "project_context.txt"
     if not legacy_ctx_file.exists():
         legacy_ctx_file = global_state_path.parent / "last_context.txt"
@@ -426,12 +426,12 @@ def migrate_legacy(
     if legacy_ctx_file.exists():
         shutil.copy2(legacy_ctx_file, local_dir / "last_context.txt")
 
-    # 4. Guardar archivo de estado local consolidado
+    # Guardar archivo de estado local consolidado
     from project_context.utils import save_project_context_state
 
     save_project_context_state(project_path, old_state)
 
-    # 5. Compilar base de datos SQLite / CAS local
+    # Compilar base de datos SQLite / CAS local
     try:
         from project_context.history import SnapshotManager
 
@@ -441,16 +441,15 @@ def migrate_legacy(
     except Exception as e:
         UI.warn(f"Fallo al compilar la base de datos de snapshots local: {e}")
 
-    # 6. Eliminar chat antiguo de Google Drive si fue solicitado
+    # Eliminar chat antiguo de Google Drive si fue solicitado
     if clean_drive and old_chat_id:
         UI.info(f"Removiendo chat antiguo de Drive ({old_chat_id})...")
-        try:
-            api.gdm.service.files().delete(fileId=old_chat_id).execute()
+        if api.gdm.delete_file(old_chat_id):
             UI.success("Archivo antiguo eliminado de Google Drive.")
-        except Exception as e:
-            UI.warn(f"No se pudo remover el archivo antiguo de la nube: {e}")
+        else:
+            UI.warn("No se pudo remover el archivo antiguo de la nube.")
 
-    # 7. Remover el directorio de origen global de forma definitiva
+    # Remover el directorio de origen global de forma definitiva
     try:
         shutil.rmtree(global_state_path.parent)
         UI.success("Registro de inodo global limpiado del almacenamiento de perfiles.")

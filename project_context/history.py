@@ -1,4 +1,3 @@
-import hashlib
 import json
 import shutil
 import threading
@@ -221,15 +220,12 @@ class SnapshotManager:
 
                             if file_id:
                                 try:
-                                    raw_meta = (
-                                        self.api.gdm.service.files()
-                                        .get(
-                                            fileId=file_id, fields="id, name, mimeType"
-                                        )
-                                        .execute()
+                                    raw_meta = self.api.gdm.get_file_metadata(
+                                        file_id, fields="id, name, mimeType"
                                     )
-                                    fname = raw_meta.get("name", fname)
-                                    mtype = raw_meta.get("mimeType", mtype)
+                                    if raw_meta:
+                                        fname = raw_meta.get("name", fname)
+                                        mtype = raw_meta.get("mimeType", mtype)
                                 except Exception:
                                     pass
 
@@ -307,20 +303,10 @@ class SnapshotManager:
                     print(
                         f"  Recurso no encontrado. Buscando por hash (MD5: {asset.file_hash})..."
                     )
-                    try:
-                        response = (
-                            self.api.gdm.service.files()
-                            .list(
-                                q=f"md5Checksum = '{asset.file_hash}' and trashed = false",
-                                spaces="drive",
-                                fields="files(id, name, mimeType)",
-                            )
-                            .execute()
-                        )
-                        files = response.get("files", [])
-                    except Exception as e:
-                        print(f"  Error en búsqueda de Drive: {e}")
-                        files = []
+                    files = self.api.gdm.find_files_by_query(
+                        f"md5Checksum = '{asset.file_hash}' and trashed = false",
+                        fields="files(id, name, mimeType)",
+                    )
 
                     if files:
                         repaired_id = files[0]["id"]
