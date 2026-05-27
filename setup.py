@@ -21,6 +21,7 @@ setup(
         "GitPython==3.1.45",
         "prompt-toolkit>=3.0.52",
         "peewee==4.0.6",
+        "filelock==3.29.0",
     ],
     keywords="cli google-ai-studio project-context",
     include_package_data=True,
