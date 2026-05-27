@@ -32,6 +32,37 @@ class SessionContext:
         self.monitor.state = new_state
         save_project_context_state(self.project_path, new_state)
 
+    @property
+    def chat_id(self) -> str:
+        """Retorna el ID del chat activo garantizando su existencia."""
+        cid = self.state.get("chat_id")
+        if not cid:
+            raise MissingStateError(
+                "No se encontró una sesión de chat activa en este proyecto."
+            )
+        return cid
+
+    @property
+    def file_id(self) -> str:
+        """Retorna el ID del archivo de contexto maestro en Drive."""
+        fid = self.state.get("file_id")
+        if not fid:
+            raise MissingStateError(
+                "Falta el identificador del archivo de contexto maestro en Drive."
+            )
+        return fid
+
+    @property
+    def context_items(self) -> dict:
+        """Inicializa y retorna la estructura de elementos enfocados de forma segura."""
+        if "context_items" not in self.state:
+            self.state["context_items"] = {}
+        items = self.state["context_items"]
+        items.setdefault("files", [])
+        items.setdefault("folders", [])
+        items.setdefault("exclusions", [])
+        return items
+
 
 class CommandMetadata:
     def __init__(

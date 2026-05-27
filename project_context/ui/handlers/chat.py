@@ -19,11 +19,7 @@ from project_context.utils import (
 @registry.register("clear", require_chat=True)
 def cmd_clear(ctx: SessionContext, args: list[str]):
     """Limpia el historial de la conversación manteniendo el contexto inicial."""
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
-
-    if ctx.api.clear_chat_ia_studio(chat_id):
+    if ctx.api.clear_chat_ia_studio(ctx.chat_id):
         UI.success("Historial de mensajes limpiado en Drive.")
     else:
         raise ChatSessionError(
@@ -40,10 +36,6 @@ def cmd_clear_code(ctx: SessionContext, args: list[str]):
         if flag in ["--all", "all", "user", "--user"]:
             clean_user = True
 
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        raise ChatSessionError("No hay un chat activo en el estado del proyecto.")
-
     UI.info("Creando snapshot de seguridad antes de limpiar código...")
     try:
         ctx.monitor.create_named_snapshot(
@@ -59,14 +51,13 @@ def cmd_clear_code(ctx: SessionContext, args: list[str]):
     code_blocks_removed = 0
 
     try:
-        with ctx.api.modify_chat(chat_id) as chat_data:
+        with ctx.api.modify_chat(ctx.chat_id) as chat_data:
             for idx, chunk in enumerate(chat_data.chunkedPrompt.chunks):
                 if idx <= 2:
                     continue
 
                 if chunk.is_text:
                     chunk = cast(ChunksText, chunk)
-
                     role = getattr(chunk, "role", "user")
                     if role == "model" or (role == "user" and clean_user):
                         matches = re.findall(r"```[\s\S]*?```", chunk.text)
@@ -112,14 +103,11 @@ def cmd_update(ctx: SessionContext, args: list[str]):
         ctx.update_state(new_state)
 
         has_focus = bool(
-            ctx.state.get("context_items", {}).get("files")
-            or ctx.state.get("context_items", {}).get("folders")
+            ctx.context_items.get("files") or ctx.context_items.get("folders")
         )
         if "tree" in clean_args_list or has_focus:
             UI.info("Árbol de archivos enviado:")
-            tree_str = get_context_tree(
-                ctx.project_path, ctx.state.get("context_items")
-            )
+            tree_str = get_context_tree(ctx.project_path, ctx.context_items)
             console.print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
 
 
@@ -138,20 +126,12 @@ def cmd_tokens(ctx: SessionContext, args: list[str]):
             "Formato de tokens no válido. Usa números enteros o notaciones como '150k'."
         )
 
-    chat_id = ctx.state.get("chat_id")
-    file_id = ctx.state.get("file_id")
-
-    if not chat_id or not file_id:
-        raise ChatSessionError(
-            "Falta información del chat o del archivo de contexto en el estado actual."
-        )
-
     UI.info(f"Actualizando contador de tokens a [bold]{tokens}[/] en Google Drive...")
     try:
-        with ctx.api.modify_chat(chat_id) as chat_data:
+        with ctx.api.modify_chat(ctx.chat_id) as chat_data:
             updated_metadata = False
             for chunk in chat_data.chunkedPrompt.chunks:
-                if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
+                if isinstance(chunk, ChunksDocument) and chunk.file_id == ctx.file_id:
                     chunk.tokenCount = tokens
                     updated_metadata = True
                     break
@@ -194,12 +174,8 @@ def cmd_insert(ctx: SessionContext, args: list[str]):
     if not message:
         raise InvalidCommandArgumentError("El cuerpo del mensaje no puede estar vacío.")
 
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        raise ChatSessionError("No se encontró un chat_id válido en el estado actual.")
-
     UI.info("Verificando la estructura del chat en Google Drive...")
-    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
     if not chat_data:
         raise ChatSessionError("No se pudo obtener el historial del chat desde Drive.")
 
@@ -220,7 +196,7 @@ def cmd_insert(ctx: SessionContext, args: list[str]):
             )
 
     UI.info(f"Insertando bloque con rol '{role}'...")
-    success = ctx.api.append_message(chat_id, message, role=role)
+    success = ctx.api.append_message(ctx.chat_id, message, role=role)
 
     if success:
         UI.success(f"Mensaje insertado con rol '{role}'.")
@@ -234,9 +210,8 @@ def cmd_insert(ctx: SessionContext, args: list[str]):
 @registry.register("run", "r", require_chat=True)
 def cmd_run(ctx: SessionContext, args: list[str]):
     """Ejecuta o procesa la sesión actual."""
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        raise ChatSessionError("No se encontró el chat_id en el estado actual.")
+    # Validación automática por require_chat=True
+    pass
 
 
 @registry.register("vanish:on", require_chat=True, allow_in_vanish=True)
@@ -246,14 +221,8 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
         UI.warn("El modo vanish ya se encuentra activo.")
         return
 
-    chat_id = ctx.state.get("chat_id")
-    if not chat_id:
-        raise ChatSessionError(
-            "No se detectó un chat activo en el estado del proyecto."
-        )
-
     UI.info("Guardando copia de seguridad del chat (Vanish Stash)...")
-    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
     if not chat_data:
         raise ChatSessionError(
             "No se pudo descargar el chat desde Drive para realizar el respaldo."
@@ -266,7 +235,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
     chat_data.chunkedPrompt.chunks = vanish_chunks  # type:ignore
     chat_data.chunkedPrompt.pendingInputs = []
 
-    if ctx.api.update_chat_file(chat_id, chat_data):
+    if ctx.api.update_chat_file(ctx.chat_id, chat_data):
         ctx.state["vanished"] = True
         ctx.update_state(ctx.state)
         UI.success(
@@ -289,9 +258,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
         UI.warn("El modo vanish no está activo en este momento.")
         return
 
-    chat_id = ctx.state.get("chat_id")
     stashed_json = load_stash(ctx.project_path, "vanish_stash.json")
-
     if not stashed_json:
         ctx.state["vanished"] = False
         ctx.update_state(ctx.state)
@@ -300,9 +267,8 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
         )
 
     UI.info("Restaurando conversación y contexto original...")
-    assert chat_id is not None
     success = ctx.api.gdm.update_file_from_memory(
-        file_id=chat_id, content=stashed_json, mime_type=ctx.api.MIME_PROMPT
+        file_id=ctx.chat_id, content=stashed_json, mime_type=ctx.api.MIME_PROMPT
     )
 
     if success:
@@ -333,8 +299,6 @@ def cmd_vanish(ctx: SessionContext, args: list[str]):
                 "Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'"
             )
 
-    is_vanished = ctx.state.get("vanished", False)
-    if is_vanished:
+    if ctx.state.get("vanished", False):
         return cmd_vanish_off(ctx, [])
-    else:
-        return cmd_vanish_on(ctx, [])
+    return cmd_vanish_on(ctx, [])

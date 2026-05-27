@@ -4,24 +4,11 @@ from project_context.ui.registry import SessionContext, registry
 from project_context.utils import UI, console, get_context_tree
 
 
-def _ensure_context_items(ctx: SessionContext) -> dict:
-    if "context_items" not in ctx.state:
-        ctx.state["context_items"] = {"files": [], "folders": [], "exclusions": []}
-    items = ctx.state["context_items"]
-    if "exclusions" not in items:
-        items["exclusions"] = []
-    if "files" not in items:
-        items["files"] = []
-    if "folders" not in items:
-        items["folders"] = []
-    return items
-
-
 @registry.register("tree", require_chat=True)
 def cmd_tree(ctx: SessionContext, args: list[str]):
     """Muestra el árbol de directorios que el modelo puede visualizar actualmente."""
     UI.info("Generando árbol del contexto actual...")
-    tree_str = get_context_tree(ctx.project_path, ctx.state.get("context_items"))
+    tree_str = get_context_tree(ctx.project_path, ctx.context_items)
     console.print(f"\n[cyan]{tree_str}[/cyan]\n")
 
 
@@ -34,7 +21,7 @@ def cmd_context(ctx: SessionContext, args: list[str]):
 @registry.register("context:add", require_chat=True)
 def cmd_context_add(ctx: SessionContext, args: list[str]):
     """Añade archivos o carpetas al enfoque del contexto activo."""
-    items = _ensure_context_items(ctx)
+    items = ctx.context_items
     if not args:
         UI.warn("Especifica al menos una ruta. Ej: context add src/main.py docs/")
         return
@@ -72,7 +59,7 @@ def cmd_context_add(ctx: SessionContext, args: list[str]):
 @registry.register("context:rm", "context:remove", require_chat=True)
 def cmd_context_rm(ctx: SessionContext, args: list[str]):
     """Elimina elementos del enfoque de contexto o los excluye explícitamente."""
-    items = _ensure_context_items(ctx)
+    items = ctx.context_items
     if not args:
         UI.warn(
             "Especifica qué quieres eliminar o excluir. Ej: context rm viajes/cascada"
@@ -156,7 +143,7 @@ def cmd_context_rm(ctx: SessionContext, args: list[str]):
 @registry.register("context:ls", "context:list", require_chat=True)
 def cmd_context_ls(ctx: SessionContext, args: list[str]):
     """Lista las exclusiones, carpetas y archivos específicos del enfoque actual."""
-    items = _ensure_context_items(ctx)
+    items = ctx.context_items
     has_files = len(items["files"]) > 0
     has_folders = len(items["folders"]) > 0
     has_exclusions = len(items["exclusions"]) > 0

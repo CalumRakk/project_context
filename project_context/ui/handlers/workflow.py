@@ -62,7 +62,7 @@ def prompt_for_media_folder(project_path: Path) -> Optional[Path]:
 @registry.register("edit", require_chat=True)
 def cmd_edit(ctx: SessionContext, args: list[str]):
     """Abre el editor visual de bloques para depurar el prompt en Drive."""
-    run_editor_mode(ctx.api, ctx.state["chat_id"])
+    run_editor_mode(ctx.api, ctx.chat_id)
 
 
 @registry.register("reset", require_chat=True)
@@ -81,8 +81,7 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
 )
 def cmd_commit_restore(ctx: SessionContext, args: list[str]):
     """Restaura el chat original desactivando el modo de commit rápido."""
-    is_commit_mode = ctx.state.get("commit_mode", False)
-    if not is_commit_mode:
+    if not ctx.state.get("commit_mode", False):
         UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
         return
 
@@ -97,7 +96,7 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
         )
 
     ctx.api.gdm.update_file_from_memory(
-        file_id=ctx.state["chat_id"],
+        file_id=ctx.chat_id,
         content=stashed_json,
         mime_type=ctx.api.MIME_PROMPT,
     )
@@ -121,8 +120,7 @@ def cmd_commit_all(ctx: SessionContext, args: list[str]):
 @registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: list[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
-    is_commit_mode = ctx.state.get("commit_mode", False)
-    if is_commit_mode:
+    if ctx.state.get("commit_mode", False):
         UI.warn(
             "Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar."
         )
@@ -161,8 +159,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
             return
 
     UI.info("Guardando copia de seguridad del chat actual (Stash)...")
-    chat_id = ctx.state["chat_id"]
-    chat_data = ctx.api.get_chat_ia_studio(chat_id)
+    chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
     if not chat_data:
         raise ChatSessionError(
             "No se pudo descargar el chat para realizar la copia de respaldo."
@@ -173,7 +170,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:
         if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
-            if chunk.file_id == ctx.state.get("file_id"):
+            if chunk.file_id == ctx.file_id:
                 context_chunk = chunk
                 break
 
@@ -190,7 +187,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
     chat_data.chunkedPrompt.chunks = fast_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
-    if ctx.api.update_chat_file(chat_id, chat_data):
+    if ctx.api.update_chat_file(ctx.chat_id, chat_data):
         ctx.state["commit_mode"] = True
         ctx.update_state(ctx.state)
         UI.success("¡Modo commit activado!")
@@ -249,7 +246,7 @@ def cmd_images(ctx: SessionContext, args: list[str]):
         )
     )
 
-    if ctx.api.append_chunks(ctx.state["chat_id"], chunks_to_add):
+    if ctx.api.append_chunks(ctx.chat_id, chunks_to_add):
         UI.success(f"¡{len(found_paths)} imágenes inyectadas!")
     else:
         raise ChatSessionError("Error al inyectar imágenes en el chat de Drive.")
@@ -282,7 +279,7 @@ def cmd_story(ctx: SessionContext, args: list[str]):
         )
 
     rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
-    context_items = ctx.state.get("context_items", {"files": [], "folders": []})
+    context_items = ctx.context_items
     has_specific_focus = bool(
         context_items.get("files") or context_items.get("folders")
     )
@@ -366,7 +363,7 @@ def cmd_transfer(ctx: SessionContext, args: list[str]):
 def cmd_fix(ctx: SessionContext, args: list[str]):
     """Analiza y repara inconsistencias en el esquema del chat de Drive."""
     UI.info("Analizando chat...")
-    fixed_count = ctx.api.repair_chat_structure(ctx.state["chat_id"])
+    fixed_count = ctx.api.repair_chat_structure(ctx.chat_id)
 
     if fixed_count > 0:
         UI.success(f"¡Estructura saneada! {fixed_count} bloques corregidos.")
