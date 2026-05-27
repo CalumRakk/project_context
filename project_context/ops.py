@@ -65,18 +65,27 @@ def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
     return prompt_text
 
 
+def _create_base_chat_chunks(
+    file_id: str, expected_tokens: int, project_path: Path
+) -> List:
+    """Construye los tres chunks iniciales estándar (Contexto, Prompt de bienvenida, Acuse de recibo)."""
+    context_chunk = ChunkFactory.create_file(
+        file_id, role="user", tokens=expected_tokens
+    )
+    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
+    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
+    return [context_chunk, prompt_chunk, model_chunk]
+
+
 def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
     UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
 
-    chunks = []
     context_chunk, content_md5 = sync_context(api, project_path)
-
-    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
-    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
-
-    chunks.append(context_chunk)
-    chunks.append(prompt_chunk)
-    chunks.append(model_chunk)
+    chunks = _create_base_chat_chunks(
+        context_chunk.file_id,  # type: ignore
+        context_chunk.tokenCount,
+        project_path,
+    )
 
     chat_data = ChatIAStudio(
         runSettings=create_default_run_settings(),
@@ -121,21 +130,12 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         )
         UI.info("Re-inicializando entorno en la nube preservando tu historial local...")
 
-        # Generar nuevo contexto
         context_chunk, content_md5 = sync_context(api, project_path)
-
-        # Reconstruir chat base
-        from project_context.schema import (
-            ChatIAStudio,
-            ChunkedPrompt,
-            SystemInstruction,
+        chunks = _create_base_chat_chunks(
+            context_chunk.file_id,  # type: ignore
+            context_chunk.tokenCount,
+            project_path,
         )
-
-        chunks = [
-            context_chunk,
-            ChunkFactory.create_text(resolve_prompt(project_path), role="user"),
-            ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model"),
-        ]
 
         chat_data = ChatIAStudio(
             runSettings=create_default_run_settings(),
@@ -157,7 +157,6 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         )
         return state
 
-    # Obtenemos los items seleccionados
     context_items = state.get("context_items", {"files": [], "folders": []})
     has_custom_focus = bool(context_items.get("files") or context_items.get("folders"))
 
@@ -167,12 +166,10 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
 
     UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
 
-    # Generamos el contexto usando la lógica Híbrida
     content, new_tokens = generate_context(project_path, context_items=context_items)
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
-    # Si el MD5 es igual al guardado, no enviamos nada a Drive para ahorrar ancho de banda
     if current_md5 == state.get("md5"):
         UI.warn("El contenido del contexto es idéntico al actual en Drive.")
         state["last_modified"] = project_path.stat().st_mtime
@@ -180,7 +177,6 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
 
     UI.info("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
 
-    file_id = state.get("file_id")
     assert file_id is not None
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
@@ -217,7 +213,6 @@ def sync_context(
     path_context = save_context(project_path, content)
     content_md5 = compute_md5(path_context)
 
-    # Sube el project_context.txt
     mimetype = "text/plain"
     filename = project_path.name + "_context.txt"
     document = api.gdm.create_file_from_memory(
@@ -235,8 +230,45 @@ def sync_context(
     return chat_file, content_md5
 
 
+def _ensure_image_chunk_pair(
+    api: AIStudioDriveManager, img_path: Path, reference_str: str
+) -> List:
+    """
+    Comprueba si una imagen existe en el directorio de Drive; si no, la sube.
+    Retorna el par de bloques [Texto Referencia, Imagen Multimodal].
+    """
+    drive_name = f"ctx_{img_path.name}"
+    drive_file = api.gdm.find_item_by_name(drive_name, parent_id=api.ai_studio_folder)
+
+    if not drive_file:
+        UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
+        try:
+            with open(img_path, "rb") as f:
+                content = f.read()
+            mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
+            drive_file = api.gdm.upload_binary_to_drive(
+                api.ai_studio_folder, drive_name, content, mime
+            )
+        except Exception as e:
+            UI.error(f"No se pudo subir la imagen {img_path.name}: {e}")
+            return []
+    else:
+        UI.info(f"Reutilizando imagen existente en Drive: [dim]{drive_name}[/]")
+
+    if drive_file:
+        prompt = ChunkFactory.create_text(
+            f"Archivo visual: {reference_str}", role="user"
+        )
+        image = ChunkFactory.create_image(drive_file["id"], role="user")
+        return [prompt, image]
+
+    return []
+
+
 def sync_images(
-    api, project_path: Path, specific_files: Optional[list[Path]] = None
+    api: AIStudioDriveManager,
+    project_path: Path,
+    specific_files: Optional[list[Path]] = None,
 ) -> list:
     """Sincroniza imágenes específicas o todo el proyecto."""
     if specific_files is None:
@@ -247,26 +279,8 @@ def sync_images(
     media_chunks = []
     for img_path in valid_images:
         rel_path = img_path.relative_to(project_path)
-        drive_name = f"ctx_{img_path.name}"
-
-        drive_file = api.gdm.find_item_by_name(
-            drive_name, parent_id=api.ai_studio_folder
-        )
-        if not drive_file:
-            with open(img_path, "rb") as f:
-                content = f.read()
-                mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
-                drive_file = api.gdm.upload_binary_to_drive(
-                    api.ai_studio_folder, drive_name, content, mime
-                )
-
-        if drive_file:
-            prompt = ChunkFactory.create_text(
-                f"Archivo visual: {rel_path}", role="user"
-            )
-            image = ChunkFactory.create_image(drive_file["id"], role="user")
-            media_chunks.append(prompt)
-            media_chunks.append(image)
+        chunks = _ensure_image_chunk_pair(api, img_path, str(rel_path.as_posix()))
+        media_chunks.extend(chunks)
     return media_chunks
 
 
@@ -296,23 +310,14 @@ def rebuild_project_context(
     UI.info("Actualizando archivo de contexto maestro...")
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    context_chunk = ChunkFactory.create_file(
-        file_id, role="user", tokens=expected_tokens
-    )
-    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
-    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
-
-    new_chunks = []
-    new_chunks.append(context_chunk)
-    new_chunks.append(prompt_chunk)
-    new_chunks.append(model_chunk)
+    new_chunks = _create_base_chat_chunks(file_id, expected_tokens, project_path)
 
     try:
         with api.modify_chat(chat_id) as chat_data:
             chat_data.chunkedPrompt.chunks = new_chunks
             chat_data.chunkedPrompt.pendingInputs = []
 
-        UI.success("¡Chat y contexto reconstruido con exito!")
+        UI.success("¡Chat y contexto reconstruido con éxito!")
     except Exception as e:
         UI.error(f"Error crítico al guardar la reconstrucción del chat: {e}")
         raise ValueError("Error al guardar la reconstrucción del chat.")
@@ -329,7 +334,6 @@ def find_pending_commit_tasks(chat_data: ChatIAStudio):
 
     for i, chunk in enumerate(chunks):
         if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
-            # Hemos encontrado el mensaje enviado por el CLI
             has_response = False
             if i + 1 < len(chunks):
                 next_chunk = chunks[i + 1]
@@ -350,10 +354,6 @@ def resolve_image_paths(
     """
     Dada una ruta de archivo fuente (ej: README.md), extrae referencias a imágenes
     e intenta resolver sus rutas absolutas.
-
-    Retorna:
-        - List[Path]: Lista de imágenes encontradas y existentes.
-        - List[str]: Lista de nombres/referencias que NO se pudieron encontrar.
     """
     target_file = project_path / source_file_rel_path
     if not target_file.exists():
@@ -367,14 +367,11 @@ def resolve_image_paths(
     missing_refs = []
 
     for ref_text, is_wiki in refs:
-        # Relativo al archivo fuente
         candidate = (target_file.parent / ref_text).resolve()
 
-        # Si es WikiLink y falló, probar con el hint (carpeta de medios)
         if not candidate.exists() and is_wiki and media_root_hint:
             candidate = (media_root_hint / ref_text).resolve()
 
-        # Validación final
         if candidate.exists() and candidate.is_file():
             if candidate not in found_paths:
                 found_paths.append(candidate)
@@ -401,7 +398,6 @@ def extract_chat_assets(
 
         if file_id and file_id not in assets:
             try:
-                # Obtener la metadata explícita para asegurar que tenemos el mimeType original
                 metadata = (
                     api.gdm.service.files()
                     .get(fileId=file_id, fields="id, name, mimeType")
@@ -449,7 +445,6 @@ def transfer_chat_to_profile(
     except Exception as e:
         raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
 
-    # Snapshot de seguridad si el Perfil B ya tenía un historial para este proyecto
     target_state = load_project_context_state(project_path)
     if target_state and target_state.get("chat_id"):
         UI.warn(
@@ -486,7 +481,6 @@ def transfer_chat_to_profile(
     if not new_chat_id:
         raise ValueError("No se pudo crear el archivo de chat en el Perfil B.")
 
-    # Generar el nuevo estado, conservando filtros y MD5 originales para sincronizaciones futuras
     new_state = {
         "path": str(project_path),
         "last_modified": project_path.stat().st_mtime,
@@ -509,7 +503,6 @@ def parse_story_file(file_path: Path) -> Dict:
 
     content = file_path.read_text(encoding="utf-8")
 
-    # Buscar todas las etiquetas para advertir si hay más de una
     matches = list(
         re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE)
     )
@@ -524,28 +517,24 @@ def parse_story_file(file_path: Path) -> Dict:
             f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada."
         )
 
-    # Tomamos la última etiqueta como la activa
     match = matches[-1]
     instruction = match.group(1).strip()
 
     pre_text = content[: match.start()]
     post_text = content[match.end() :]
 
-    # Función auxiliar para limpiar encabezados markdown y ver si realmente hay texto
     def clean_md(text: str) -> str:
         return re.sub(r"(?m)^#+ .*$", "", text).strip()
 
     clean_pre = clean_md(pre_text)
     clean_post = clean_md(post_text)
 
-    # Determinar modo
     if not clean_pre and not clean_post:
         mode = "nuevo"
         anchor_pre = ""
         anchor_post = ""
     elif clean_pre and not clean_post:
         mode = "continuacion"
-        # Tomamos los últimos ~800 caracteres útiles como ancla
         anchor_pre = clean_pre[-800:].strip()
         anchor_post = ""
     else:
@@ -571,16 +560,16 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
     base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
     base_rule = (
         "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
-        "Mantén la coherencia con el contexto global y pioriza escribir dialogos.\n\n"
+        "Mantén la coherencia con el contexto global y prioriza escribir diálogos.\n\n"
     )
 
     if mode == "nuevo":
-        return f"Ayúdame a escribir la primera escena del archivo `{file_name} ` desde cero, {base_rule}"
+        return f"Ayúdame a escribir la primera escena del archivo `{file_name}` desde cero, {base_rule}"
 
     elif mode == "continuacion":
         return (
             f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}"
-            + "La mejora empieza exactamente despues del siguiente texto:\n"
+            + "La mejora empieza exactamente después del siguiente texto:\n"
             "```text\n"
             f"{parsed_data['anchor_pre']}\n"
             "```\n\n"
@@ -627,7 +616,6 @@ def apply_story_update(
     anchor_file = project_path / anchor_rel_path
     UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
 
-    # Parsear el archivo local
     try:
         parsed_data = parse_story_file(anchor_file)
     except Exception as e:
@@ -637,19 +625,15 @@ def apply_story_update(
     UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
     instruction_text = parsed_data["instruction"]
 
-    # Extraer y resolver referencias a imágenes de la etiqueta <mejora>
     refs = extract_image_references_from_text(instruction_text)
     resolved_images = []
 
     for ref_text, is_wiki in refs:
-        # Intentar resolver relativo al directorio del archivo ancla
         candidate = (anchor_file.parent / ref_text).resolve()
 
-        # Si es WikiLink y no se encuentra, probar con la carpeta de medios de la sesión
         if not candidate.exists() and is_wiki and media_root_hint:
             candidate = (media_root_hint / ref_text).resolve()
 
-        # Alternativa: Buscar relativo a la raíz del proyecto
         if not candidate.exists():
             candidate = (project_path / ref_text).resolve()
 
@@ -660,20 +644,16 @@ def apply_story_update(
                 f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'"
             )
 
-    # Sincronizar las imágenes en Drive (Reutilizando existentes)
     image_chunks = []
     if resolved_images:
         UI.info(f"Sincronizando {len(resolved_images)} recursos visuales detectados...")
         image_chunks = sync_story_images(api, project_path, resolved_images)
 
-    # Generar el Prompt de Texto Dinámico
     anchor_file_path = anchor_file.relative_to(project_path).as_posix()
     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
 
-    # Sincronizar contexto global del código fuente (SSoT)
     state = update_context(api, project_path, state)
 
-    # Modificar el Chat en Drive
     chat_id = state["chat_id"]
     chat_data = api.get_chat_ia_studio(chat_id)
     if not chat_data:
@@ -681,22 +661,17 @@ def apply_story_update(
 
     UI.info("Actualizando bloques de prompt del chat e integrando recursos visuales...")
 
-    # Conservamos los 3 primeros bloques iniciales (Documento Contexto, System Prompt, Acuse de recibo)
     base_chunks = chat_data.chunkedPrompt.chunks[:3]
 
-    # Añadir Bloque 4: La instrucción dinámica
     new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
     base_chunks.append(new_instruction_chunk)
 
-    # Añadir los bloques de imágenes alternados (Texto de Ruta + Drive Image) si existen
     if image_chunks:
         base_chunks.extend(image_chunks)
 
-    # Asignar la lista reconstruida y limpiar inputs pendientes
     chat_data.chunkedPrompt.chunks = base_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
-    # Escribir el nuevo JSON en Drive
     if api.update_chat_file(chat_id, chat_data):
         UI.success(
             "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
@@ -714,40 +689,9 @@ def sync_story_images(
 ) -> list:
     """
     Sincroniza un listado de imágenes locales con Drive de forma ligera.
-    Si la imagen ya existe por nombre en Drive, se reutiliza su ID sin volver a subir bytes.
-    Retorna una lista con la estructura de bloques alternados para el Chat.
     """
     media_chunks = []
     for img_path, original_ref in resolved_images:
-        drive_name = f"ctx_{img_path.name}"
-
-        # Comprobar existencia previa usando metadatos rápidos
-        drive_file = api.gdm.find_item_by_name(
-            drive_name, parent_id=api.ai_studio_folder
-        )
-
-        # Subir binario únicamente si no existía en la carpeta de Drive
-        if not drive_file:
-            UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
-            with open(img_path, "rb") as f:
-                content = f.read()
-                mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
-                drive_file = api.gdm.upload_binary_to_drive(
-                    api.ai_studio_folder, drive_name, content, mime
-                )
-        else:
-            UI.info(f"Reutilizando imagen existente en Drive: [dim]{drive_name}[/]")
-
-        if drive_file:
-            # Creamos el par de bloques estructurados:
-            # Bloque A: Texto indicador con la referencia que usó el usuario
-            prompt_chunk = ChunkFactory.create_text(
-                f"Archivo visual: {original_ref}", role="user"
-            )
-            # Bloque B: El elemento visual de imagen multimodal con su ID de Drive
-            image_chunk = ChunkFactory.create_image(drive_file["id"], role="user")
-
-            media_chunks.append(prompt_chunk)
-            media_chunks.append(image_chunk)
-
+        chunks = _ensure_image_chunk_pair(api, img_path, original_ref)
+        media_chunks.extend(chunks)
     return media_chunks
