@@ -13,6 +13,7 @@ from project_context.utils import (
     get_local_context_dir,
     load_project_context_state,
     profile_manager,
+    safe_verify_profile,
     save_project_context_state,
 )
 
@@ -34,7 +35,6 @@ def run_command(
 
     is_initialized = state_path.exists()
 
-    # Si no está inicializado, pedimos confirmación explícita al usuario
     if not is_initialized:
         confirm = typer.confirm(
             "Este directorio no ha sido inicializado como un proyecto de project_context.\n"
@@ -45,7 +45,6 @@ def run_command(
             UI.info("Operación cancelada.")
             raise typer.Exit()
 
-    # Una vez confirmado o validado que existe, garantizamos la estructura del directorio local
     local_dir = get_local_context_dir(project_path)
     lock_path = local_dir / "app.lock"
 
@@ -53,25 +52,18 @@ def run_command(
 
     try:
         with lock:
-            if use_profile:
-                available_profiles = profile_manager.list_profiles()
-                if use_profile not in available_profiles:
-                    typer.secho(
-                        f"Error: El perfil de usuario '{use_profile}' no existe.",
-                        fg=typer.colors.RED,
-                    )
-                    typer.echo(f"Perfiles disponibles: {', '.join(available_profiles)}")
-                    raise typer.Exit(code=1)
+            target_profile = use_profile or profile_manager.get_active_profile_name()
 
+            safe_verify_profile(target_profile)
+
+            if use_profile:
                 profile_manager.set_temporary_profile(use_profile)
-                typer.secho(
-                    f"Usando perfil temporal: {use_profile}", fg=typer.colors.YELLOW
-                )
+                UI.info(f"Usando perfil temporal: [bold]{use_profile}[/]")
 
             try:
                 api = AIStudioDriveManager()
             except Exception as e:
-                typer.secho(f"Error inicializando Drive: {e}", fg=typer.colors.RED)
+                UI.error(f"Error inicializando Drive: {e}")
                 raise typer.Exit(code=1)
 
             state = load_project_context_state(project_path)
@@ -83,7 +75,6 @@ def run_command(
 
             save_project_context_state(project_path, state)
 
-            # Inicia la consola interactiva
             interactive_session(api, state, project_path)
 
     except Timeout:

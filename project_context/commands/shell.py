@@ -12,6 +12,7 @@ from project_context.utils import (
     get_local_context_dir,
     load_project_context_state,
     profile_manager,
+    safe_verify_profile,
 )
 
 
@@ -30,7 +31,6 @@ def shell_command(
     local_dir = project_path / ".project_context"
     state_path = local_dir / "state.json"
 
-    # Shell requiere una sesión previamente inicializada, de lo contrario abortamos con error descriptivo
     if not state_path.exists():
         typer.secho(
             "Error: Este directorio no ha sido inicializado como un proyecto de project_context.\n"
@@ -47,25 +47,18 @@ def shell_command(
 
     try:
         with lock:
-            if use_profile:
-                available_profiles = profile_manager.list_profiles()
-                if use_profile not in available_profiles:
-                    typer.secho(
-                        f"Error: El perfil de usuario '{use_profile}' no existe.",
-                        fg=typer.colors.RED,
-                    )
-                    typer.echo(f"Perfiles disponibles: {', '.join(available_profiles)}")
-                    raise typer.Exit(code=1)
+            target_profile = use_profile or profile_manager.get_active_profile_name()
 
+            safe_verify_profile(target_profile)
+
+            if use_profile:
                 profile_manager.set_temporary_profile(use_profile)
-                typer.secho(
-                    f"Usando perfil temporal: {use_profile}", fg=typer.colors.YELLOW
-                )
+                UI.info(f"Usando perfil temporal: [bold]{use_profile}[/]")
 
             try:
                 api = AIStudioDriveManager()
             except Exception as e:
-                typer.secho(f"Error inicializando Drive: {e}", fg=typer.colors.RED)
+                UI.error(f"Error inicializando Drive: {e}")
                 raise typer.Exit(code=1)
 
             state = load_project_context_state(project_path)
