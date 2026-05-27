@@ -434,7 +434,7 @@ def save_project_context_state(
 
 
 def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]:
-    """Carga el archivo state.json local o migra el estado anterior basado en inodos."""
+    """Carga el archivo state.json local del proyecto."""
     project_path = Path(project_path)
     local_dir = get_local_context_dir(project_path)
     state_path = local_dir / "state.json"
@@ -443,56 +443,8 @@ def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]
         try:
             return json.loads(state_path.read_text(encoding="utf-8"))
         except Exception as e:
-            UI.error(f"Error cargando state.json: {e}")
+            logger.error(f"Error cargando state.json: {e}")
             return None
-
-    inodo = generate_unique_id(project_path)
-    base_dir = profile_manager.get_working_dir()
-    legacy_path = base_dir / inodo / "project_context_state.json"
-
-    if legacy_path.exists():
-        try:
-            UI.info(
-                "Migrando datos del formato de almacenamiento anterior al entorno local..."
-            )
-            legacy_data = json.loads(legacy_path.read_text(encoding="utf-8"))
-
-            new_state = {
-                "path": str(project_path),
-                "last_modified": legacy_data.get(
-                    "last_modified", project_path.stat().st_mtime
-                ),
-                "global_md5": legacy_data.get("md5"),
-                "context_items": legacy_data.get(
-                    "context_items", {"files": [], "folders": [], "exclusions": []}
-                ),
-                "story_mode": legacy_data.get("story_mode", False),
-                "story_anchor": legacy_data.get("story_anchor", None),
-                "profiles_data": {},
-            }
-
-            # Conservamos datos anteriores para que el primer arranque los asocie al perfil actual
-            legacy_chat_id = legacy_data.get("chat_id")
-            legacy_file_id = legacy_data.get("file_id")
-            if legacy_chat_id:
-                new_state["legacy_migration_data"] = {
-                    "chat_id": legacy_chat_id,
-                    "file_id": legacy_file_id,
-                    "md5": legacy_data.get("md5"),
-                }
-
-            save_project_context_state(project_path, new_state)
-
-            # Migrar el archivo de contexto anterior
-            legacy_context_file = base_dir / inodo / "project_context.txt"
-            if legacy_context_file.exists():
-                shutil.copy2(legacy_context_file, local_dir / "last_context.txt")
-
-            UI.success("Migración finalizada con éxito.")
-            return new_state
-        except Exception as e:
-            UI.warn(f"No se pudo completar la migración automática del estado: {e}")
-
     return None
 
 

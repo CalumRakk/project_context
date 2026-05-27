@@ -104,9 +104,58 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
 
 
 def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -> Dict:
-    chat_id = state.get("chat_id")
-    if not chat_id:
-        raise ValueError("No se encontró 'chat_id' en el estado del proyecto.")
+    chat_id = state.get("chat_id", "")
+    file_id = state.get("file_id", "")
+
+    # Autocuración: Si los archivos en Drive no existen, recrear de forma limpia preservando lo local
+    try:
+        context_exists = api.gdm.get_file_metadata(file_id) if file_id else None
+        chat_exists = api.gdm.get_file_metadata(chat_id) if chat_id else None
+    except Exception:
+        context_exists = None
+        chat_exists = None
+
+    if not context_exists or not chat_exists:
+        UI.warn(
+            "(!) Los archivos de la sesión activa en Google Drive no están disponibles."
+        )
+        UI.info("Re-inicializando entorno en la nube preservando tu historial local...")
+
+        # Generar nuevo contexto
+        context_chunk, content_md5 = sync_context(api, project_path)
+
+        # Reconstruir chat base
+        from project_context.schema import (
+            ChatIAStudio,
+            ChunkedPrompt,
+            SystemInstruction,
+        )
+
+        chunks = [
+            context_chunk,
+            ChunkFactory.create_text(resolve_prompt(project_path), role="user"),
+            ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model"),
+        ]
+
+        chat_data = ChatIAStudio(
+            runSettings=create_default_run_settings(),
+            systemInstruction=SystemInstruction(),
+            chunkedPrompt=ChunkedPrompt(chunks=chunks, pendingInputs=[]),
+        )
+
+        chat_filename = project_path.name + "_chat.prompt"
+        new_chat_id = api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
+        if not new_chat_id:
+            raise ValueError("No se pudo re-inicializar el chat en Google Drive.")
+
+        state["chat_id"] = new_chat_id
+        state["file_id"] = context_chunk.file_id
+        state["md5"] = content_md5
+
+        UI.success(
+            f"¡Sesión re-inicializada con éxito! Nuevo Chat ID: [dim]{new_chat_id}[/]"
+        )
+        return state
 
     # Obtenemos los items seleccionados
     context_items = state.get("context_items", {"files": [], "folders": []})
