@@ -7,12 +7,12 @@ from project_context.schema import ChunksDocument, ChunksText
 from project_context.ui.registry import SessionContext, registry
 from project_context.utils import (
     UI,
-    clear_vanish_stash,
+    clear_stash,
     console,
     get_context_tree,
     human_to_int,
-    load_vanish_stash,
-    save_vanish_stash,
+    load_stash,
+    save_stash,
 )
 
 
@@ -61,7 +61,6 @@ def cmd_clear_code(ctx: SessionContext, args: list[str]):
     try:
         with ctx.api.modify_chat(chat_id) as chat_data:
             for idx, chunk in enumerate(chat_data.chunkedPrompt.chunks):
-                # Proteger los bloques iniciales de inicialización (handshake)
                 if idx <= 2:
                     continue
 
@@ -76,7 +75,7 @@ def cmd_clear_code(ctx: SessionContext, args: list[str]):
                             chunk.text = re.sub(
                                 r"```[\s\S]*?```", "[Código omitido]", chunk.text
                             )
-                            chunk.tokenCount = None  # parece forzar la actualizacion.
+                            chunk.tokenCount = None
                             cleaned_blocks_count += 1
 
         if code_blocks_removed > 0:
@@ -234,7 +233,7 @@ def cmd_insert(ctx: SessionContext, args: list[str]):
 
 @registry.register("run", "r", require_chat=True)
 def cmd_run(ctx: SessionContext, args: list[str]):
-    """Ejecuta o procesa la sesión actual (reservado para coordinación de API)."""
+    """Ejecuta o procesa la sesión actual."""
     chat_id = ctx.state.get("chat_id")
     if not chat_id:
         raise ChatSessionError("No se encontró el chat_id en el estado actual.")
@@ -260,7 +259,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
             "No se pudo descargar el chat desde Drive para realizar el respaldo."
         )
 
-    save_vanish_stash(ctx.project_path, chat_data.model_dump_json())
+    save_stash(ctx.project_path, "vanish_stash.json", chat_data.model_dump_json())
 
     UI.info("Estableciendo pantalla limpia en Google Drive...")
     vanish_chunks = [ChunksText(text="✨ vanish off ✨", role="user")]
@@ -277,7 +276,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
             "Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia."
         )
     else:
-        clear_vanish_stash(ctx.project_path)
+        clear_stash(ctx.project_path, "vanish_stash.json")
         raise ChatSessionError(
             "Ocurrió un problema al actualizar el chat en Drive para activar vanish."
         )
@@ -291,7 +290,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
         return
 
     chat_id = ctx.state.get("chat_id")
-    stashed_json = load_vanish_stash(ctx.project_path)
+    stashed_json = load_stash(ctx.project_path, "vanish_stash.json")
 
     if not stashed_json:
         ctx.state["vanished"] = False
@@ -307,7 +306,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
     )
 
     if success:
-        clear_vanish_stash(ctx.project_path)
+        clear_stash(ctx.project_path, "vanish_stash.json")
         ctx.state["vanished"] = False
         ctx.update_state(ctx.state)
         UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")

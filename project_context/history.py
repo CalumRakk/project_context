@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.utils import compute_md5
 
 db = SqliteDatabase(None)
 
@@ -33,8 +34,7 @@ class Snapshot(BaseModel):
 
 class SnapshotAsset(BaseModel):
     """
-    Recursos binarios (como imágenes o documentos de contexto) vinculados a un snapshot.
-    Permite rastrear su estado en la nube y localmente de forma independiente.
+    Recursos binarios vinculados a un snapshot.
     """
 
     snapshot = ForeignKeyField(Snapshot, backref="assets", on_delete="CASCADE")
@@ -50,10 +50,6 @@ def compress_data(data: bytes) -> bytes:
 
 def decompress_data(data: bytes) -> bytes:
     return zlib.decompress(data)
-
-
-def calculate_md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
 
 
 class SnapshotManager:
@@ -100,7 +96,7 @@ class SnapshotManager:
         return self.objects_dir / prefix / f"{suffix}.z"
 
     def _store_object(self, data: bytes) -> str:
-        file_hash = calculate_md5(data)
+        file_hash = compute_md5(data)
         obj_path = self._get_object_path(file_hash)
         if not obj_path.exists():
             obj_path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +272,7 @@ class SnapshotManager:
         self.create_snapshot(mod_time, message=message)
 
     def restore_snapshot(self, timestamp: str) -> bool:
-        """Restaura de forma segura un snapshot, verificando y auto-reparando recursos."""
+        """Restaura de forma segura un snapshot."""
         with db.connection_context():
             try:
                 snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
@@ -459,7 +455,7 @@ class SnapshotManager:
                 return False
 
     def get_all_snapshot_ids(self) -> List[str]:
-        """Obtiene solo los timestamps ordenados del más reciente al más antiguo."""
+        """Obtiene solo los timestamps ordenados."""
         with db.connection_context():
             try:
                 query = Snapshot.select(Snapshot.timestamp).order_by(
@@ -507,7 +503,7 @@ class SnapshotManager:
                 return []
 
     def delete_snapshot(self, timestamp: str) -> bool:
-        """Elimina un snapshot de la base de datos (con cascada de assets) y limpia archivos huérfanos."""
+        """Elimina un snapshot de la base de datos y limpia archivos huérfanos."""
         with db.connection_context():
             try:
                 snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
@@ -533,7 +529,7 @@ class SnapshotManager:
                 return False
 
     def prune_objects(self) -> int:
-        """Elimina físicamente del disco los archivos .z en CAS que no tengan referencias en SQLite."""
+        """Elimina físicamente del disco los archivos .z en CAS que no tengan referencias."""
         with db.connection_context():
             referenced_hashes = set()
             try:
@@ -568,7 +564,7 @@ class SnapshotManager:
             return deleted_count
 
     def _migrate_legacy_snapshots(self):
-        """Migra de forma transparente los snapshots antiguos (basados en carpetas) al nuevo esquema DB/CAS."""
+        """Migra de forma transparente los snapshots antiguos."""
         if not self.snapshots_dir.exists():
             return
 

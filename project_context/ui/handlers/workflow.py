@@ -18,13 +18,13 @@ from project_context.utils import (
     IMAGE_INSERTION_PROMPT,
     IMAGE_INSERTION_RESPONSE,
     UI,
-    clear_chat_stash,
+    clear_stash,
     console,
     get_potential_media_folders,
     has_unstaged_changes,
-    load_chat_stash,
+    load_stash,
     profile_manager,
-    save_chat_stash,
+    save_stash,
     stage_all_changes,
 )
 
@@ -87,7 +87,7 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
         return
 
     UI.info("Restaurando chat original desde copia de seguridad...")
-    stashed_json = load_chat_stash(ctx.project_path)
+    stashed_json = load_stash(ctx.project_path, "chat_stash.json")
 
     if not stashed_json:
         ctx.state["commit_mode"] = False
@@ -102,7 +102,7 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
         mime_type=ctx.api.MIME_PROMPT,
     )
 
-    clear_chat_stash(ctx.project_path)
+    clear_stash(ctx.project_path, "chat_stash.json")
     ctx.state["commit_mode"] = False
     ctx.update_state(ctx.state)
 
@@ -128,7 +128,6 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
         )
         return
 
-    # Preservar compatibilidad con el paso de subcomandos heredados sin espacio de nombres
     if args:
         sub = args[0].lower()
         if sub in ["clear", "done", "restore", "rm"]:
@@ -169,7 +168,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
             "No se pudo descargar el chat para realizar la copia de respaldo."
         )
 
-    save_chat_stash(ctx.project_path, chat_data.model_dump_json())
+    save_stash(ctx.project_path, "chat_stash.json", chat_data.model_dump_json())
 
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:

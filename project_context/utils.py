@@ -111,7 +111,6 @@ class ProfileManager:
         if legacy_secret.exists() and not target_secret.exists():
             try:
                 shutil.copy2(str(legacy_secret), str(target_secret))
-                # Dejamos el viejo por si acaso o lo eliminamos tras confirmar estabilidad
             except Exception as e:
                 logger.warning(f"No se pudo migrar el secreto legacy: {e}")
 
@@ -199,24 +198,16 @@ class ProfileManager:
 
     def resolve_secrets_file(self) -> Tuple[Path, str]:
         """
-        Resuelve el secreto asociado al perfil activo aplicando la siguiente prioridad:
-        1. Si hay un secreto asociado explícitamente y este existe físicamente, se utiliza.
-        2. Si no hay secreto asociado (o el asociado no existe):
-           - Si en secrets/ hay exactamente 1 secreto .json instalado, se asocia automáticamente.
-           - Si hay 2 o más secretos, falla pidiendo al usuario que lo especifique.
-           - Si no hay secretos, retorna la ruta esperada por defecto para que el flujo estándar
-             guíe al usuario con los pasos de instalación.
+        Resuelve el secreto asociado al perfil activo aplicando prioridades.
         """
         profile_name = self.get_active_profile_name()
         profile_data = self.get_active_profile_data()
         secret_name = profile_data.get("associated_secret")
 
-        # Escanear el directorio para ver qué secretos físicos están disponibles
         available_secrets = sorted(
             [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
         )
 
-        # Si existe una asociación explícita y es válida, usarla
         if secret_name:
             if not secret_name.endswith(".json"):
                 secret_name += ".json"
@@ -225,9 +216,7 @@ class ProfileManager:
             if specific_path.exists():
                 return specific_path, f"Asociado al perfil ({secret_name})"
 
-        # Resolución inteligente de contingencias
         if len(available_secrets) == 1:
-            # Auto-asociación persistente en los metadatos del perfil activo
             auto_secret = available_secrets[0]
             profile_data["associated_secret"] = auto_secret.name
             self.save_profile_data(profile_name, profile_data)
@@ -238,7 +227,6 @@ class ProfileManager:
             return auto_secret, f"Auto-detectado ({auto_secret.name})"
 
         elif len(available_secrets) > 1:
-            # Conflicto multicuenta: Exigimos clarificación al usuario
             secret_names = [f.name for f in available_secrets]
             raise ValueError(
                 f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos en el almacén "
@@ -249,7 +237,6 @@ class ProfileManager:
             )
 
         else:
-            # No hay secretos disponibles en el disco: Se asume el comportamiento por defecto
             fallback_name = secret_name if secret_name else f"{profile_name}.json"
             if not fallback_name.endswith(".json"):
                 fallback_name += ".json"
@@ -259,13 +246,23 @@ class ProfileManager:
 profile_manager = ProfileManager()
 
 
-def compute_md5(file_path):
+def compute_md5(source: Union[bytes, str, Path]) -> str:
+    """
+    Calcula el hash MD5 de forma segura.
+    Acepta un bloque de bytes en memoria, una ruta de archivo en formato de cadena o un objeto Path.
+    """
     import hashlib
 
     hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
+
+    if isinstance(source, bytes):
+        hash_md5.update(source)
+    else:
+        file_path = Path(source)  # type: ignore
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+
     return hash_md5.hexdigest()
 
 
@@ -275,7 +272,7 @@ def generate_unique_id(path: Union[str, Path]) -> str:
     return f"{st.st_dev}-{st.st_ino}"
 
 
-def human_to_int(value):
+def human_to_int(value) -> int:
     value = value.strip().lower()
     multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
     if value[-1] in multipliers:
@@ -306,7 +303,6 @@ def get_local_context_dir(project_path: Union[str, Path]) -> Path:
 def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] = None):
     """
     Verifica y añade la regla de exclusión del directorio local a .gitignore.
-    Respeta la opción 'auto_gitignore': false si está presente en el estado.
     """
     project_path = Path(project_path)
 
@@ -321,7 +317,6 @@ def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] 
         if gitignore_path.exists():
             content = gitignore_path.read_text(encoding="utf-8")
 
-        # Comprobación de existencia de la regla
         lines = [line.strip() for line in content.splitlines()]
         if any(line == rule or line == ".project_context" for line in lines):
             return
@@ -358,7 +353,6 @@ def generate_context(
     final_content = ""
     total_tokens = 0
 
-    # -- Procesa Archivos Explícitos --
     files = context_items.get("files", [])
     if files:
         final_tree += "└── [Archivos Específicos Añadidos]\n"
@@ -371,7 +365,7 @@ def generate_context(
                 try:
                     text = real_path.read_text(encoding="utf-8")
                     final_content += f"================================================\nFILE: {f_path}\n================================================\n{text}\n\n"
-                    total_tokens += len(text) // 4  # Estimación rápida de tokens
+                    total_tokens += len(text) // 4
                 except Exception as e:
                     final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
 
@@ -391,14 +385,12 @@ def generate_context(
                         rel_exc = exc_path.relative_to(folder_path_obj)
                         folder_specific_ignores.append(str(rel_exc.as_posix()))
                     except ValueError:
-                        # No pertenece a esta carpeta de enfoque
                         pass
 
                 summary, tree, content = gitingest.ingest(
                     str(real_folder), exclude_patterns=set(folder_specific_ignores)
                 )
 
-                # Ajustamos la indentación del árbol para que encaje visualmente
                 indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
                 final_tree += f"{indented_tree}\n"
 
@@ -504,19 +496,13 @@ def resolve_prompt(project_path: Union[str, Path]) -> str:
 
 def get_diff_message(project_path: Path) -> Optional[str]:
     """
-    Obtiene el diff de los archivos en STAGE (listos para commit).
-    Si no hay archivos en stage, retorna None.
+    Obtiene el diff de los archivos en STAGE.
     """
     try:
-        # search_parent_directories=True permite ejecutarlo en subcarpetas
         repo = Repo(project_path, search_parent_directories=True)
-
-        # Obtiene el diff de lo que está en 'stage' (cached) vs HEAD
         diff_text = repo.git.diff("--cached")
 
         if not diff_text.strip():
-            # Si es un repo nuevo sin commits previos, 'diff --cached' a veces retorna vacío
-            # aunque haya archivos nuevos añadidos.
             if not repo.head.is_valid():
                 status = repo.git.status("--short")
                 if status:
@@ -538,15 +524,11 @@ def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:
     Escanea el proyecto buscando archivos con ciertas extensiones,
     respetando .gitignore y .contextignore.
     """
-
     patterns = get_ignore_patterns(project_path, ".gitignore")
     patterns += get_ignore_patterns(project_path, ".contextignore")
-
     patterns += [".git/", "node_modules/", "__pycache__/", ".venv/", "venv/"]
 
-    # Crear el objeto de especificación (formato gitignore)
     spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
-
     valid_files = []
 
     for file in project_path.rglob("*"):
@@ -564,7 +546,7 @@ def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:
 
 
 def get_potential_media_folders(project_path: Path) -> list[Path]:
-    """Busca carpetas que probablemente contengan imágenes (assets, attachments, etc)."""
+    """Busca carpetas que probablemente contengan imágenes."""
     common_names = {
         "assets",
         "attachments",
@@ -577,7 +559,6 @@ def get_potential_media_folders(project_path: Path) -> list[Path]:
     found = []
     for p in project_path.rglob("*"):
         if p.is_dir() and p.name.lower() in common_names:
-            # Evitar carpetas ignoradas (node_modules, .git, etc)
             if not any(
                 part.startswith(".") or part == "node_modules" for part in p.parts
             ):
@@ -585,15 +566,11 @@ def get_potential_media_folders(project_path: Path) -> list[Path]:
     return found
 
 
-def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
+def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     """
-    Extrae referencias de imágenes.
+    Extrae referencias de imágenes desde una cadena de texto plano.
     Retorna una lista de tuplas: (nombre_o_ruta, es_wikilink)
     """
-    if not file_path.exists():
-        return []
-    content = file_path.read_text(encoding="utf-8")
-
     results = []
     # Markdown estándar e HTML
     std_patterns = [
@@ -603,7 +580,11 @@ def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
     for pat in std_patterns:
         matches = re.findall(pat, content, re.IGNORECASE)
         results.extend(
-            [(m.strip(), False) for m in matches if not m.startswith(("http", "data:"))]
+            [
+                (m.strip().lstrip("/"), False)
+                for m in matches
+                if not m.startswith(("http", "data:"))
+            ]
         )
 
     # WikiLinks (estilo Obsidian): ![[imagen.png|237]]
@@ -615,14 +596,19 @@ def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
     return list(dict.fromkeys(results))
 
 
+def extract_image_references(file_path: Path) -> List[Tuple[str, bool]]:
+    """
+    Lee un archivo en disco y extrae sus referencias visuales asociadas.
+    """
+    if not file_path.exists():
+        return []
+    return extract_image_references_from_text(file_path.read_text(encoding="utf-8"))
+
+
 def has_unstaged_changes(project_path: Path) -> bool:
     """Verifica si hay archivos modificados o untracked que no están en stage."""
     try:
         repo = Repo(project_path, search_parent_directories=True)
-        # is_dirty(untracked_files=True) devuelve True si hay cambios sin commit/stage
-        # Pero queremos saber si hay algo fuera del stage específicamente.
-        # repo.untracked_files nos da los nuevos.
-        # repo.index.diff(None) nos da los modificados sin stage.
         if repo.untracked_files or repo.index.diff(None):
             return True
         return False
@@ -639,57 +625,34 @@ def stage_all_changes(project_path: Path):
         UI.error(f"Error al hacer git add: {e}")
 
 
-def save_chat_stash(project_path: Union[str, Path], chat_json: str):
-    project_path = Path(project_path)
-    local_dir = get_local_context_dir(project_path)
-    output = local_dir / "chat_stash.json"
-    output.write_text(chat_json, encoding="utf-8")
+def _get_stash_path(project_path: Union[str, Path], filename: str) -> Path:
+    return get_local_context_dir(project_path) / filename
 
 
-def load_chat_stash(project_path: Union[str, Path]) -> Optional[str]:
-    project_path = Path(project_path)
-    input_path = get_local_context_dir(project_path) / "chat_stash.json"
-    if not input_path.exists():
-        return None
-    return input_path.read_text(encoding="utf-8")
+def save_stash(project_path: Union[str, Path], filename: str, content: str):
+    """Guarda un estado de respaldo en el directorio de metadatos local."""
+    _get_stash_path(project_path, filename).write_text(content, encoding="utf-8")
 
 
-def clear_chat_stash(project_path: Union[str, Path]):
-    project_path = Path(project_path)
-    input_path = get_local_context_dir(project_path) / "chat_stash.json"
-    if input_path.exists():
-        input_path.unlink()
+def load_stash(project_path: Union[str, Path], filename: str) -> Optional[str]:
+    """Carga un estado de respaldo si existe en el almacenamiento local."""
+    path = _get_stash_path(project_path, filename)
+    return path.read_text(encoding="utf-8") if path.exists() else None
 
 
-def save_vanish_stash(project_path: Union[str, Path], chat_json: str):
-    project_path = Path(project_path)
-    local_dir = get_local_context_dir(project_path)
-    output = local_dir / "vanish_stash.json"
-    output.write_text(chat_json, encoding="utf-8")
-
-
-def load_vanish_stash(project_path: Union[str, Path]) -> Optional[str]:
-    project_path = Path(project_path)
-    input_path = get_local_context_dir(project_path) / "vanish_stash.json"
-    if not input_path.exists():
-        return None
-    return input_path.read_text(encoding="utf-8")
-
-
-def clear_vanish_stash(project_path: Union[str, Path]):
-    project_path = Path(project_path)
-    input_path = get_local_context_dir(project_path) / "vanish_stash.json"
-    if input_path.exists():
-        input_path.unlink()
+def clear_stash(project_path: Union[str, Path], filename: str):
+    """Elimina el archivo de respaldo temporal si existe."""
+    path = _get_stash_path(project_path, filename)
+    if path.exists():
+        path.unlink()
 
 
 def get_context_tree(
     project_path: Union[str, Path], context_items: Optional[dict] = None
 ) -> str:
-    """Genera solo la representación visual del árbol (sin el contenido de los archivos)."""
+    """Genera solo la representación visual del árbol."""
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    # Si no hay enfoque específico, devolvemos el árbol de todo el proyecto
     if not context_items or (
         not context_items.get("files") and not context_items.get("folders")
     ):
@@ -699,7 +662,6 @@ def get_context_tree(
         )
         return tree
 
-    # Si hay un enfoque específico, construimos el árbol manual
     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
     final_tree = "Directory structure (Custom Focus):\n"
 
@@ -731,38 +693,7 @@ def get_context_tree(
                 summary, tree, content = gitingest.ingest(
                     str(real_folder), exclude_patterns=set(folder_specific_ignores)
                 )
-                # Indentamos para que cuadre visualmente
                 indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
                 final_tree += f"{indented_tree}\n"
 
     return final_tree
-
-
-def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
-    """
-    Extrae referencias de imágenes desde una cadena de texto plano.
-    Retorna una lista de tuplas: (nombre_o_ruta, es_wikilink)
-    """
-    results = []
-    # Markdown estándar e HTML
-    std_patterns = [
-        r"!\[.*?\]\((.*?\.(?:png|jpg|jpeg|webp|gif))\)",
-        r'<img\s+[^>]*src=["\'](.*?\.(?:png|jpg|jpeg|webp|gif))["\']',
-    ]
-    for pat in std_patterns:
-        matches = re.findall(pat, content, re.IGNORECASE)
-        results.extend(
-            [
-                (m.strip().lstrip("/"), False)
-                for m in matches
-                if not m.startswith(("http", "data:"))
-            ]
-        )
-
-    # WikiLinks (estilo Obsidian): ![[imagen.png|237]]
-    wiki_matches = re.findall(r"!\[\[(.*?)(?:\|.*?)?\]\]", content)
-    results.extend(
-        [(m.strip(), True) for m in wiki_matches if not m.startswith(("http", "data:"))]
-    )
-
-    return list(dict.fromkeys(results))
