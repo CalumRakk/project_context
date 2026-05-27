@@ -6,18 +6,16 @@ from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
 from project_context.api_drive import AIStudioDriveManager
-from project_context.ops import initialize_project_context, update_context
 from project_context.ui.interactive import interactive_session
 from project_context.utils import (
     UI,
     get_local_context_dir,
     load_project_context_state,
     profile_manager,
-    save_project_context_state,
 )
 
 
-def run_command(
+def shell_command(
     use_profile: Annotated[
         Optional[str],
         typer.Option(
@@ -26,26 +24,22 @@ def run_command(
     ] = None,
 ):
     """
-    Sincroniza el proyecto actual con Google Drive e inicia la sesión interactiva (shell).
+    Entra directamente a la consola interactiva (shell) omitiendo el análisis local de archivos.
     """
     project_path = Path.cwd()
     local_dir = project_path / ".project_context"
     state_path = local_dir / "state.json"
 
-    is_initialized = state_path.exists()
-
-    # Si no está inicializado, pedimos confirmación explícita al usuario
-    if not is_initialized:
-        confirm = typer.confirm(
-            "Este directorio no ha sido inicializado como un proyecto de project_context.\n"
-            "¿Deseas inicializar un nuevo contexto de proyecto en la ruta actual?",
-            default=True,
+    # Shell requiere una sesión previamente inicializada, de lo contrario abortamos con error descriptivo
+    if not state_path.exists():
+        typer.secho(
+            "Error: Este directorio no ha sido inicializado como un proyecto de project_context.\n"
+            "Por favor, ejecuta primero 'project_context run' o 'project_context update' para inicializarlo.",
+            fg=typer.colors.RED,
+            bold=True,
         )
-        if not confirm:
-            UI.info("Operación cancelada.")
-            raise typer.Exit()
+        raise typer.Exit(code=1)
 
-    # Una vez confirmado o validado que existe, garantizamos la estructura del directorio local
     local_dir = get_local_context_dir(project_path)
     lock_path = local_dir / "app.lock"
 
@@ -76,14 +70,14 @@ def run_command(
 
             state = load_project_context_state(project_path)
 
-            if state is None:
-                state = initialize_project_context(api, project_path)
-            else:
-                state = update_context(api, project_path, state)
+            if state is None or not state.get("chat_id"):
+                typer.secho(
+                    "Error: No se encontró información del chat en el estado local.\n"
+                    "Por favor, ejecuta primero 'project_context run' para sincronizar tu proyecto.",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1)
 
-            save_project_context_state(project_path, state)
-
-            # Inicia la consola interactiva
             interactive_session(api, state, project_path)
 
     except Timeout:

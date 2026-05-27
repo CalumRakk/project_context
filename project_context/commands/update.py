@@ -7,7 +7,6 @@ from typing_extensions import Annotated
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.ops import initialize_project_context, update_context
-from project_context.ui.interactive import interactive_session
 from project_context.utils import (
     UI,
     get_local_context_dir,
@@ -17,7 +16,7 @@ from project_context.utils import (
 )
 
 
-def run_command(
+def update_command(
     use_profile: Annotated[
         Optional[str],
         typer.Option(
@@ -26,7 +25,7 @@ def run_command(
     ] = None,
 ):
     """
-    Sincroniza el proyecto actual con Google Drive e inicia la sesión interactiva (shell).
+    Sincroniza los cambios del código del proyecto con Google Drive y sale de inmediato.
     """
     project_path = Path.cwd()
     local_dir = project_path / ".project_context"
@@ -34,7 +33,6 @@ def run_command(
 
     is_initialized = state_path.exists()
 
-    # Si no está inicializado, pedimos confirmación explícita al usuario
     if not is_initialized:
         confirm = typer.confirm(
             "Este directorio no ha sido inicializado como un proyecto de project_context.\n"
@@ -45,7 +43,6 @@ def run_command(
             UI.info("Operación cancelada.")
             raise typer.Exit()
 
-    # Una vez confirmado o validado que existe, garantizamos la estructura del directorio local
     local_dir = get_local_context_dir(project_path)
     lock_path = local_dir / "app.lock"
 
@@ -82,9 +79,7 @@ def run_command(
                 state = update_context(api, project_path, state)
 
             save_project_context_state(project_path, state)
-
-            # Inicia la consola interactiva
-            interactive_session(api, state, project_path)
+            UI.success("Sincronización de contexto completada con éxito.")
 
     except Timeout:
         UI.error(

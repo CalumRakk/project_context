@@ -21,7 +21,6 @@ def setup_terminal_behavior():
         msg_str = str(message)
 
         if issubclass(category, FutureWarning):
-            # Limpiar el mensaje de Google para que sea más legible
             if "Google" in msg_str and "Python version" in msg_str:
                 UI.warn(
                     "Google Cloud dejará de soportar Python 3.10 en Octubre de 2026. Se recomienda actualizar a 3.11+."
@@ -45,7 +44,8 @@ try:
 except ImportError:
     pass
 
-from project_context.commands import profile, run,dev
+# Importamos los controladores de comandos
+from project_context.commands import dev, profile, run, shell, update
 
 if sys.platform.startswith("win"):
     os.system("chcp 65001 > nul")
@@ -85,9 +85,14 @@ def global_options(
     pass
 
 
+# Registro de sub-grupos
 app.add_typer(profile.app, name="profile")
 app.add_typer(dev.app, name="dev")
+
+# Registro de comandos principales de primer nivel
 app.command(name="run")(run.run_command)
+app.command(name="update")(update.update_command)
+app.command(name="shell")(shell.shell_command)
 
 
 def main():
