@@ -18,8 +18,8 @@ def list_profiles():
 
     typer.echo("\nPerfiles disponibles:")
     for p in profiles:
-        prefix = ">>" if p == active else "  "
-        color = typer.colors.GREEN if p == active else None
+        prefix = ">>" if active and p == active else "  "
+        color = typer.colors.GREEN if active and p == active else None
 
         profile_data = profile_manager.load_profile_data(p)
         email = profile_data.get("email") or "Sin autenticar"
@@ -44,7 +44,6 @@ def add_profile(
     """
     Crea un nuevo perfil asociándolo a un secreto existente y validándolo de forma atómica.
     """
-
     if name in profile_manager.list_profiles():
         typer.secho(f"El perfil '{name}' ya existe.", fg=typer.colors.YELLOW)
         return
@@ -79,14 +78,12 @@ def add_profile(
             )
             raise typer.Exit(code=1)
         selected_secret_path = candidate_path
-
     else:
         if num_secrets == 1:
             selected_secret_path = available_secrets[0]
             typer.echo(
                 f"Secreto único detectado de forma automática: {selected_secret_path.name}"
             )
-
         else:
             secret_names = [s.name for s in available_secrets]
             typer.secho(
@@ -102,7 +99,6 @@ def add_profile(
             raise typer.Exit(code=1)
 
     assert selected_secret_path is not None
-    profile_manager.get_active_profile_name()
 
     try:
         typer.echo(
@@ -112,7 +108,6 @@ def add_profile(
         from project_context.api_drive import GoogleDriveManager
 
         gdm = GoogleDriveManager(secrets_file=selected_secret_path, profile_name=name)
-
         email = gdm.fetched_email
 
         profile_data = {
@@ -120,13 +115,17 @@ def add_profile(
             "associated_secret": selected_secret_path.name,
             "created_at": time.time(),
         }
+
+        # Guardamos el perfil físico primero
         profile_manager.save_profile_data(name, profile_data)
 
+        # Escribimos el token de autenticación
         token_name = f"{email}__{selected_secret_path.name}"
         token_path = profile_manager.tokens_dir / token_name
         with open(token_path, "w") as token_fh:
             token_fh.write(gdm.credentials.to_json())
 
+        # El perfil recién creado se activa inmediatamente como el perfil activo por defecto
         profile_manager.set_active_profile(name)
 
         typer.secho(
@@ -154,6 +153,16 @@ def switch_profile(name: str):
 def profile_info():
     """Muestra información del perfil activo y recursos relacionados."""
     name = profile_manager.get_active_profile_name()
+    if not name:
+        typer.secho(
+            "\nNo hay ningún perfil de usuario activo configurado actualmente.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo(
+            "Usa 'project_context profile list' para ver perfiles o 'project_context profile add <nombre>' para crear uno.\n"
+        )
+        return
+
     profile_data = profile_manager.get_active_profile_data()
     secrets_path, secrets_type = profile_manager.resolve_secrets_file()
 
@@ -192,3 +201,49 @@ def profile_info():
     else:
         typer.echo("Token de Acceso:   Desconocido (Falta flujo OAuth inicial)")
     typer.echo("")
+
+
+@app.command("set-secrets")
+def set_secrets(
+    secrets_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Ruta al archivo client_secrets.json que deseas instalar.",
+    ),
+    secret_name: Optional[str] = typer.Option(
+        None,
+        help="Nombre que recibirá el archivo en el banco global de secretos (por defecto usa el perfil activo).",
+    ),
+):
+    """
+    Instala un client_secrets.json en el banco de secretos y lo asocia al perfil actual.
+    """
+    active_profile = profile_manager.get_active_profile_name()
+    if not active_profile:
+        typer.secho(
+            "Error: No hay ningún perfil de usuario activo seleccionado para asociar este secreto.\n"
+            "Por favor, crea un perfil primero usando 'profile add <nombre>'.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    name = secret_name or active_profile
+
+    target_name = name if name.endswith(".json") else f"{name}.json"
+    target_path = profile_manager.secrets_dir / target_name
+
+    try:
+        shutil.copy2(secrets_path, target_path)
+
+        profile_data = profile_manager.get_active_profile_data()
+        profile_data["associated_secret"] = target_name
+        profile_manager.save_active_profile_data(profile_data)
+
+        typer.secho(
+            f"Secretos '{target_name}' instalados con éxito y asociados al perfil '{active_profile}'.",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as e:
+        typer.secho(f"Error al copiar archivo: {e}", fg=typer.colors.RED)

@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import sys
-import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
@@ -75,235 +74,6 @@ def get_app_root_dir() -> Path:
     else:
         base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "project_context"
-
-
-class ProfileManager:
-    def __init__(self):
-        self.root_dir = get_app_root_dir()
-        self.profiles_dir = self.root_dir / "profiles"
-        self.secrets_dir = self.root_dir / "secrets"
-        self.tokens_dir = self.root_dir / "tokens"
-        self.config_file = self.root_dir / "global_config.json"
-        self._temp_profile: Optional[str] = None
-        self._ensure_structure()
-
-    def _ensure_structure(self):
-        """Crea la estructura base y migra datos antiguos si existen."""
-        self.root_dir.mkdir(parents=True, exist_ok=True)
-        self.profiles_dir.mkdir(exist_ok=True)
-        self.secrets_dir.mkdir(exist_ok=True)
-        self.tokens_dir.mkdir(exist_ok=True)
-
-        # Migración ligera: Si existía un secreto en la raíz, moverlo al banco de secretos
-        legacy_secret = self.root_dir / "client_secrets.json"
-        target_secret = self.secrets_dir / "client_secrets.json"
-        if legacy_secret.exists() and not target_secret.exists():
-            try:
-                shutil.copy2(str(legacy_secret), str(target_secret))
-            except Exception as e:
-                logger.warning(f"No se pudo migrar el secreto legacy: {e}")
-
-        # Garantizar perfil por defecto
-        default_profile_file = self.profiles_dir / "default.json"
-        if not default_profile_file.exists():
-            self.save_profile_data(
-                "default",
-                {
-                    "email": None,
-                    "associated_secret": "client_secrets",
-                    "created_at": time.time(),
-                },
-            )
-
-        if not self.config_file.exists():
-            self.set_active_profile("default")
-
-    def set_temporary_profile(self, profile_name: str):
-        """Establece un perfil activo solo para la ejecución actual (en memoria)."""
-        self._temp_profile = profile_name
-
-    def get_active_profile_name(self) -> str:
-        if self._temp_profile:
-            return self._temp_profile
-
-        if not self.config_file.exists():
-            return "default"
-
-        try:
-            config = json.loads(self.config_file.read_text(encoding="utf-8"))
-            return config.get("current_profile", "default")
-        except Exception:
-            return "default"
-
-    def set_active_profile(self, profile_name: str):
-        self._temp_profile = None
-
-        config = {"current_profile": profile_name}
-        self.config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
-
-        # Crear descriptor de perfil si no existe
-        profile_file = self.profiles_dir / f"{profile_name}.json"
-        if not profile_file.exists():
-            self.save_profile_data(
-                profile_name,
-                {
-                    "email": None,
-                    "associated_secret": profile_name,
-                    "created_at": time.time(),
-                },
-            )
-
-    def get_working_dir(self) -> Path:
-        """
-        Retorna la raíz del perfil global para almacenamiento temporal heredado.
-        Nota: Se mantiene por compatibilidad temporal en fases de transición.
-        """
-        return self.root_dir
-
-    def list_profiles(self) -> list[str]:
-        """Lista los aliases de perfiles (nombres de archivos .json sin extensión)."""
-        return [f.stem for f in self.profiles_dir.glob("*.json")]
-
-    def load_profile_data(self, profile_name: str) -> dict:
-        profile_file = self.profiles_dir / f"{profile_name}.json"
-        if not profile_file.exists():
-            return {}
-        try:
-            return json.loads(profile_file.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def save_profile_data(self, profile_name: str, data: dict):
-        profile_file = self.profiles_dir / f"{profile_name}.json"
-        profile_file.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def get_active_profile_data(self) -> dict:
-        return self.load_profile_data(self.get_active_profile_name())
-
-    def save_active_profile_data(self, data: dict):
-        self.save_profile_data(self.get_active_profile_name(), data)
-
-    def resolve_secrets_file(self) -> Tuple[Path, str]:
-        """
-        Resuelve el secreto asociado al perfil activo aplicando prioridades.
-        """
-        profile_name = self.get_active_profile_name()
-        profile_data = self.get_active_profile_data()
-        secret_name = profile_data.get("associated_secret")
-
-        available_secrets = sorted(
-            [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
-        )
-
-        if secret_name:
-            if not secret_name.endswith(".json"):
-                secret_name += ".json"
-
-            specific_path = self.secrets_dir / secret_name
-            if specific_path.exists():
-                return specific_path, f"Asociado al perfil ({secret_name})"
-
-        if len(available_secrets) == 1:
-            auto_secret = available_secrets[0]
-            profile_data["associated_secret"] = auto_secret.name
-            self.save_profile_data(profile_name, profile_data)
-
-            UI.info(
-                f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]"
-            )
-            return auto_secret, f"Auto-detectado ({auto_secret.name})"
-
-        elif len(available_secrets) > 1:
-            secret_names = [f.name for f in available_secrets]
-            raise ValueError(
-                f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos en el almacén "
-                f"({', '.join(secret_names)}) pero el perfil '{profile_name}' no tiene un secreto asociado.\n"
-                f"Para solucionarlo, asocia uno explícitamente ejecutando:\n"
-                f"  project_context profile set-secrets <ruta_archivo.json> --secret-name <nombre_deseado>\n"
-                f"O bien cambia a un perfil que ya esté configurado."
-            )
-
-        else:
-            fallback_name = secret_name if secret_name else f"{profile_name}.json"
-            if not fallback_name.endswith(".json"):
-                fallback_name += ".json"
-            return self.secrets_dir / fallback_name, "Predeterminado (Faltante)"
-
-    def get_secrets_association_map(self) -> dict:
-        """
-        Escanea tanto el directorio de secretos como el de perfiles para cruzar
-        las dependencias y construir un mapa de asociaciones.
-
-        Retorna un diccionario con la estructura:
-        {
-            "nombre_secreto.json": {
-                "path": Path,
-                "associated_profiles": ["perfil1", "perfil2"],
-                "exists_on_disk": True/False
-            }
-        }
-        """
-        association_map = {}
-
-        if self.secrets_dir.exists():
-            for file in self.secrets_dir.glob("*.json"):
-                association_map[file.name] = {
-                    "path": file,
-                    "associated_profiles": [],
-                    "exists_on_disk": True,
-                }
-
-        profiles = self.list_profiles()
-        for profile_name in profiles:
-            profile_data = self.load_profile_data(profile_name)
-            secret_name = profile_data.get("associated_secret")
-
-            if secret_name:
-                if not secret_name.endswith(".json"):
-                    secret_name += ".json"
-
-                # Si el perfil hace referencia a un secreto que no existe físicamente en disco,
-                # lo agregamos al mapa marcándolo como 'exists_on_disk': False
-                if secret_name not in association_map:
-                    association_map[secret_name] = {
-                        "path": self.secrets_dir / secret_name,
-                        "associated_profiles": [],
-                        "exists_on_disk": False,
-                    }
-
-                association_map[secret_name]["associated_profiles"].append(profile_name)
-
-        return association_map
-
-    def remove_tokens_for_secret(self, secret_name: str) -> int:
-        """
-        Busca y elimina físicamente los tokens de acceso que dependan de un secreto específico.
-        Los tokens se almacenan bajo el formato: '{email}__{nombre_secreto.json}'
-
-        Retorna la cantidad de archivos de tokens eliminados con éxito.
-        """
-        if not secret_name.endswith(".json"):
-            secret_name += ".json"
-
-        removed_count = 0
-        if self.tokens_dir.exists():
-            for token_file in self.tokens_dir.iterdir():
-                if token_file.is_file() and token_file.name.endswith(
-                    f"__{secret_name}"
-                ):
-                    try:
-                        token_file.unlink()
-                        removed_count += 1
-                    except Exception as e:
-                        logger.warning(
-                            f"No se pudo limpiar el token residual '{token_file.name}': {e}"
-                        )
-        return removed_count
-
-
-profile_manager = ProfileManager()
 
 
 def compute_md5(source: Union[bytes, str, Path]) -> str:
@@ -759,7 +529,232 @@ def get_context_tree(
     return final_tree
 
 
-def verify_profile_credentials(profile_name: str) -> None:
+class ProfileManager:
+    def __init__(self):
+        self.root_dir = get_app_root_dir()
+        self.profiles_dir = self.root_dir / "profiles"
+        self.secrets_dir = self.root_dir / "secrets"
+        self.tokens_dir = self.root_dir / "tokens"
+        self.active_profile_file = (
+            self.root_dir / "active_profile"
+        )  # Puntero plano sin extensión
+        self.config_file = (
+            self.root_dir / "global_config.json"
+        )  # Mantenido para migración
+        self._temp_profile: Optional[str] = None
+        self._ensure_structure()
+
+    def _ensure_structure(self):
+        """Crea la estructura base y migra datos antiguos si existen."""
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.profiles_dir.mkdir(exist_ok=True)
+        self.secrets_dir.mkdir(exist_ok=True)
+        self.tokens_dir.mkdir(exist_ok=True)
+
+        # Migración ligera: Si existía un secreto en la raíz, moverlo al banco de secretos
+        legacy_secret = self.root_dir / "client_secrets.json"
+        target_secret = self.secrets_dir / "client_secrets.json"
+        if legacy_secret.exists() and not target_secret.exists():
+            try:
+                shutil.copy2(str(legacy_secret), str(target_secret))
+            except Exception as e:
+                logger.warning(f"No se pudo migrar el secreto legacy: {e}")
+
+        # Migración del config_file (global_config.json) anterior
+        if self.config_file.exists():
+            try:
+                config = json.loads(self.config_file.read_text(encoding="utf-8"))
+                old_profile = config.get("current_profile")
+                if old_profile and old_profile != "default":
+                    profile_file = self.profiles_dir / f"{old_profile}.json"
+                    if profile_file.exists():
+                        self.active_profile_file.write_text(
+                            old_profile, encoding="utf-8"
+                        )
+                self.config_file.unlink()
+            except Exception:
+                pass
+
+    def set_temporary_profile(self, profile_name: str):
+        """Establece un perfil activo solo para la ejecución actual (en memoria)."""
+        self._temp_profile = profile_name
+
+    def get_active_profile_name(self) -> Optional[str]:
+        if self._temp_profile:
+            return self._temp_profile
+
+        if not self.active_profile_file.exists():
+            return None
+
+        try:
+            name = self.active_profile_file.read_text(encoding="utf-8").strip()
+            if name:
+                # Comprobación de existencia del archivo de configuración del perfil
+                profile_file = self.profiles_dir / f"{name}.json"
+                if profile_file.exists():
+                    return name
+                else:
+                    # Limpieza automática si el perfil apuntado ha sido removido
+                    try:
+                        self.active_profile_file.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return None
+
+    def set_active_profile(self, profile_name: str):
+        self._temp_profile = None
+
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        if not profile_file.exists():
+            raise FileNotFoundError(
+                f"El perfil '{profile_name}' no existe en el sistema."
+            )
+
+        self.active_profile_file.write_text(profile_name, encoding="utf-8")
+
+    def get_working_dir(self) -> Path:
+        """
+        Retorna la raíz del perfil global para almacenamiento temporal heredado.
+        """
+        return self.root_dir
+
+    def list_profiles(self) -> list[str]:
+        """Lista los aliases de perfiles (nombres de archivos .json sin extensión)."""
+        return [f.stem for f in self.profiles_dir.glob("*.json")]
+
+    def load_profile_data(self, profile_name: str) -> dict:
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        if not profile_file.exists():
+            return {}
+        try:
+            return json.loads(profile_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def save_profile_data(self, profile_name: str, data: dict):
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        profile_file.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def get_active_profile_data(self) -> dict:
+        name = self.get_active_profile_name()
+        if not name:
+            return {}
+        return self.load_profile_data(name)
+
+    def save_active_profile_data(self, data: dict):
+        name = self.get_active_profile_name()
+        if not name:
+            raise ValueError("No hay ningún perfil activo configurado.")
+        self.save_profile_data(name, data)
+
+    def resolve_secrets_file(self) -> Tuple[Path, str]:
+        """
+        Resuelve el secreto asociado al perfil activo aplicando prioridades.
+        """
+        profile_name = self.get_active_profile_name()
+        if not profile_name:
+            raise ValueError("No hay ningún perfil activo configurado.")
+
+        profile_data = self.get_active_profile_data()
+        secret_name = profile_data.get("associated_secret")
+
+        available_secrets = sorted(
+            [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
+        )
+
+        if secret_name:
+            if not secret_name.endswith(".json"):
+                secret_name += ".json"
+
+            specific_path = self.secrets_dir / secret_name
+            if specific_path.exists():
+                return specific_path, f"Asociado al perfil ({secret_name})"
+
+        if len(available_secrets) == 1:
+            auto_secret = available_secrets[0]
+            profile_data["associated_secret"] = auto_secret.name
+            self.save_profile_data(profile_name, profile_data)
+
+            UI.info(
+                f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]"
+            )
+            return auto_secret, f"Auto-detectado ({auto_secret.name})"
+
+        elif len(available_secrets) > 1:
+            secret_names = [f.name for f in available_secrets]
+            raise ValueError(
+                f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos en el almacén "
+                f"({', '.join(secret_names)}) pero el perfil '{profile_name}' no tiene un secreto asociado.\n"
+                f"Para solucionarlo, asocia uno explícitamente ejecutando:\n"
+                f"  project_context profile set-secrets <ruta_archivo.json> --secret-name <nombre_deseado>\n"
+                f"O bien cambia a un perfil que ya esté configurado."
+            )
+
+        else:
+            fallback_name = secret_name if secret_name else f"{profile_name}.json"
+            if not fallback_name.endswith(".json"):
+                fallback_name += ".json"
+            return self.secrets_dir / fallback_name, "Predeterminado (Faltante)"
+
+    def get_secrets_association_map(self) -> dict:
+        association_map = {}
+
+        if self.secrets_dir.exists():
+            for file in self.secrets_dir.glob("*.json"):
+                association_map[file.name] = {
+                    "path": file,
+                    "associated_profiles": [],
+                    "exists_on_disk": True,
+                }
+
+        profiles = self.list_profiles()
+        for profile_name in profiles:
+            profile_data = self.load_profile_data(profile_name)
+            secret_name = profile_data.get("associated_secret")
+
+            if secret_name:
+                if not secret_name.endswith(".json"):
+                    secret_name += ".json"
+
+                if secret_name not in association_map:
+                    association_map[secret_name] = {
+                        "path": self.secrets_dir / secret_name,
+                        "associated_profiles": [],
+                        "exists_on_disk": False,
+                    }
+
+                association_map[secret_name]["associated_profiles"].append(profile_name)
+
+        return association_map
+
+    def remove_tokens_for_secret(self, secret_name: str) -> int:
+        if not secret_name.endswith(".json"):
+            secret_name += ".json"
+
+        removed_count = 0
+        if self.tokens_dir.exists():
+            for token_file in self.tokens_dir.iterdir():
+                if token_file.is_file() and token_file.name.endswith(
+                    f"__{secret_name}"
+                ):
+                    try:
+                        token_file.unlink()
+                        removed_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"No se pudo limpiar el token residual '{token_file.name}': {e}"
+                        )
+        return removed_count
+
+
+profile_manager = ProfileManager()
+
+
+def verify_profile_credentials(profile_name: Optional[str]) -> None:
     """
     Realiza una comprobación de tres capas para asegurar la coherencia del perfil,
     el token o el archivo físico de secretos antes de iniciar la sesión de Drive.
@@ -773,11 +768,23 @@ def verify_profile_credentials(profile_name: str) -> None:
         ProfileConfigurationCorruptError,
     )
 
-    profile_file = profile_manager.profiles_dir / f"{profile_name}.json"
     available_secrets = sorted(
         [f for f in profile_manager.secrets_dir.glob("*.json") if f.is_file()]
     )
     num_secrets = len(available_secrets)
+
+    # Validar ausencia de perfil seleccionado
+    if not profile_name:
+        if num_secrets == 0:
+            raise FreshInstallRequiredError(
+                "No se ha detectado ninguna credencial de Google Drive configurada en este equipo."
+            )
+        else:
+            raise ProfileConfigNotFoundError(
+                "No hay ningún perfil de usuario activo configurado actualmente."
+            )
+
+    profile_file = profile_manager.profiles_dir / f"{profile_name}.json"
 
     # Capa de Perfil
     if not profile_file.exists():
@@ -843,22 +850,17 @@ def verify_profile_credentials(profile_name: str) -> None:
                 token_valid = False
 
     if token_valid:
-        # El token se encuentra activo y listo para usarse.
         return
 
     # Capa de Secreto Físico
     associated_secret_path = profile_manager.secrets_dir / secret_name
     if not associated_secret_path.exists():
-        if num_secrets == 0 and profile_name == "default":
-            raise FreshInstallRequiredError(
-                "No se ha detectado ninguna credencial de Google Drive configurada en este equipo."
-            )
         raise AssociatedSecretMissingError(
             f"El perfil '{profile_name}' requiere re-autenticarse, pero su secreto asociado '{secret_name}' no existe en el banco de secretos."
         )
 
 
-def safe_verify_profile(profile_name: str) -> None:
+def safe_verify_profile(profile_name: Optional[str]) -> None:
     """
     Ejecuta la validación de credenciales del perfil y maneja las excepciones de dominio
     mostrando guías de reparación y tips educativos mediante el módulo UI.
@@ -897,49 +899,79 @@ def safe_verify_profile(profile_name: str) -> None:
 
     except ProfileConfigNotFoundError:
         available_profiles = profile_manager.list_profiles()
-        UI.error(f"El perfil de usuario '{profile_name}' no existe.", spacing="top")
-        UI.educational_tip(
-            title="Perfiles de Usuario Disponibles",
-            message=(
-                f"Perfiles configurados en este equipo: {', '.join(available_profiles)}\n\n"
-                f"Si deseas crear el perfil '{profile_name}' y asociarlo a tus credenciales, ejecuta:"
-            ),
-            commands=[f"project_context profile add {profile_name}"],
-            spacing="bottom",
-        )
+        if not profile_name:
+            UI.error(
+                "No hay ningún perfil de usuario activo configurado actualmente.",
+                spacing="top",
+            )
+            if available_profiles:
+                UI.educational_tip(
+                    title="Selecciona un Perfil Activo",
+                    message=(
+                        f"Perfiles ya configurados en este equipo: {', '.join(available_profiles)}\n\n"
+                        "Para activar uno de estos perfiles, ejecuta:"
+                    ),
+                    commands=["project_context profile use <nombre_perfil>"],
+                    spacing="bottom",
+                )
+            else:
+                UI.educational_tip(
+                    title="Crea tu primer perfil",
+                    message=(
+                        "No se han detectado perfiles creados en este sistema.\n"
+                        "Si ya has guardado tu archivo de secretos, puedes crear un perfil ejecutando:"
+                    ),
+                    commands=["project_context profile add <nombre_perfil>"],
+                    spacing="bottom",
+                )
+        else:
+            UI.error(f"El perfil de usuario '{profile_name}' no existe.", spacing="top")
+            UI.educational_tip(
+                title="Perfiles de Usuario Disponibles",
+                message=(
+                    f"Perfiles configurados en este equipo: {', '.join(available_profiles)}\n\n"
+                    f"Si deseas crear el perfil '{profile_name}' y asociarlo a tus credenciales, ejecuta:"
+                ),
+                commands=[f"project_context profile add {profile_name}"],
+                spacing="bottom",
+            )
         raise typer.Exit(code=1)
 
     except AssociatedSecretMissingError as e:
-        profile_data = profile_manager.load_profile_data(profile_name)
-        secret_name = profile_data.get("associated_secret", f"{profile_name}.json")
-        if not secret_name.endswith(".json"):
-            secret_name += ".json"
+        if profile_name:
+            profile_data = profile_manager.load_profile_data(profile_name)
+            secret_name = profile_data.get("associated_secret", f"{profile_name}.json")
+            if not secret_name.endswith(".json"):
+                secret_name += ".json"
 
-        UI.error(str(e), spacing="top")
-        UI.educational_tip(
-            title="Re-autenticación Requerida",
-            message=(
-                f"Tu sesión para el perfil '{profile_name}' ha expirado o no se encuentra activa, "
-                f"y se requiere el archivo de secretos físicos '{secret_name}' para abrir una nueva sesión en el navegador."
-            ),
-            commands=[
-                f"project_context profile set-secrets /ruta/a/tu/archivo.json --secret-name {secret_name}"
-            ],
-            spacing="bottom",
-        )
+            UI.error(str(e), spacing="top")
+            UI.educational_tip(
+                title="Re-autenticación Requerida",
+                message=(
+                    f"Tu sesión para el perfil '{profile_name}' ha expirado o no se encuentra activa, "
+                    f"y se requiere el archivo de secretos físicos '{secret_name}' para abrir una nueva sesión en el navegador."
+                ),
+                commands=[
+                    f"project_context profile set-secrets /ruta/a/tu/archivo.json --secret-name {secret_name}"
+                ],
+                spacing="bottom",
+            )
+        else:
+            UI.error(str(e), spacing="top")
         raise typer.Exit(code=1)
 
     except ProfileConfigurationCorruptError as e:
         UI.error(str(e), spacing="top")
-        UI.educational_tip(
-            title="Perfil Corrupto",
-            message=(
-                "La estructura del archivo del perfil no es válida. Puedes restablecerlo "
-                "creándolo nuevamente con el comando de adición de perfiles."
-            ),
-            commands=[f"project_context profile add {profile_name}"],
-            spacing="bottom",
-        )
+        if profile_name:
+            UI.educational_tip(
+                title="Perfil Corrupto",
+                message=(
+                    "La estructura del archivo del perfil no es válida. Puedes restablecerlo "
+                    "creándolo nuevamente con el comando de adición de perfiles."
+                ),
+                commands=[f"project_context profile add {profile_name}"],
+                spacing="bottom",
+            )
         raise typer.Exit(code=1)
 
 

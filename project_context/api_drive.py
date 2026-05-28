@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
+from project_context.exceptions import FreshInstallRequiredError
 from project_context.schema import (
     ChatIAStudio,
     Chunk,
@@ -49,15 +50,16 @@ class GoogleDriveManager:
     def __init__(
         self, secrets_file: Optional[Path] = None, profile_name: Optional[str] = None
     ):
-        """
-        Inicializa el cliente. Si se provee secrets_file, se utiliza para validación directa.
-        """
         if secrets_file:
             self.client_secrets_file = secrets_file
             self.profile_name = profile_name or "temp_validation"
             self.credentials = self._authenticate_explicit()
         else:
             self.profile_name = profile_manager.get_active_profile_name()
+            if not self.profile_name:
+                raise FreshInstallRequiredError(
+                    "No se ha configurado un perfil activo en el sistema."
+                )
             self.client_secrets_file, _ = profile_manager.resolve_secrets_file()
             self.credentials = self._authenticate()
 
