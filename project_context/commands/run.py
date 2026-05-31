@@ -12,12 +12,12 @@ from project_context.exceptions import (
 )
 from project_context.ops import initialize_project_context, update_context
 from project_context.ui.interactive import interactive_session
+from project_context.profiles import profile_manager
+from project_context.auth_flow import safe_verify_profile
 from project_context.utils import (
     UI,
     get_local_context_dir,
     load_project_context_state,
-    profile_manager,
-    safe_verify_profile,
     save_project_context_state,
 )
 

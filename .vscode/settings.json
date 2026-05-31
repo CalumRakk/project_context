@@ -1,8 +1,16 @@
 {
-    "python.terminal.activateEnvironment": true,
+    // Cerebro y autocompletado
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.completeFunctionParens": true,
+    // Configuración automática de Ruff (Linter y Formateador)
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
-        "editor.formatOnSave": true
-    },
-    "ruff.nativeServer": true
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    }
 }

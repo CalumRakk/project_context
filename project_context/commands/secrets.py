@@ -5,10 +5,10 @@ from typing import Annotated, Optional
 import typer
 from rich.table import Table
 
+from project_context.profiles import profile_manager
 from project_context.utils import (
     UI,
     console,
-    profile_manager,
     validate_google_secrets_file,
 )
 
@@ -70,7 +70,7 @@ def add_secret(
 
     if target_path.exists():
         confirm_overwrite = typer.confirm(
-            f"Ya existe un secreto llamado '{target_name}' en el banco global.\n"
+            f"Ya existe un secreto llamado '{target_name}' in el banco global.\n"
             f"¿Deseas sobrescribirlo con las nuevas credenciales?",
             default=False,
         )

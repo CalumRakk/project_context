@@ -11,6 +11,7 @@ from project_context.schema import (
     RunSettings,
     SystemInstruction,
 )
+from project_context.git_ops import get_diff_message
 from project_context.utils import (
     COMMIT_TASK_MARKER,
     RESPONSE_TEMPLATE,
@@ -18,7 +19,6 @@ from project_context.utils import (
     compute_md5,
     extract_image_references,
     generate_context,
-    get_diff_message,
     get_filtered_files,
     resolve_prompt,
     save_context,

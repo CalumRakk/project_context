@@ -10,11 +10,10 @@ from unittest.mock import MagicMock, patch
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.ops import update_context
-from project_context.utils import ProfileManager, compute_md5, has_files_modified_since
+from project_context.utils import compute_md5, has_files_modified_since
 
 
 class TestProjectContextCore(unittest.TestCase):
-
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
         self.root_path = Path(self.test_dir)

@@ -25,7 +25,8 @@ from project_context.schema import (
     DriveDocument,
     Role,
 )
-from project_context.utils import COMMIT_TASK_MARKER, UI, profile_manager
+from project_context.profiles import profile_manager
+from project_context.utils import COMMIT_TASK_MARKER, UI
 
 
 class ChunkFactory:

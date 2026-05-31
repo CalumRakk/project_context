@@ -4,6 +4,10 @@ from typing import Optional
 import typer
 
 from project_context.exceptions import ChatSessionError, InvalidCommandArgumentError
+from project_context.git_ops import (
+    has_unstaged_changes,
+    stage_all_changes,
+)
 from project_context.ops import (
     apply_story_update,
     generate_commit_prompt_text,
@@ -11,6 +15,7 @@ from project_context.ops import (
     resolve_image_paths,
     sync_images,
 )
+from project_context.profiles import profile_manager
 from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.ui.registry import SessionContext, registry
@@ -21,11 +26,8 @@ from project_context.utils import (
     clear_stash,
     console,
     get_potential_media_folders,
-    has_unstaged_changes,
     load_stash,
-    profile_manager,
     save_stash,
-    stage_all_changes,
 )
 
 

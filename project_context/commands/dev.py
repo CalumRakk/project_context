@@ -11,7 +11,8 @@ from rich.table import Table
 from typing_extensions import Annotated
 
 from project_context.api_drive import AIStudioDriveManager
-from project_context.utils import UI, console, profile_manager
+from project_context.profiles import profile_manager
+from project_context.utils import UI, console
 
 app = typer.Typer(help="Herramientas de desarrollo y depuración internas.")
 

@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from project_context.utils import profile_manager
+from project_context.profiles import profile_manager
 
 app = typer.Typer(help="Gestión de perfiles de usuario (Multicuentas).")
 
@@ -42,7 +42,7 @@ def add_profile(
     ] = None,
 ):
     """
-    Crea un nuevo perfil asociándolo a un secreto existente y validándolo de forma atómica.
+    Crea un nuevo perfil asociándolo a un secreto de forma interactiva.
     """
     if name in profile_manager.list_profiles():
         typer.secho(f"El perfil '{name}' ya existe.", fg=typer.colors.YELLOW)
