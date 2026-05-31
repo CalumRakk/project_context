@@ -12,6 +12,7 @@ import pathspec
 from rich.console import Console
 from rich.theme import Theme
 
+from project_context.schema import LocalContextItems, LocalProjectState
 from project_context.ui.ui import UI
 
 logger = logging.getLogger(__name__)
@@ -155,13 +156,11 @@ def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] 
 
 
 def generate_context(
-    project_path: Union[str, Path], context_items: Optional[dict] = None
+    project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
 ) -> tuple[str, int]:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    if not context_items or (
-        not context_items.get("files") and not context_items.get("folders")
-    ):
+    if not context_items or (not context_items.files and not context_items.folders):
         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
         summary, tree, content = gitingest.ingest(
             str(project_path), exclude_patterns=set(custom_ignores)
@@ -175,7 +174,7 @@ def generate_context(
     final_content = ""
     total_tokens = 0
 
-    files = context_items.get("files", [])
+    files = context_items.files
     if files:
         final_tree += "└── [Archivos Específicos Añadidos]\n"
         for idx, f_path in enumerate(files):
@@ -191,8 +190,8 @@ def generate_context(
                 except Exception as e:
                     final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
 
-    folders = context_items.get("folders", [])
-    exclusions = context_items.get("exclusions", [])
+    folders = context_items.folders
+    exclusions = context_items.exclusions
     if folders:
         final_tree += "└── [Carpetas Específicas Añadidas]\n"
         for folder in folders:
@@ -233,31 +232,33 @@ def save_context(project_path: Union[str, Path], context: str) -> Path:
 
 
 def save_project_context_state(
-    project_path: Union[str, Path], project_context_state: dict
+    project_path: Union[str, Path], project_context_state: LocalProjectState
 ):
-    """Guarda el estado del proyecto en el archivo state.json local."""
+    """Guarda el estado del proyecto serializado desde el modelo Pydantic."""
     project_path = Path(project_path)
     local_dir = get_local_context_dir(project_path)
     output_path = local_dir / "state.json"
 
-    output_path.write_text(
-        json.dumps(project_context_state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    ensure_gitignore(project_path, project_context_state)
+    content = project_context_state.model_dump_json(indent=2, by_alias=True)
+    output_path.write_text(content, encoding="utf-8")
+
+    ensure_gitignore(project_path, project_context_state.model_dump())
 
 
-def load_project_context_state(project_path: Union[str, Path]) -> Optional[dict]:
-    """Carga el archivo state.json local del proyecto."""
+def load_project_context_state(
+    project_path: Union[str, Path],
+) -> Optional[LocalProjectState]:
+    """Carga y valida el archivo state.json convirtiéndolo en un modelo Pydantic."""
     project_path = Path(project_path)
     local_dir = get_local_context_dir(project_path)
     state_path = local_dir / "state.json"
 
     if state_path.exists():
         try:
-            return json.loads(state_path.read_text(encoding="utf-8"))
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            return LocalProjectState(**data)
         except Exception as e:
-            logger.error(f"Error cargando state.json: {e}")
+            logger.error(f"Error cargando y validando state.json: {e}")
             return None
     return None
 
@@ -408,13 +409,11 @@ def clear_stash(project_path: Union[str, Path], filename: str):
 
 
 def get_context_tree(
-    project_path: Union[str, Path], context_items: Optional[dict] = None
+    project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
 ) -> str:
     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    if not context_items or (
-        not context_items.get("files") and not context_items.get("folders")
-    ):
+    if not context_items or (not context_items.files and not context_items.folders):
         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
         summary, tree, content = gitingest.ingest(
             str(project_path), exclude_patterns=set(custom_ignores)
@@ -424,15 +423,15 @@ def get_context_tree(
     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
     final_tree = "Directory structure (Custom Focus):\n"
 
-    files = context_items.get("files", [])
+    files = context_items.files
     if files:
         final_tree += "└── [Archivos Específicos Añadidos]\n"
         for idx, f_path in enumerate(files):
             prefix = "    └── " if idx == len(files) - 1 else "    ├── "
             final_tree += f"{prefix}{f_path}\n"
 
-    folders = context_items.get("folders", [])
-    exclusions = context_items.get("exclusions", [])
+    folders = context_items.folders
+    exclusions = context_items.exclusions
     if folders:
         final_tree += "└── [Carpetas Específicas Añadidas]\n"
         for folder in folders:

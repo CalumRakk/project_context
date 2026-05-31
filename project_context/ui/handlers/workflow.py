@@ -83,7 +83,7 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
 )
 def cmd_commit_restore(ctx: SessionContext, args: list[str]):
     """Restaura el chat original desactivando el modo de commit rápido."""
-    if not ctx.state.get("commit_mode", False):
+    if not ctx.state.commit_mode:
         UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
         return
 
@@ -91,7 +91,7 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
     stashed_json = load_stash(ctx.project_path, "chat_stash.json")
 
     if not stashed_json:
-        ctx.state["commit_mode"] = False
+        ctx.state.commit_mode = False
         ctx.update_state(ctx.state)
         raise ChatSessionError(
             "No se encontró el respaldo del chat en almacenamiento local."
@@ -104,7 +104,7 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
     )
 
     clear_stash(ctx.project_path, "chat_stash.json")
-    ctx.state["commit_mode"] = False
+    ctx.state.commit_mode = False
     ctx.update_state(ctx.state)
 
     UI.success("¡Chat original restaurado!")
@@ -122,7 +122,7 @@ def cmd_commit_all(ctx: SessionContext, args: list[str]):
 @registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: list[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
-    if ctx.state.get("commit_mode", False):
+    if ctx.state.commit_mode:
         UI.warn(
             "Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar."
         )
@@ -190,7 +190,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
     chat_data.chunkedPrompt.pendingInputs = []
 
     if ctx.api.update_chat_file(ctx.chat_id, chat_data):
-        ctx.state["commit_mode"] = True
+        ctx.state.commit_mode = True
         ctx.update_state(ctx.state)
         UI.success("¡Modo commit activado!")
         UI.info("Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
@@ -258,9 +258,9 @@ def cmd_images(ctx: SessionContext, args: list[str]):
 def cmd_story(ctx: SessionContext, args: list[str]):
     """Configura o procesa las intenciones del modo historia interactivo."""
     if not args:
-        if ctx.state.get("story_mode"):
+        if ctx.state.story_mode:
             UI.info(
-                f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.get('story_anchor')}[/]"
+                f"Modo historia ACTIVO. Ancla actual: [cyan]{ctx.state.story_anchor}[/]"
             )
         UI.warn("Uso: story <archivo.md> o story exit")
         return
@@ -268,8 +268,8 @@ def cmd_story(ctx: SessionContext, args: list[str]):
     target = args[0]
 
     if target.lower() in ["exit", "quit", "off"]:
-        ctx.state["story_mode"] = False
-        ctx.state["story_anchor"] = None
+        ctx.state.story_mode = False
+        ctx.state.story_anchor = None
         ctx.update_state(ctx.state)
         UI.success("Has salido del modo historia.")
         return
@@ -282,22 +282,20 @@ def cmd_story(ctx: SessionContext, args: list[str]):
 
     rel_path = str(target_file.relative_to(ctx.project_path).as_posix())
     context_items = ctx.context_items
-    has_specific_focus = bool(
-        context_items.get("files") or context_items.get("folders")
-    )
+    has_specific_focus = bool(context_items.files or context_items.folders)
 
     if has_specific_focus:
-        if rel_path not in context_items["files"]:
-            context_items["files"].append(rel_path)
-            ctx.state["context_items"] = context_items
+        if rel_path not in context_items.files:
+            context_items.files.append(rel_path)
+            ctx.state.context_items = context_items
             ctx.update_state(ctx.state)
             UI.info(
                 f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico."
             )
 
     UI.info("Iniciando Modo Historia...")
-    ctx.state["story_mode"] = True
-    ctx.state["story_anchor"] = rel_path
+    ctx.state.story_mode = True
+    ctx.state.story_anchor = rel_path
     ctx.update_state(ctx.state)
 
     new_state = apply_story_update(
@@ -357,7 +355,7 @@ def cmd_transfer(ctx: SessionContext, args: list[str]):
         )
 
     except Exception as e:
-        profile_manager.set_active_profile(current_profile)
+        profile_manager.set_active_profile(current_profile)  # type: ignore
         raise ChatSessionError(f"Error crítico durante la transferencia: {e}")
 
 

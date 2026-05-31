@@ -2,6 +2,8 @@ import os
 import shutil
 import sys
 
+from project_context.schema import LocalProjectState
+
 sys.path.append(os.getcwd())
 import tempfile
 import unittest
@@ -105,6 +107,7 @@ class TestProjectContextCore(unittest.TestCase):
             "chat_id": "chat_123",
             "file_id": "file_123",
         }
+        state = LocalProjectState(**state)
 
         new_state = update_context(mock_api, self.project_path, state)
 
@@ -119,11 +122,9 @@ class TestProjectContextCore(unittest.TestCase):
 
         # 2. ¿Se actualizó el estado?
         self.assertNotEqual(
-            new_state["md5"], "hash_viejo", "El MD5 en el estado debe actualizarse"
+            new_state.md5, "hash_viejo", "El MD5 en el estado debe actualizarse"
         )
-        self.assertGreater(
-            new_state["last_modified"], 0, "El timestamp debe actualizarse"
-        )
+        self.assertGreater(new_state.last_modified, 0, "El timestamp debe actualizarse")
 
     @patch("project_context.ops.generate_context")
     @patch("project_context.ops.save_context")
@@ -153,6 +154,7 @@ class TestProjectContextCore(unittest.TestCase):
             "file_id": "file_123",
         }
 
+        state = LocalProjectState(**state)
         update_context(mock_api, self.project_path, state)
 
         # ASERCIÓN: La API NO debe ser llamada

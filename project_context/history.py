@@ -5,11 +5,12 @@ import time
 import zlib
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.schema import LocalProjectState
 from project_context.utils import compute_md5
 
 db = SqliteDatabase(None)
@@ -52,7 +53,9 @@ def decompress_data(data: bytes) -> bytes:
 
 
 class SnapshotManager:
-    def __init__(self, api: AIStudioDriveManager, project_path: Path, state: Dict):
+    def __init__(
+        self, api: AIStudioDriveManager, project_path: Path, state: LocalProjectState
+    ):
         self.api = api
         self.project_path = project_path
         self.state = state
@@ -148,7 +151,7 @@ class SnapshotManager:
                 time.sleep(1)
 
     def _check_and_snapshot(self):
-        chat_id = self.state.get("chat_id")
+        chat_id = self.state.chat_id
         if not chat_id:
             return
 
@@ -173,7 +176,7 @@ class SnapshotManager:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-                current_md5 = self.state.get("md5")
+                current_md5 = self.state.md5
                 if not current_md5:
                     return
 
@@ -183,7 +186,7 @@ class SnapshotManager:
                     return
 
                 context_content = current_context_path.read_bytes()
-                chat_id = self.state.get("chat_id", "")
+                chat_id = self.state.chat_id
                 chat_content = self.api.gdm.get_file_content(chat_id)
 
                 if chat_content:
@@ -256,7 +259,7 @@ class SnapshotManager:
 
     def create_named_snapshot(self, message: str):
         """Fuerza la creación de un snapshot manual con un comentario."""
-        chat_id = self.state.get("chat_id")
+        chat_id = self.state.chat_id
         if not chat_id:
             print("Error: No hay chat ID activo.")
             return
@@ -374,8 +377,8 @@ class SnapshotManager:
 
                 context_content = context_bytes.decode("utf-8")
 
-                file_id = self.state.get("file_id")
-                chat_id = self.state.get("chat_id")
+                file_id = self.state.file_id
+                chat_id = self.state.chat_id
 
                 if not file_id or not chat_id:
                     print("Error: No hay identificadores de chat en la sesión actual.")
@@ -395,7 +398,7 @@ class SnapshotManager:
                     )
                     if new_ctx_file and "id" in new_ctx_file:
                         file_id = new_ctx_file["id"]
-                        self.state["file_id"] = file_id
+                        self.state.file_id = file_id
                     else:
                         print(
                             "  Error crítico: No se pudo recrear el archivo de contexto."
@@ -418,7 +421,7 @@ class SnapshotManager:
                     )
                     if new_chat_id:
                         chat_id = new_chat_id
-                        self.state["chat_id"] = chat_id
+                        self.state.chat_id = chat_id
                     else:
                         print("  Error crítico: No se pudo recrear el chat.")
                         return False
@@ -432,7 +435,7 @@ class SnapshotManager:
                 last_context.write_text(context_content, encoding="utf-8")
                 shutil.copy2(last_context, current_local_context)
 
-                self.state["md5"] = snap.context_hash
+                self.state.md5 = snap.context_hash
                 print("Restauración completada con éxito.")
                 return True
 

@@ -63,7 +63,7 @@ def shell_command(
 
             state = load_project_context_state(project_path)
 
-            if state is None or not state.get("chat_id"):
+            if state is None or not state.chat_id:
                 typer.secho(
                     "Error: No se encontró información del chat en el estado local.\n"
                     "Por favor, ejecuta primero 'project_context run' para sincronizar tu proyecto.",

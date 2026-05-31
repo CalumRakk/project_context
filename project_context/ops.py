@@ -10,6 +10,7 @@ from project_context.schema import (
     ChunkedPrompt,
     ChunksDocument,
     ChunksText,
+    LocalProjectState,
     RunSettings,
     SystemInstruction,
 )
@@ -79,7 +80,9 @@ def _create_base_chat_chunks(
     return [context_chunk, prompt_chunk, model_chunk]
 
 
-def initialize_project_context(api: AIStudioDriveManager, project_path: Path) -> Dict:
+def initialize_project_context(
+    api: AIStudioDriveManager, project_path: Path
+) -> LocalProjectState:
     UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
 
     context_chunk, content_md5 = sync_context(api, project_path)
@@ -111,12 +114,14 @@ def initialize_project_context(api: AIStudioDriveManager, project_path: Path) ->
         "file_id": context_chunk.file_id,
     }
     UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
-    return initial_state
+    return LocalProjectState(**initial_state)
 
 
-def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -> Dict:
-    chat_id = state.get("chat_id", "")
-    file_id = state.get("file_id", "")
+def update_context(
+    api: AIStudioDriveManager, project_path: Path, state: LocalProjectState
+) -> LocalProjectState:
+    chat_id = state.chat_id
+    file_id = state.file_id
 
     # Autocuración: Si los archivos en Drive no existen, recrear de forma limpia preservando lo local
     try:
@@ -150,17 +155,17 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         if not new_chat_id:
             raise ValueError("No se pudo re-inicializar el chat en Google Drive.")
 
-        state["chat_id"] = new_chat_id
-        state["file_id"] = context_chunk.file_id
-        state["md5"] = content_md5
+        state.chat_id = new_chat_id
+        state.file_id = context_chunk.file_id  # type: ignore
+        state.md5 = content_md5
 
         UI.success(
             f"¡Sesión re-inicializada con éxito! Nuevo Chat ID: [dim]{new_chat_id}[/]"
         )
         return state
 
-    context_items = state.get("context_items", {"files": [], "folders": []})
-    has_custom_focus = bool(context_items.get("files") or context_items.get("folders"))
+    context_items = state.context_items
+    has_custom_focus = bool(context_items.files or context_items.folders)
 
     scope_name = (
         "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
@@ -172,9 +177,9 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     path_context = save_context(project_path, content)
     current_md5 = compute_md5(path_context)
 
-    if current_md5 == state.get("md5"):
+    if current_md5 == state.md5:
         UI.warn("El contenido del contexto es idéntico al actual en Drive.")
-        state["last_modified"] = project_path.stat().st_mtime
+        state.last_modified = project_path.stat().st_mtime
         return state
 
     logger.debug("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
@@ -201,8 +206,8 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
     except Exception as e:
         UI.error(f"Fallo al actualizar los tokens en el chat: {e}")
 
-    state["last_modified"] = project_path.stat().st_mtime
-    state["md5"] = current_md5
+    state.last_modified = project_path.stat().st_mtime
+    state.md5 = current_md5
     UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
 
     return state
@@ -287,14 +292,14 @@ def sync_images(
 
 
 def rebuild_project_context(
-    api: AIStudioDriveManager, project_path: Path, state: Dict
-) -> Dict:
+    api: AIStudioDriveManager, project_path: Path, state: LocalProjectState
+) -> LocalProjectState:
     """
     Realiza un Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
     Actualiza el contenido del context.txt y reconstruye la lista de chunks.
     """
-    file_id = state.get("file_id")
-    chat_id = state.get("chat_id")
+    file_id = state.file_id
+    chat_id = state.chat_id
 
     UI.info(f"Iniciando [bold red]Reset[/] del chat [dim]{chat_id}[/]...")
 
@@ -324,8 +329,8 @@ def rebuild_project_context(
         UI.error(f"Error crítico al guardar la reconstrucción del chat: {e}")
         raise ValueError("Error al guardar la reconstrucción del chat.")
 
-    state["last_modified"] = project_path.stat().st_mtime
-    state["md5"] = current_md5
+    state.last_modified = project_path.stat().st_mtime
+    state.md5 = current_md5
 
     return state
 
@@ -424,8 +429,11 @@ def extract_chat_assets(
 
 
 def transfer_chat_to_profile(
-    api: AIStudioDriveManager, state: Dict, project_path: Path, target_profile: str
-) -> Tuple[AIStudioDriveManager, Dict]:
+    api: AIStudioDriveManager,
+    state: LocalProjectState,
+    project_path: Path,
+    target_profile: str,
+) -> Tuple[AIStudioDriveManager, LocalProjectState]:
     """
     Realiza la migración de cuenta, sube los archivos, parchea el JSON
     y establece el nuevo estado seguro.
@@ -435,10 +443,10 @@ def transfer_chat_to_profile(
     from project_context.utils import load_project_context_state
 
     UI.info("Extrayendo chat y archivos desde el Perfil Actual (A)...")
-    chat_data, assets = extract_chat_assets(api, state["chat_id"])
+    chat_data, assets = extract_chat_assets(api, state.chat_id)
 
-    old_file_id = state.get("file_id")
-    old_md5 = state.get("md5")
+    old_file_id = state.file_id
+    old_md5 = state.md5
 
     UI.info(f"Transicionando al perfil destino: {target_profile} (B)...")
     profile_manager.set_active_profile(target_profile)
@@ -449,7 +457,7 @@ def transfer_chat_to_profile(
         raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
 
     target_state = load_project_context_state(project_path)
-    if target_state and target_state.get("chat_id"):
+    if target_state and target_state.chat_id:
         UI.warn(
             "El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo..."
         )
@@ -484,14 +492,14 @@ def transfer_chat_to_profile(
     if not new_chat_id:
         raise ValueError("No se pudo crear el archivo de chat en el Perfil B.")
 
-    new_state = {
-        "path": str(project_path),
-        "last_modified": project_path.stat().st_mtime,
-        "md5": old_md5,
-        "chat_id": new_chat_id,
-        "file_id": id_map.get(old_file_id) if old_file_id else None,
-        "context_items": state.get("context_items", {"files": [], "folders": []}),
-    }
+    new_state = LocalProjectState(
+        path=str(project_path),
+        last_modified=project_path.stat().st_mtime,
+        md5=old_md5,
+        chat_id=new_chat_id,
+        file_id=id_map.get(old_file_id) if old_file_id else None,  # type: ignore
+        context_items=state.context_items,
+    )
 
     return new_api, new_state
 
@@ -602,9 +610,9 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
 def apply_story_update(
     api: AIStudioDriveManager,
     project_path: Path,
-    state: Dict,
+    state: LocalProjectState,
     media_root_hint: Optional[Path] = None,
-) -> Dict:
+) -> LocalProjectState:
     """
     Actualiza el contexto general, analiza el archivo de historia ancla,
     resuelve y sincroniza las imágenes de su etiqueta <mejora>,
@@ -612,7 +620,7 @@ def apply_story_update(
     """
     from project_context.utils import extract_image_references_from_text
 
-    anchor_rel_path = state.get("story_anchor")
+    anchor_rel_path = state.story_anchor
     if not anchor_rel_path:
         raise ValueError("No hay un ancla de historia definida en el estado.")
 
@@ -657,7 +665,7 @@ def apply_story_update(
 
     state = update_context(api, project_path, state)
 
-    chat_id = state["chat_id"]
+    chat_id = state.chat_id
     chat_data = api.get_chat_ia_studio(chat_id)
     if not chat_data:
         raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")

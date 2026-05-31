@@ -244,3 +244,25 @@ class ChatIAStudio(BaseModel):
     runSettings: RunSettings
     systemInstruction: SystemInstruction
     chunkedPrompt: ChunkedPrompt
+
+
+class LocalContextItems(BaseModel):
+    files: List[str] = Field(default_factory=list)
+    folders: List[str] = Field(default_factory=list)
+    exclusions: List[str] = Field(default_factory=list)
+
+
+class LocalProjectState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    path: str
+    last_modified: float
+    md5: str
+    chat_id: str
+    file_id: str
+    context_items: LocalContextItems = Field(default_factory=LocalContextItems)
+    monitor_active: bool = False
+    story_mode: bool = False
+    story_anchor: Optional[str] = None
+    commit_mode: bool = False
+    vanished: bool = False

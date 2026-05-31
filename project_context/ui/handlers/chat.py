@@ -92,7 +92,7 @@ def cmd_update(ctx: SessionContext, args: list[str]):
         arg for arg in args if arg not in ["--force", "-f", "force", "--run", "-r"]
     ]
 
-    if ctx.state.get("story_mode"):
+    if ctx.state.story_mode:
         UI.info("Modo historia activo. Procesando actualización...")
         new_state = apply_story_update(
             ctx.api, ctx.project_path, ctx.state, media_root_hint=ctx.session_media_root
@@ -102,9 +102,7 @@ def cmd_update(ctx: SessionContext, args: list[str]):
         new_state = update_context(ctx.api, ctx.project_path, ctx.state)
         ctx.update_state(new_state)
 
-        has_focus = bool(
-            ctx.context_items.get("files") or ctx.context_items.get("folders")
-        )
+        has_focus = bool(ctx.context_items.files or ctx.context_items.folders)
         if "tree" in clean_args_list or has_focus:
             UI.info("Árbol de archivos enviado:")
             tree_str = get_context_tree(ctx.project_path, ctx.context_items)
@@ -217,7 +215,7 @@ def cmd_run(ctx: SessionContext, args: list[str]):
 @registry.register("vanish:on", require_chat=True, allow_in_vanish=True)
 def cmd_vanish_on(ctx: SessionContext, args: list[str]):
     """Oculta temporalmente la conversación activa en Google Drive."""
-    if ctx.state.get("vanished", False):
+    if ctx.state.vanished:
         UI.warn("El modo vanish ya se encuentra activo.")
         return
 
@@ -236,7 +234,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
     chat_data.chunkedPrompt.pendingInputs = []
 
     if ctx.api.update_chat_file(ctx.chat_id, chat_data):
-        ctx.state["vanished"] = True
+        ctx.state.vanished = True
         ctx.update_state(ctx.state)
         UI.success(
             "Modo Vanish activado. La conversación se encuentra oculta en Drive."
@@ -254,13 +252,13 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
 @registry.register("vanish:off", require_chat=True, allow_in_vanish=True)
 def cmd_vanish_off(ctx: SessionContext, args: list[str]):
     """Restaura la conversación y el contexto original en Google Drive."""
-    if not ctx.state.get("vanished", False):
+    if not ctx.state.vanished:
         UI.warn("El modo vanish no está activo en este momento.")
         return
 
     stashed_json = load_stash(ctx.project_path, "vanish_stash.json")
     if not stashed_json:
-        ctx.state["vanished"] = False
+        ctx.state.vanished = False
         ctx.update_state(ctx.state)
         raise ChatSessionError(
             "No se encontró el archivo de respaldo de Vanish para restaurar."
@@ -273,7 +271,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
 
     if success:
         clear_stash(ctx.project_path, "vanish_stash.json")
-        ctx.state["vanished"] = False
+        ctx.state.vanished = False
         ctx.update_state(ctx.state)
         UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
         UI.info(
@@ -299,6 +297,6 @@ def cmd_vanish(ctx: SessionContext, args: list[str]):
                 "Subcomando inválido. Uso sugerido: 'vanish on' o 'vanish off'"
             )
 
-    if ctx.state.get("vanished", False):
+    if ctx.state.vanished:
         return cmd_vanish_off(ctx, [])
     return cmd_vanish_on(ctx, [])

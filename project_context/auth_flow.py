@@ -1,7 +1,7 @@
 import json
-import typer
-from pathlib import Path
 from typing import Optional
+
+import typer
 from google.oauth2.credentials import Credentials
 
 from project_context.exceptions import (
@@ -16,6 +16,7 @@ from project_context.ui.ui import UI
 
 class AuthContext:
     """Mantiene el estado de la validación actual del flujo de autenticación."""
+
     def __init__(self, requested_profile: Optional[str] = None):
         self.requested_profile: Optional[str] = requested_profile
         self.resolved_profile: Optional[str] = None
@@ -26,6 +27,7 @@ class AuthContext:
 
 class AuthFlowEvaluator:
     """Implementación limpia de la secuencia de comprobaciones de credenciales."""
+
     def __init__(self, context: AuthContext):
         self.ctx = context
         self.pm = profile_manager
@@ -86,7 +88,9 @@ class AuthFlowEvaluator:
             self.ctx.has_usable_token = False
             return
 
-        associated_secret_clean = secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        associated_secret_clean = (
+            secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        )
         token_name = f"{email}__{associated_secret_clean}"
         token_path = self.pm.tokens_dir / token_name
 
@@ -110,8 +114,10 @@ class AuthFlowEvaluator:
 
     def _verify_secret_file_exists_step(self):
         """Rombo: ¿Existe el secreto?"""
-        secret_name = self.ctx.profile_data.get("associated_secret")
-        associated_secret_clean = secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        secret_name = self.ctx.profile_data.get("associated_secret", "")
+        associated_secret_clean = (
+            secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        )
         associated_secret_path = self.pm.secrets_dir / associated_secret_clean
 
         if not associated_secret_path.exists():
@@ -175,7 +181,10 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
                     spacing="bottom",
                 )
         else:
-            UI.error(f"ERROR: El perfil especificado '{profile_name}' no existe.", spacing="top")
+            UI.error(
+                f"ERROR: El perfil especificado '{profile_name}' no existe.",
+                spacing="top",
+            )
             if available_profiles:
                 UI.educational_tip(
                     title="Perfiles de Usuario Disponibles",
@@ -231,4 +240,5 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
                 commands=[f"project_context profile add {profile_name}"],
                 spacing="bottom",
             )
+        raise typer.Exit(code=1)
         raise typer.Exit(code=1)

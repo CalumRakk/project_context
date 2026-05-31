@@ -9,13 +9,14 @@ from project_context.exceptions import (
     VanishModeActiveError,
 )
 from project_context.history import SnapshotManager
+from project_context.schema import LocalContextItems, LocalProjectState
 from project_context.utils import save_project_context_state
 
 
 @dataclass
 class SessionContext:
     api: AIStudioDriveManager
-    state: dict
+    state: LocalProjectState  # Tipo de dato estructurado
     project_path: Path
     monitor: SnapshotManager
     session_media_root: Optional[Path] = None
@@ -24,44 +25,30 @@ class SessionContext:
         self.monitor.stop_monitoring()
 
     def start_monitor(self):
-        if self.state.get("monitor_active", False):
+        if self.state.monitor_active:
             self.monitor.start_monitoring()
 
-    def update_state(self, new_state: dict):
+    def update_state(self, new_state: LocalProjectState):
         self.state = new_state
         self.monitor.state = new_state
         save_project_context_state(self.project_path, new_state)
 
     @property
     def chat_id(self) -> str:
-        """Retorna el ID del chat activo garantizando su existencia."""
-        cid = self.state.get("chat_id")
-        if not cid:
-            raise MissingStateError(
-                "No se encontró una sesión de chat activa en este proyecto."
-            )
-        return cid
+        if not self.state.chat_id:
+            raise MissingStateError("No se encontró una sesión de chat activa.")
+        return self.state.chat_id
 
     @property
     def file_id(self) -> str:
-        """Retorna el ID del archivo de contexto maestro en Drive."""
-        fid = self.state.get("file_id")
-        if not fid:
-            raise MissingStateError(
-                "Falta el identificador del archivo de contexto maestro en Drive."
-            )
-        return fid
+        if not self.state.file_id:
+            raise MissingStateError("Falta el identificador del archivo de contexto.")
+        return self.state.file_id
 
     @property
-    def context_items(self) -> dict:
-        """Inicializa y retorna la estructura de elementos enfocados de forma segura."""
-        if "context_items" not in self.state:
-            self.state["context_items"] = {}
-        items = self.state["context_items"]
-        items.setdefault("files", [])
-        items.setdefault("folders", [])
-        items.setdefault("exclusions", [])
-        return items
+    def context_items(self) -> LocalContextItems:
+        """Retorna el modelo de configuración de enfoque de forma tipada."""
+        return self.state.context_items
 
 
 class CommandMetadata:
@@ -132,12 +119,12 @@ class CommandRegistry:
         if not cmd_meta:
             raise InvalidCommandArgumentError(f"Comando desconocido: '{name}'")
 
-        if ctx.state.get("vanished") and not cmd_meta.allow_in_vanish:
+        if ctx.state.vanished and not cmd_meta.allow_in_vanish:
             raise VanishModeActiveError(
                 "La consola está congelada en modo vanish. Usa 'vanish off' para restaurar la sesión."
             )
 
-        if cmd_meta.require_chat and not ctx.state.get("chat_id"):
+        if cmd_meta.require_chat and not ctx.state.chat_id:
             raise MissingStateError(
                 "No se encontró una sesión de chat activa en este proyecto."
             )
@@ -152,4 +139,5 @@ class CommandRegistry:
                 ctx.start_monitor()
 
 
+registry = CommandRegistry()
 registry = CommandRegistry()

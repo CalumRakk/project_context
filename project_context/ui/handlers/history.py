@@ -24,8 +24,8 @@ def cmd_monitor(ctx: SessionContext, args: list[str]):
 def cmd_monitor_on(ctx: SessionContext, args: list[str]):
     """Activa el monitoreo automático de cambios en segundo plano."""
     ctx.monitor.start_monitoring()
-    if not ctx.state.get("monitor_active"):
-        ctx.state["monitor_active"] = True
+    if not ctx.state.monitor_active:
+        ctx.state.monitor_active = True
         ctx.update_state(ctx.state)
         UI.success("Monitoreo automático activado.")
 
@@ -34,8 +34,8 @@ def cmd_monitor_on(ctx: SessionContext, args: list[str]):
 def cmd_monitor_off(ctx: SessionContext, args: list[str]):
     """Desactiva el monitoreo automático de cambios en segundo plano."""
     ctx.stop_monitor()
-    if ctx.state.get("monitor_active"):
-        ctx.state["monitor_active"] = False
+    if ctx.state.monitor_active:
+        ctx.state.monitor_active = False
         ctx.update_state(ctx.state)
         UI.success("Monitoreo automático desactivado.")
 
