@@ -11,7 +11,11 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-from project_context.exceptions import FreshInstallRequiredError
+from project_context.exceptions import (
+    AssociatedSecretMissingError,
+    AuthenticationFailedError,
+    FreshInstallRequiredError,
+)
 from project_context.schema import (
     ChatIAStudio,
     Chunk,
@@ -66,6 +70,154 @@ class GoogleDriveManager:
         self.service = build("drive", "v3", credentials=self.credentials)
         UI.success("Google Drive Manager inicializado con éxito.")
 
+    def _authenticate(self) -> Credentials:
+        """
+        Orquesta el flujo de autenticación de forma declarativa.
+        Sigue de manera secuencial los rombos de decisión del diagrama de flujo.
+        """
+        # ¿Existe token de sesión?
+        creds = self._load_cached_credentials()
+
+        # ¿Se puede usar o refrescar?
+        if creds and self._validate_and_refresh_credentials(creds):
+            UI.success("Conexión exitosa utilizando credenciales existentes.")
+            return creds
+
+        # ¿Tiene secreto asociado? e ¿Existe el secreto?
+        self._verify_secret_files_readiness()
+
+        # [Iniciar flujo OAuth]
+        creds = self._run_interactive_oauth_flow()
+        return creds
+
+    def _load_cached_credentials(self) -> Optional[Credentials]:
+        """Intenta leer el token local correspondiente al perfil activo."""
+        profile_data = profile_manager.get_active_profile_data()
+        registered_email = profile_data.get("email")
+        secret_name = self.client_secrets_file.name
+
+        if not registered_email:
+            return None
+
+        token_name = f"{registered_email}__{secret_name}"
+        token_path = profile_manager.tokens_dir / token_name
+
+        if not token_path.exists():
+            return None
+
+        try:
+            return Credentials.from_authorized_user_file(str(token_path), self.SCOPES)
+        except Exception as e:
+            UI.warn(f"No se pudieron cargar las credenciales desde {token_name}: {e}")
+            return None
+
+    def _validate_and_refresh_credentials(self, creds: Credentials) -> bool:
+        """Verifica la validez de las credenciales o intenta renovar el token de acceso."""
+        if creds.valid:
+            return True
+
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+
+                # Actualizar el archivo de token modificado en disco
+                profile_data = profile_manager.get_active_profile_data()
+                registered_email = profile_data.get("email")
+                secret_name = self.client_secrets_file.name
+
+                token_name = f"{registered_email}__{secret_name}"
+                token_path = profile_manager.tokens_dir / token_name
+                token_path.write_text(creds.to_json(), encoding="utf-8")
+
+                UI.info("Token de acceso renovado automáticamente.")
+                return True
+            except Exception as e:
+                UI.error(f"Fallo al refrescar el token de acceso: {e}")
+
+        return False
+
+    def _verify_secret_files_readiness(self) -> None:
+        """Garantiza la presencia del archivo físico de secretos necesario para OAuth."""
+        if not self.client_secrets_file.name:
+            raise AssociatedSecretMissingError(
+                f"El perfil '{self.profile_name}' no tiene un secreto asociado."
+            )
+
+        if not self.client_secrets_file.exists():
+            raise AssociatedSecretMissingError(
+                f"No se encontró el archivo de credenciales '{self.client_secrets_file.name}'.\n"
+                f"Ruta esperada: {self.client_secrets_file}"
+            )
+
+    def _run_interactive_oauth_flow(self) -> Credentials:
+        """Levanta el servidor local interactivo de Google y gestiona la validación del usuario."""
+        UI.info("Iniciando flujo de autenticación interactivo de Google Drive...")
+        try:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(self.client_secrets_file), self.SCOPES
+            )
+            creds = cast(Credentials, flow.run_local_server(port=0))
+        except Exception as e:
+            raise AuthenticationFailedError(
+                f"El flujo de autenticación OAuth interactivo fue cancelado o falló: {e}"
+            )
+
+        # Validación del correo obtenido (¿Funcionó?)
+        fetched_email = self._fetch_user_email(creds)
+        self._verify_email_consistency(fetched_email)
+        self._save_authorized_token(fetched_email, creds)
+
+        return creds
+
+    def _fetch_user_email(self, creds: Credentials) -> str:
+        """Consulta el endpoint 'about' de Google para obtener la dirección de correo electrónico."""
+        try:
+            temp_service = build("drive", "v3", credentials=creds)
+            about_info = temp_service.about().get(fields="user(emailAddress)").execute()
+            email = about_info.get("user", {}).get("emailAddress")
+            if not email:
+                raise ValueError(
+                    "La respuesta de Google API no contiene una dirección de correo válida."
+                )
+            return email
+        except Exception as e:
+            raise AuthenticationFailedError(
+                f"Se completó la autenticación, pero falló la validación de la sesión de usuario: {e}"
+            )
+
+    def _verify_email_consistency(self, fetched_email: str) -> None:
+        """Valida que la identidad autenticada coincida con el registro del perfil."""
+        profile_data = profile_manager.get_active_profile_data()
+        registered_email = profile_data.get("email")
+
+        if registered_email and fetched_email.lower() != registered_email.lower():
+            raise ValueError(
+                f"Conflicto de seguridad: La cuenta de Google autenticada ({fetched_email}) "
+                f"no coincide con el correo asignado a este perfil ({registered_email}).\n"
+                f"Por favor, cambia de perfil o vuelve a configurar las credenciales."
+            )
+
+        if not registered_email:
+            profile_data["email"] = fetched_email
+            profile_manager.save_active_profile_data(profile_data)
+            UI.info(
+                f"Correo electrónico [bold]{fetched_email}[/] asociado al perfil '{self.profile_name}'."
+            )
+
+    def _save_authorized_token(self, email: str, creds: Credentials) -> None:
+        """Guarda el token autorizado en el directorio de credenciales para futuras sesiones."""
+        secret_name = self.client_secrets_file.name
+        token_name = f"{email}__{secret_name}"
+        token_path = profile_manager.tokens_dir / token_name
+
+        try:
+            token_path.write_text(creds.to_json(), encoding="utf-8")
+            UI.success("Token de acceso guardado de forma segura.")
+        except Exception as e:
+            UI.error(
+                f"Fallo al registrar el token de sesión en el almacenamiento local: {e}"
+            )
+
     def _authenticate_explicit(self) -> Credentials:
         """Flujo simplificado que autentica directamente usando un archivo de secretos."""
         if not self.client_secrets_file.exists():
@@ -86,92 +238,6 @@ class GoogleDriveManager:
             raise ValueError(
                 "No se pudo recuperar el correo asociado a estas credenciales."
             )
-
-        return creds
-
-    def _authenticate(self) -> Credentials:
-        profile_data = profile_manager.get_active_profile_data()
-        registered_email = profile_data.get("email")
-        secret_name = self.client_secrets_file.name
-
-        creds: Optional[Credentials] = None
-
-        if registered_email:
-            token_name = f"{registered_email}__{secret_name}"
-            token_path = profile_manager.tokens_dir / token_name
-            if token_path.exists():
-                try:
-                    creds = Credentials.from_authorized_user_file(
-                        str(token_path), self.SCOPES
-                    )
-                    UI.info(
-                        f"Cargado token existente para [bold]{registered_email}[/]."
-                    )
-                except Exception as e:
-                    UI.warn(
-                        f"No se pudieron cargar las credenciales desde {token_name}: {e}"
-                    )
-                    creds = None
-
-        if creds and not creds.valid:
-            if creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                    UI.info("Credenciales de Drive refrescadas automáticamente.")
-                except Exception as e:
-                    UI.error(
-                        f"Error al refrescar el token de acceso: {e}. Se requiere re-autenticación."
-                    )
-                    creds = None
-
-        if not creds:
-            if not self.client_secrets_file.exists():
-                raise FileNotFoundError(
-                    f"No se encontró el archivo de credenciales '{self.client_secrets_file.name}'.\n"
-                    f"Ruta esperada: {self.client_secrets_file}"
-                )
-
-            UI.info("Iniciando flujo de autenticación de Google Drive...")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(self.client_secrets_file), self.SCOPES
-            )
-            creds = cast(Credentials, flow.run_local_server(port=0))
-            UI.success("Autenticación externa completada con éxito.")
-
-        try:
-            temp_service = build("drive", "v3", credentials=creds)
-            about_info = temp_service.about().get(fields="user(emailAddress)").execute()
-            fetched_email = about_info.get("user", {}).get("emailAddress")
-        except Exception as e:
-            raise RuntimeError(
-                f"No se pudo recuperar los metadatos de usuario desde Google API: {e}"
-            )
-
-        if not fetched_email:
-            raise ValueError(
-                "La API de Google no devolvió una dirección de correo válida para esta sesión."
-            )
-
-        if registered_email and fetched_email.lower() != registered_email.lower():
-            raise ValueError(
-                f"Conflicto de seguridad: La cuenta de Google autenticada ({fetched_email}) "
-                f"no coincide con el correo asignado a este perfil ({registered_email}).\n"
-                f"Por favor, cambia de perfil o vuelve a configurar las credenciales."
-            )
-
-        if not registered_email:
-            profile_data["email"] = fetched_email
-            profile_manager.save_active_profile_data(profile_data)
-            UI.info(
-                f"Correo electrónico [bold]{fetched_email}[/] asociado al perfil '[bold]{self.profile_name}[/]'."
-            )
-
-        token_name = f"{fetched_email}__{secret_name}"
-        token_path = profile_manager.tokens_dir / token_name
-
-        with open(token_path, "w") as token_fh:
-            token_fh.write(creds.to_json())
-        UI.info("Token guardado de forma segura.")
 
         return creds
 

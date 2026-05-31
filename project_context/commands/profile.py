@@ -85,16 +85,16 @@ def add_profile(
                 f"Secreto único detectado de forma automática: {selected_secret_path.name}"
             )
         else:
-            secret_names = [s.name for s in available_secrets]
+            secret_names = [s.stem for s in available_secrets]
             typer.secho(
-                f"Conflicto: Se detectaron {num_secrets} credenciales instaladas, "
+                f"Se detectaron {num_secrets} credenciales instaladas, "
                 "pero no has especificado cuál utilizar para este perfil.\n\n"
-                "Credenciales instaladas disponibles:\n"
+                "Credenciales disponibles:\n"
                 + "\n".join(f"  - {name}" for name in secret_names)
                 + "\n\n"
                 "Por favor, indica la credencial que deseas utilizar con la opción --secret:\n"
-                f"  project_context profile add {name} --secret <nombre_credencial.json>",
-                fg=typer.colors.RED,
+                f"  project_context profile add {name} --secret <nombre_credencial>",
+                fg=typer.colors.YELLOW,
             )
             raise typer.Exit(code=1)
 

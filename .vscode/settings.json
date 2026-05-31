@@ -1,19 +1,4 @@
 {
-    "python.testing.unittestArgs": [
-        "-v",
-        "-s",
-        "./tests",
-        "-p",
-        "test_*.py"
-    ],
-    "python.testing.pytestEnabled": false,
-    "python.testing.unittestEnabled": true,
-    "files.exclude": {
-        "**/*.rpyc": true,
-        "**/*.rpa": true,
-        "**/*.rpymc": true,
-        "**/cache/": true
-    },
     "python.terminal.activateEnvironment": true,
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",

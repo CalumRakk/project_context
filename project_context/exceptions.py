@@ -56,3 +56,9 @@ class FreshInstallRequiredError(ProjectContextError):
     """Se lanza cuando el entorno carece por completo de perfiles o credenciales de Drive instaladas."""
 
     pass
+
+
+class AuthenticationFailedError(ProjectContextError):
+    """Se lanza cuando el flujo de autenticación interactivo (OAuth) falla o es cancelado."""
+
+    pass

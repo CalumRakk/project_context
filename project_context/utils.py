@@ -756,10 +756,12 @@ profile_manager = ProfileManager()
 
 def verify_profile_credentials(profile_name: Optional[str]) -> None:
     """
-    Realiza una comprobación de tres capas para asegurar la coherencia del perfil,
-    el token o el archivo físico de secretos antes de iniciar la sesión de Drive.
+    Realiza una comprobación estática pre-flight del perfil y sus credenciales.
+    Implementa el flujo lógico de validación interactiva y resolución del perfil.
     """
     import json
+
+    from google.oauth2.credentials import Credentials
 
     from project_context.exceptions import (
         AssociatedSecretMissingError,
@@ -768,102 +770,85 @@ def verify_profile_credentials(profile_name: Optional[str]) -> None:
         ProfileConfigurationCorruptError,
     )
 
+    available_profiles = profile_manager.list_profiles()
     available_secrets = sorted(
         [f for f in profile_manager.secrets_dir.glob("*.json") if f.is_file()]
     )
-    num_secrets = len(available_secrets)
 
-    # Validar ausencia de perfil seleccionado
-    if not profile_name:
-        if num_secrets == 0:
-            raise FreshInstallRequiredError(
-                "No se ha detectado ninguna credencial de Google Drive configurada en este equipo."
-            )
-        else:
-            raise ProfileConfigNotFoundError(
-                "No hay ningún perfil de usuario activo configurado actualmente."
-            )
-
-    profile_file = profile_manager.profiles_dir / f"{profile_name}.json"
-
-    # Capa de Perfil
-    if not profile_file.exists():
-        if num_secrets == 0:
-            raise FreshInstallRequiredError(
-                "No se ha detectado ninguna credencial de Google Drive configurada en este equipo."
-            )
-        else:
+    if profile_name:
+        if profile_name not in available_profiles:
             raise ProfileConfigNotFoundError(
                 f"El perfil de usuario '{profile_name}' no existe en este equipo."
             )
+    else:
+        active_profile = profile_manager.get_active_profile_name()
+        if not active_profile:
+            if not available_profiles and not available_secrets:
+                raise FreshInstallRequiredError(
+                    "No se han detectado perfiles ni credenciales de Google Drive configuradas."
+                )
+            else:
+                raise ProfileConfigNotFoundError(
+                    "No hay ningún perfil de usuario activo configurado actualmente."
+                )
+        profile_name = active_profile
 
+    # --- BLOQUE: Trabajar con perfil resuelto ---
+    profile_file = profile_manager.profiles_dir / f"{profile_name}.json"
     try:
         profile_data = json.loads(profile_file.read_text(encoding="utf-8"))
     except Exception as e:
         raise ProfileConfigurationCorruptError(
-            f"El archivo de configuración del perfil '{profile_name}' está dañado o corrupto: {e}"
+            f"El archivo del perfil '{profile_name}' está dañado o corrupto: {e}"
         )
 
     email = profile_data.get("email")
     secret_name = profile_data.get("associated_secret")
 
-    # Autoreparación si no hay secreto configurado pero hay uno solo disponible
-    if not secret_name:
-        if num_secrets == 1:
-            secret_name = available_secrets[0].name
-            profile_data["associated_secret"] = secret_name
-            profile_manager.save_profile_data(profile_name, profile_data)
-        elif num_secrets > 1:
-            secret_names = ", ".join(s.name for s in available_secrets)
-            raise ProfileConfigurationCorruptError(
-                f"El perfil '{profile_name}' no tiene un secreto asociado y existen múltiples secretos en el sistema: {secret_names}"
-            )
-        else:
-            raise AssociatedSecretMissingError(
-                f"El perfil '{profile_name}' no tiene un secreto asociado y no hay ningún secreto instalado en el banco de secretos."
-            )
-
-    if not secret_name.endswith(".json"):
-        secret_name += ".json"
-
-    # Capa de Token
-    token_valid = False
-    if email:
-        token_name = f"{email}__{secret_name}"
+    # --- ROMBO: ¿Existe token de session? y ¿Se puede usar o refrescar? ---
+    # (Evaluación perezosa estática para evitar requerir el secreto físico si el token sirve)
+    token_valid_or_refreshable = False
+    if email and secret_name:
+        associated_secret_clean = (
+            secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        )
+        token_name = f"{email}__{associated_secret_clean}"
         token_path = profile_manager.tokens_dir / token_name
+
         if token_path.exists():
             try:
-                from google.auth.transport.requests import Request
-                from google.oauth2.credentials import Credentials
-
                 creds = Credentials.from_authorized_user_file(str(token_path))
-                if creds.valid:
-                    token_valid = True
-                elif creds.expired and creds.refresh_token:
-                    try:
-                        creds.refresh(Request())
-                        token_path.write_text(creds.to_json(), encoding="utf-8")
-                        token_valid = True
-                    except Exception:
-                        token_valid = False
+                if creds.valid or (creds.expired and creds.refresh_token):
+                    token_valid_or_refreshable = True
             except Exception:
-                token_valid = False
+                token_valid_or_refreshable = False
 
-    if token_valid:
+    # Si el token es utilizable, finaliza la comprobación pre-flight con éxito
+    if token_valid_or_refreshable:
         return
 
-    # Capa de Secreto Físico
-    associated_secret_path = profile_manager.secrets_dir / secret_name
+    # --- ROMBO: ¿Tiene secreto asociado? ---
+    if not secret_name:
+        raise AssociatedSecretMissingError(
+            f"El perfil '{profile_name}' requiere re-autenticarse, pero no tiene un archivo de secretos asociado."
+        )
+
+    # --- ROMBO: ¿Existe el secreto? ---
+    associated_secret_clean = (
+        secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+    )
+    associated_secret_path = profile_manager.secrets_dir / associated_secret_clean
     if not associated_secret_path.exists():
         raise AssociatedSecretMissingError(
-            f"El perfil '{profile_name}' requiere re-autenticarse, pero su secreto asociado '{secret_name}' no existe en el banco de secretos."
+            f"El perfil '{profile_name}' requiere re-autenticarse, pero su secreto asociado "
+            f"'{associated_secret_clean}' no se encuentra físicamente en el disco."
         )
 
 
 def safe_verify_profile(profile_name: Optional[str]) -> None:
     """
-    Ejecuta la validación de credenciales del perfil y maneja las excepciones de dominio
-    mostrando guías de reparación y tips educativos mediante el módulo UI.
+    Captura los fallos de validación del pre-flight y asiste al usuario
+    con sugerencias interactivas y enlistado de opciones.
     """
     import typer
 
@@ -884,26 +869,21 @@ def safe_verify_profile(profile_name: Optional[str]) -> None:
         UI.educational_tip(
             title="Configuración Inicial de Credenciales",
             message=(
-                "Para conectar project_context con tu cuenta de Google Drive necesitas una credencial de tipo cliente OAuth:\n\n"
+                "Para conectar project_context con tu cuenta de Google Drive necesitas un secreto cliente OAuth:\n\n"
                 "1. Accede a la Google Cloud Console (https://console.cloud.google.com/).\n"
                 "2. Habilita la Google Drive API en tu proyecto.\n"
-                "3. Crea credenciales de tipo 'OAuth Client ID' seleccionando la aplicación tipo 'Desktop App'.\n"
+                "3. Crea credenciales de tipo 'OAuth Client ID' (Desktop App).\n"
                 "4. Descarga el archivo JSON resultante."
             ),
-            commands=[
-                "project_context profile set-secrets /ruta/a/tus_credenciales.json"
-            ],
+            commands=["project_context secrets add /ruta/a/tus_credenciales.json"],
             spacing="bottom",
         )
         raise typer.Exit(code=1)
 
-    except ProfileConfigNotFoundError:
+    except ProfileConfigNotFoundError as e:
         available_profiles = profile_manager.list_profiles()
         if not profile_name:
-            UI.error(
-                "No hay ningún perfil de usuario activo configurado actualmente.",
-                spacing="top",
-            )
+            UI.error(str(e), spacing="top")
             if available_profiles:
                 UI.educational_tip(
                     title="Selecciona un Perfil Activo",
@@ -925,39 +905,54 @@ def safe_verify_profile(profile_name: Optional[str]) -> None:
                     spacing="bottom",
                 )
         else:
-            UI.error(f"El perfil de usuario '{profile_name}' no existe.", spacing="top")
-            UI.educational_tip(
-                title="Perfiles de Usuario Disponibles",
-                message=(
-                    f"Perfiles configurados en este equipo: {', '.join(available_profiles)}\n\n"
-                    f"Si deseas crear el perfil '{profile_name}' y asociarlo a tus credenciales, ejecuta:"
-                ),
-                commands=[f"project_context profile add {profile_name}"],
-                spacing="bottom",
+            # --- BLOQUE: ERROR: No existe el perfil especificado + Enlistar perfiles ---
+            UI.error(
+                f"ERROR: El perfil especificado '{profile_name}' no existe.",
+                spacing="top",
             )
+            if available_profiles:
+                UI.educational_tip(
+                    title="Perfiles de Usuario Disponibles",
+                    message=(
+                        f"Perfiles configurados en este equipo: {', '.join(available_profiles)}\n\n"
+                        f"Si deseas cambiar a uno de ellos, ejecuta:"
+                    ),
+                    commands=["project_context profile use <nombre_perfil>"],
+                    spacing="bottom",
+                )
+            else:
+                UI.educational_tip(
+                    title="Crea el perfil especificado",
+                    message=(
+                        f"No hay perfiles registrados. Si deseas crear el perfil '{profile_name}' "
+                        "y asociarlo a tus credenciales, ejecuta:"
+                    ),
+                    commands=[f"project_context profile add {profile_name}"],
+                    spacing="bottom",
+                )
         raise typer.Exit(code=1)
 
     except AssociatedSecretMissingError as e:
-        if profile_name:
-            profile_data = profile_manager.load_profile_data(profile_name)
-            secret_name = profile_data.get("associated_secret", f"{profile_name}.json")
-            if not secret_name.endswith(".json"):
-                secret_name += ".json"
+        resolved_profile = (
+            profile_name or profile_manager.get_active_profile_name() or "default"
+        )
+        profile_data = profile_manager.load_profile_data(resolved_profile)
+        secret_name = profile_data.get("associated_secret", f"{resolved_profile}.json")
+        if not secret_name.endswith(".json"):
+            secret_name += ".json"
 
-            UI.error(str(e), spacing="top")
-            UI.educational_tip(
-                title="Re-autenticación Requerida",
-                message=(
-                    f"Tu sesión para el perfil '{profile_name}' ha expirado o no se encuentra activa, "
-                    f"y se requiere el archivo de secretos físicos '{secret_name}' para abrir una nueva sesión en el navegador."
-                ),
-                commands=[
-                    f"project_context profile set-secrets /ruta/a/tu/archivo.json --secret-name {secret_name}"
-                ],
-                spacing="bottom",
-            )
-        else:
-            UI.error(str(e), spacing="top")
+        UI.error(str(e), spacing="top")
+        UI.educational_tip(
+            title="Vincular Secreto Requerido",
+            message=(
+                f"La sesión para el perfil '{resolved_profile}' requiere iniciar el flujo OAuth en el navegador, "
+                f"pero se necesita el archivo de secretos físicos '{secret_name}' en el banco global."
+            ),
+            commands=[
+                f"project_context secrets add /ruta/a/tu/archivo.json --name {secret_name.replace('.json', '')}"
+            ],
+            spacing="bottom",
+        )
         raise typer.Exit(code=1)
 
     except ProfileConfigurationCorruptError as e:

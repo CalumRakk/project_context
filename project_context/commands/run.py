@@ -6,6 +6,10 @@ from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
 from project_context.api_drive import AIStudioDriveManager
+from project_context.exceptions import (
+    AssociatedSecretMissingError,
+    AuthenticationFailedError,
+)
 from project_context.ops import initialize_project_context, update_context
 from project_context.ui.interactive import interactive_session
 from project_context.utils import (
@@ -62,6 +66,9 @@ def run_command(
 
             try:
                 api = AIStudioDriveManager()
+            except (AuthenticationFailedError, AssociatedSecretMissingError) as e:
+                UI.error(str(e))
+                raise typer.Exit(code=1)
             except Exception as e:
                 UI.error(f"Error inicializando Drive: {e}")
                 raise typer.Exit(code=1)
