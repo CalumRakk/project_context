@@ -97,14 +97,14 @@ class UI:
             f"{message}",
             indent=indent,
             spacing=spacing,
-            log_level=logging.INFO,
+            log_level=logging.DEBUG,
             **kwargs,
         )
 
     @staticmethod
     def info(message: str, *, spacing: Spacing = None, **kwargs):
         UI._print(
-            f"[info]i[/] {message}", spacing=spacing, log_level=logging.INFO, **kwargs
+            f"[info]i[/] {message}", spacing=spacing, log_level=logging.DEBUG, **kwargs
         )
 
     @staticmethod
@@ -112,7 +112,7 @@ class UI:
         UI._print(
             f"[success]>[/] {message}",
             spacing=spacing,
-            log_level=logging.INFO,
+            log_level=logging.DEBUG,
             **kwargs,
         )
 

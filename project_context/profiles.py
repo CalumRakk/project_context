@@ -1,7 +1,6 @@
 import json
 import logging
 import shutil
-import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -44,7 +43,9 @@ class ProfileManager:
                 if old_profile and old_profile != "default":
                     profile_file = self.profiles_dir / f"{old_profile}.json"
                     if profile_file.exists():
-                        self.active_profile_file.write_text(old_profile, encoding="utf-8")
+                        self.active_profile_file.write_text(
+                            old_profile, encoding="utf-8"
+                        )
                 self.config_file.unlink()
             except Exception:
                 pass
@@ -79,7 +80,9 @@ class ProfileManager:
         self._temp_profile = None
         profile_file = self.profiles_dir / f"{profile_name}.json"
         if not profile_file.exists():
-            raise FileNotFoundError(f"El perfil '{profile_name}' no existe en el sistema.")
+            raise FileNotFoundError(
+                f"El perfil '{profile_name}' no existe en el sistema."
+            )
         self.active_profile_file.write_text(profile_name, encoding="utf-8")
 
     def get_working_dir(self) -> Path:
@@ -123,7 +126,9 @@ class ProfileManager:
         profile_data = self.get_active_profile_data()
         secret_name = profile_data.get("associated_secret")
 
-        available_secrets = sorted([f for f in self.secrets_dir.glob("*.json") if f.is_file()])
+        available_secrets = sorted(
+            [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
+        )
 
         if secret_name:
             if not secret_name.endswith(".json"):
@@ -136,16 +141,18 @@ class ProfileManager:
             auto_secret = available_secrets[0]
             profile_data["associated_secret"] = auto_secret.name
             self.save_profile_data(profile_name, profile_data)
-            UI.info(f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]")
+            UI.info(
+                f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]"
+            )
             return auto_secret, f"Auto-detectado ({auto_secret.name})"
 
         elif len(available_secrets) > 1:
-            secret_names = [f.name for f in available_secrets]
             raise ValueError(
                 f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos y "
                 f"el perfil '{profile_name}' no tiene un secreto asociado.\n"
                 f"Especifique uno usando: set-secrets o cambie de perfil."
             )
+
         else:
             fallback_name = secret_name if secret_name else f"{profile_name}.json"
             if not fallback_name.endswith(".json"):
@@ -187,12 +194,16 @@ class ProfileManager:
         removed_count = 0
         if self.tokens_dir.exists():
             for token_file in self.tokens_dir.iterdir():
-                if token_file.is_file() and token_file.name.endswith(f"__{secret_name}"):
+                if token_file.is_file() and token_file.name.endswith(
+                    f"__{secret_name}"
+                ):
                     try:
                         token_file.unlink()
                         removed_count += 1
                     except Exception as e:
-                        logger.warning(f"No se pudo limpiar el token residual '{token_file.name}': {e}")
+                        logger.warning(
+                            f"No se pudo limpiar el token residual '{token_file.name}': {e}"
+                        )
         return removed_count
 
 

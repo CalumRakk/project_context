@@ -10,8 +10,9 @@ from prompt_toolkit.history import InMemoryHistory
 from project_context.api_drive import AIStudioDriveManager
 from project_context.exceptions import ProjectContextError
 from project_context.history import SnapshotManager
+from project_context.profiles import profile_manager
 from project_context.ui.commands import SessionContext, registry
-from project_context.utils import UI, profile_manager
+from project_context.utils import UI
 
 
 def create_interactive_completer(

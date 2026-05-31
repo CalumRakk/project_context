@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -75,12 +76,13 @@ def get_app_root_dir() -> Path:
 def compute_md5(source: Union[bytes, str, Path]) -> str:
     """Calcula el hash MD5 de un bloque de bytes o de un archivo físico."""
     import hashlib
+
     hash_md5 = hashlib.md5()
 
     if isinstance(source, bytes):
         hash_md5.update(source)
     else:
-        file_path = Path(source)
+        file_path = Path(source)  # type: ignore
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
@@ -336,11 +338,21 @@ def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:
 
 def get_potential_media_folders(project_path: Path) -> list[Path]:
     """Busca directorios susceptibles de almacenar assets visuales."""
-    common_names = {"assets", "attachments", "img", "images", "media", "static", "public"}
+    common_names = {
+        "assets",
+        "attachments",
+        "img",
+        "images",
+        "media",
+        "static",
+        "public",
+    }
     found = []
     for p in project_path.rglob("*"):
         if p.is_dir() and p.name.lower() in common_names:
-            if not any(part.startswith(".") or part == "node_modules" for part in p.parts):
+            if not any(
+                part.startswith(".") or part == "node_modules" for part in p.parts
+            ):
                 found.append(p)
     return found
 
@@ -355,7 +367,11 @@ def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     for pat in std_patterns:
         matches = re.findall(pat, content, re.IGNORECASE)
         results.extend(
-            [(m.strip().lstrip("/"), False) for m in matches if not m.startswith(("http", "data:"))]
+            [
+                (m.strip().lstrip("/"), False)
+                for m in matches
+                if not m.startswith(("http", "data:"))
+            ]
         )
 
     wiki_matches = re.findall(r"!\[\[(.*?)(?:\|.*?)?\]\]", content)
@@ -448,6 +464,7 @@ def validate_google_secrets_file(path: Path) -> bool:
         return False
     try:
         import json
+
         data = json.loads(path.read_text(encoding="utf-8"))
         for key in ["installed", "web"]:
             if key in data and isinstance(data[key], dict):

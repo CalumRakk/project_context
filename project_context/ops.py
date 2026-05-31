@@ -1,8 +1,10 @@
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from project_context.api_drive import AIStudioDriveManager, ChunkFactory
+from project_context.git_ops import get_diff_message
 from project_context.schema import (
     ChatIAStudio,
     ChunkedPrompt,
@@ -11,7 +13,6 @@ from project_context.schema import (
     RunSettings,
     SystemInstruction,
 )
-from project_context.git_ops import get_diff_message
 from project_context.utils import (
     COMMIT_TASK_MARKER,
     RESPONSE_TEMPLATE,
@@ -25,6 +26,7 @@ from project_context.utils import (
 )
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+logger = logging.getLogger(__name__)
 
 
 def create_default_run_settings() -> RunSettings:
@@ -164,7 +166,7 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
     )
 
-    UI.info(f"Escaneando cambios en [blue]{scope_name}[/]...")
+    logger.debug(f"Escaneando cambios en {scope_name}...")
 
     content, new_tokens = generate_context(project_path, context_items=context_items)
     path_context = save_context(project_path, content)
@@ -175,12 +177,12 @@ def update_context(api: AIStudioDriveManager, project_path: Path, state: Dict) -
         state["last_modified"] = project_path.stat().st_mtime
         return state
 
-    UI.info("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
+    logger.debug("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
 
     assert file_id is not None
     api.gdm.update_file_from_memory(file_id, content, "text/plain")
 
-    UI.info("Actualizando metadatos del chat (Token Count)...")
+    logger.debug("Actualizando metadatos del chat (Token Count)...")
     try:
         with api.modify_chat(chat_id) as chat_data:
             updated_metadata = False
@@ -429,7 +431,8 @@ def transfer_chat_to_profile(
     y establece el nuevo estado seguro.
     """
     from project_context.history import SnapshotManager
-    from project_context.utils import load_project_context_state, profile_manager
+    from project_context.profiles import profile_manager
+    from project_context.utils import load_project_context_state
 
     UI.info("Extrayendo chat y archivos desde el Perfil Actual (A)...")
     chat_data, assets = extract_chat_assets(api, state["chat_id"])

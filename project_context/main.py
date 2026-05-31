@@ -1,14 +1,20 @@
+import logging
 import os
 import sys
 import warnings
+from datetime import datetime
 from typing import Annotated, Optional
 
 import typer
 
 from project_context import __version__
 from project_context.commands import dev, profile, run, secrets, shell, update
+from project_context.logging_config import setup_logging
+from project_context.utils import get_app_root_dir
 
 os.environ["LOG_LEVEL"] = "CRITICAL"
+
+logging.getLogger("googleapiclient").setLevel(logging.CRITICAL)
 
 
 def setup_terminal_behavior():
@@ -45,9 +51,6 @@ try:
 except ImportError:
     pass
 
-# Importamos los controladores de comandos
-from project_context.commands import dev, profile, run, shell, update
-
 if sys.platform.startswith("win"):
     os.system("chcp 65001 > nul")
     if sys.stdout.encoding != "utf-8":
@@ -72,6 +75,7 @@ def version_callback(value: bool):
 
 @app.callback()
 def global_options(
+    ctx: typer.Context,
     version: Annotated[
         Optional[bool],
         typer.Option(
@@ -82,8 +86,22 @@ def global_options(
             help="Muestra la versión actual de la herramienta y sale.",
         ),
     ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            is_flag=True,
+            help="Habilita modo debug con logs más detallados en consola.",
+        ),
+    ] = False,
 ):
-    pass
+    cmd_name = ctx.invoked_subcommand or "sys"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    log_dir = get_app_root_dir() / "logs"
+    log_path = log_dir / f"{timestamp}_{cmd_name}.log"
+
+    setup_logging(log_path, debug)
 
 
 # Registro de sub-grupos
