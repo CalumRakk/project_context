@@ -62,8 +62,10 @@ class SnapshotManager:
         self.project_path = project_path
         self.state = state
         self.running = False
+        self.paused = False
         self.thread: Optional[threading.Thread] = None
         self.interval = 10
+        self._pause_lock = threading.Lock()
 
         self.base_dir = project_path / ".project_context"
         self.snapshots_dir = self.base_dir / "snapshots"
@@ -125,11 +127,22 @@ class SnapshotManager:
         if self.running:
             return
         self.running = True
+        self.paused = False
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
         logger.debug(
             f"\n[Auto-Snapshot] Activado. Verificando cambios cada {self.interval}s."
         )
+
+    def pause_monitoring(self):
+        """Pausa el análisis temporalmente sin matar el hilo."""
+        with self._pause_lock:
+            self.paused = True
+
+    def resume_monitoring(self):
+        """Reanuda el análisis."""
+        with self._pause_lock:
+            self.paused = False
 
     def stop_monitoring(self):
         try:
@@ -138,14 +151,16 @@ class SnapshotManager:
                 self.thread.join(timeout=1.0)
             if not db.is_closed():
                 db.close()
-            logger.debug("\n[Auto-Snapshot] Detenido.")
+            logger.debug("\n[Auto-Snapshot] Detenido de forma definitiva.")
         except Exception as e:
             logger.debug(f"\n[Error Auto-Snapshot]: {e}")
 
     def _loop(self):
         while self.running:
             try:
-                self._check_and_snapshot()
+                with self._pause_lock:
+                    if not self.paused:
+                        self._check_and_snapshot()
             except Exception as e:
                 logger.debug(f"[Error Auto-Snapshot]: {e}")
 

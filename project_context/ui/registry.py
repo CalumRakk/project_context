@@ -28,6 +28,15 @@ class SessionContext:
         if self.state.monitor_active:
             self.monitor.start_monitoring()
 
+    def pause_monitor(self):
+        """Informa al monitor que detenga la evaluación temporalmente."""
+        self.monitor.pause_monitoring()
+
+    def resume_monitor(self):
+        """Reanuda el monitoreo si el estado global del monitor está activo."""
+        if self.state.monitor_active:
+            self.monitor.resume_monitoring()
+
     def update_state(self, new_state: LocalProjectState):
         self.state = new_state
         self.monitor.state = new_state
@@ -110,7 +119,7 @@ class CommandRegistry:
             subcommand_candidate = f"{name}:{args_list[0].lower()}"
             if subcommand_candidate in self.commands:
                 cmd_meta = self.commands[subcommand_candidate]
-                resolved_args = args_list[1:]  # Consumimos el subcomando
+                resolved_args = args_list[1:]
 
         # Fallback al comando base en caso de no haber subcomando
         if not cmd_meta:
@@ -130,13 +139,13 @@ class CommandRegistry:
             )
 
         if cmd_meta.manage_monitor:
-            ctx.stop_monitor()
+            ctx.pause_monitor()
 
         try:
             return cmd_meta.handler(ctx, resolved_args)
         finally:
             if cmd_meta.manage_monitor:
-                ctx.start_monitor()
+                ctx.resume_monitor()
 
 
 registry = CommandRegistry()
