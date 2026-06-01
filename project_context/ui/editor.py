@@ -1,10 +1,13 @@
 import copy
+import logging
 import time
 
 import typer
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.schema import ChunksDocument, ChunksImage, ChunksText
+
+logger = logging.getLogger(__name__)
 
 
 def format_chunk_row(index: int, chunk) -> str:
@@ -220,16 +223,16 @@ def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
                     popped += 1
                     unsaved_changes = True
             if popped > 0:
-                print(f"Eliminados {popped} mensajes.")
+                logger.debug(f"Eliminados {popped} mensajes.")
                 time.sleep(0.5)
 
         elif cmd == "save":
             if not unsaved_changes:
-                print("No hay cambios.")
+                logger.debug("No hay cambios.")
                 time.sleep(1)
                 continue
 
-            print("Subiendo cambios a Google Drive...")
+            logger.debug("Subiendo cambios a Google Drive...")
             chat_data.chunkedPrompt.chunks = chunks
             if api.update_chat_file(chat_id, chat_data):
                 typer.secho("¡Guardado exitoso!", fg=typer.colors.GREEN)

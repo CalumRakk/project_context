@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import threading
 import time
@@ -14,6 +15,7 @@ from project_context.schema import LocalProjectState
 from project_context.utils import compute_md5
 
 db = SqliteDatabase(None)
+logger = logging.getLogger(__name__)
 
 
 class BaseModel(Model):
@@ -114,7 +116,7 @@ class SnapshotManager:
             compressed = obj_path.read_bytes()
             return decompress_data(compressed)
         except Exception as e:
-            print(
+            logger.debug(
                 f"[CAS Error] No se pudo leer o descomprimir el objeto {file_hash}: {e}"
             )
             return None
@@ -125,7 +127,9 @@ class SnapshotManager:
         self.running = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
-        print(f"\n[Auto-Snapshot] Activado. Verificando cambios cada {self.interval}s.")
+        logger.debug(
+            f"\n[Auto-Snapshot] Activado. Verificando cambios cada {self.interval}s."
+        )
 
     def stop_monitoring(self):
         try:
@@ -134,16 +138,16 @@ class SnapshotManager:
                 self.thread.join(timeout=1.0)
             if not db.is_closed():
                 db.close()
-            print("\n[Auto-Snapshot] Detenido.")
+            logger.debug("\n[Auto-Snapshot] Detenido.")
         except Exception as e:
-            print(f"\n[Error Auto-Snapshot]: {e}")
+            logger.debug(f"\n[Error Auto-Snapshot]: {e}")
 
     def _loop(self):
         while self.running:
             try:
                 self._check_and_snapshot()
             except Exception as e:
-                print(f"[Error Auto-Snapshot]: {e}")
+                logger.debug(f"[Error Auto-Snapshot]: {e}")
 
             for _ in range(self.interval):
                 if not self.running:
@@ -182,7 +186,7 @@ class SnapshotManager:
 
                 current_context_path = self.base_dir / "last_context.txt"
                 if not current_context_path.exists():
-                    print("\n[Auto-Snapshot] Error: Falta contexto fuente.")
+                    logger.debug("\n[Auto-Snapshot] Error: Falta contexto fuente.")
                     return
 
                 context_content = current_context_path.read_bytes()
@@ -245,23 +249,25 @@ class SnapshotManager:
                                         },
                                     )
                     except Exception as e:
-                        print(
+                        logger.debug(
                             f"\n[Auto-Snapshot Info] Omitiendo procesamiento detallado de assets: {e}"
                         )
 
                     if message:
-                        print(f" Snapshot manual '{message}' creado exitosamente.")
+                        logger.debug(
+                            f" Snapshot manual '{message}' creado exitosamente."
+                        )
                     else:
-                        print(".", end="", flush=True)
+                        logger.debug(f" Snapshot '{timestamp}' creado exitosamente.")
 
             except Exception as e:
-                print(f"\n[Error Auto-Snapshot]: {e}")
+                logger.debug(f"\n[Error Auto-Snapshot]: {e}")
 
     def create_named_snapshot(self, message: str):
         """Fuerza la creación de un snapshot manual con un comentario."""
         chat_id = self.state.chat_id
         if not chat_id:
-            print("Error: No hay chat ID activo.")
+            logger.debug("Error: No hay chat ID activo.")
             return
 
         metadata = self.api.gdm.get_file_metadata(chat_id)
@@ -276,20 +282,22 @@ class SnapshotManager:
             try:
                 snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
                 if not snap:
-                    print("Snapshot no encontrado en la base de datos.")
+                    logger.debug("Snapshot no encontrado en la base de datos.")
                     return False
 
-                print(f"Restaurando snapshot {timestamp}...")
+                logger.debug(f"Restaurando snapshot {timestamp}...")
 
                 chat_bytes = self._retrieve_object(snap.chat_hash)
                 if not chat_bytes:
-                    print(f"Error: Chat {snap.chat_hash} no disponible localmente.")
+                    logger.debug(
+                        f"Error: Chat {snap.chat_hash} no disponible localmente."
+                    )
                     return False
 
                 try:
                     chat_json = json.loads(chat_bytes.decode("utf-8"))
                 except Exception as e:
-                    print(f"Error al decodificar chat JSON: {e}")
+                    logger.debug(f"Error al decodificar chat JSON: {e}")
                     return False
 
                 assets_to_repair = list(
@@ -298,12 +306,12 @@ class SnapshotManager:
                 id_map = {}
 
                 for asset in assets_to_repair:
-                    print(f"Verificando recurso en la nube: {asset.filename}...")
+                    logger.debug(f"Verificando recurso en la nube: {asset.filename}...")
                     metadata = self.api.gdm.get_file_metadata(asset.drive_file_id)
                     if metadata:
                         continue
 
-                    print(
+                    logger.debug(
                         f"  Recurso no encontrado. Buscando por hash (MD5: {asset.file_hash})..."
                     )
                     files = self.api.gdm.find_files_by_query(
@@ -313,24 +321,24 @@ class SnapshotManager:
 
                     if files:
                         repaired_id = files[0]["id"]
-                        print(
+                        logger.debug(
                             f"  ¡Recurso recuperado de Drive! Vinculando ID: {repaired_id}"
                         )
                         id_map[asset.drive_file_id] = repaired_id
                         asset.drive_file_id = repaired_id
                         asset.save()
                     else:
-                        print(
+                        logger.debug(
                             "  Recurso no encontrado en Drive. Recuperando de objects/..."
                         )
                         asset_bytes = self._retrieve_object(asset.file_hash)
                         if not asset_bytes:
-                            print(
+                            logger.debug(
                                 f"  [Error] No hay respaldo físico para {asset.filename}."
                             )
                             continue
 
-                        print("  Subiendo recurso restaurado a Drive...")
+                        logger.debug("  Subiendo recurso restaurado a Drive...")
                         try:
                             new_file = self.api.gdm.upload_binary_to_drive(
                                 folder_id=self.api.ai_studio_folder,
@@ -340,15 +348,21 @@ class SnapshotManager:
                             )
                             if new_file and "id" in new_file:
                                 repaired_id = new_file["id"]
-                                print(f"  Recurso restaurado con ID: {repaired_id}")
+                                logger.debug(
+                                    f"  Recurso restaurado con ID: {repaired_id}"
+                                )
                                 id_map[asset.drive_file_id] = repaired_id
                                 asset.drive_file_id = repaired_id
                                 asset.save()
                         except Exception as e:
-                            print(f"  [Error] No se pudo restaurar el archivo: {e}")
+                            logger.debug(
+                                f"  [Error] No se pudo restaurar el archivo: {e}"
+                            )
 
                 if id_map:
-                    print("Aplicando mapeo de identificadores reparados en el chat...")
+                    logger.debug(
+                        "Aplicando mapeo de identificadores reparados en el chat..."
+                    )
                     chunks = chat_json.get("chunkedPrompt", {}).get("chunks", [])
                     for chunk in chunks:
                         if (
@@ -370,7 +384,7 @@ class SnapshotManager:
 
                 context_bytes = self._retrieve_object(snap.context_hash)
                 if context_bytes is None:
-                    print(
+                    logger.debug(
                         f"Error: Contexto {snap.context_hash} no disponible localmente."
                     )
                     return False
@@ -381,12 +395,14 @@ class SnapshotManager:
                 chat_id = self.state.chat_id
 
                 if not file_id or not chat_id:
-                    print("Error: No hay identificadores de chat en la sesión actual.")
+                    logger.debug(
+                        "Error: No hay identificadores de chat en la sesión actual."
+                    )
                     return False
 
                 meta_ctx = self.api.gdm.get_file_metadata(file_id)
                 if not meta_ctx:
-                    print(
+                    logger.debug(
                         "  [Auto-reparación] Recreando archivo de contexto maestro en Drive..."
                     )
                     filename = Path(self.project_path).name + "_context.txt"
@@ -400,7 +416,7 @@ class SnapshotManager:
                         file_id = new_ctx_file["id"]
                         self.state.file_id = file_id
                     else:
-                        print(
+                        logger.debug(
                             "  Error crítico: No se pudo recrear el archivo de contexto."
                         )
                         return False
@@ -411,7 +427,9 @@ class SnapshotManager:
 
                 meta_chat = self.api.gdm.get_file_metadata(chat_id)
                 if not meta_chat:
-                    print("  [Auto-reparación] Recreando archivo de chat en Drive...")
+                    logger.debug(
+                        "  [Auto-reparación] Recreando archivo de chat en Drive..."
+                    )
                     from project_context.schema import ChatIAStudio
 
                     chat_data = ChatIAStudio(**chat_json)
@@ -423,7 +441,7 @@ class SnapshotManager:
                         chat_id = new_chat_id
                         self.state.chat_id = chat_id
                     else:
-                        print("  Error crítico: No se pudo recrear el chat.")
+                        logger.debug("  Error crítico: No se pudo recrear el chat.")
                         return False
                 else:
                     self.api.gdm.update_file_from_memory(
@@ -436,11 +454,11 @@ class SnapshotManager:
                 shutil.copy2(last_context, current_local_context)
 
                 self.state.md5 = snap.context_hash
-                print("Restauración completada con éxito.")
+                logger.debug("Restauración completada con éxito.")
                 return True
 
             except Exception as e:
-                print(f"[Error] No se pudo restaurar el snapshot: {e}")
+                logger.debug(f"[Error] No se pudo restaurar el snapshot: {e}")
                 return False
 
     def get_all_snapshot_ids(self) -> List[str]:
@@ -452,7 +470,7 @@ class SnapshotManager:
                 )
                 return [snap.timestamp for snap in query]
             except Exception as e:
-                print(f"[Error] Fallo al consultar los timestamps: {e}")
+                logger.debug(f"[Error] Fallo al consultar los timestamps: {e}")
                 return []
 
     def get_snapshot_info(self, timestamp: str) -> Optional[dict]:
@@ -469,7 +487,7 @@ class SnapshotManager:
                         "message": snap.message,
                     }
             except Exception as e:
-                print(f"[Error] Fallo al consultar el snapshot: {e}")
+                logger.debug(f"[Error] Fallo al consultar el snapshot: {e}")
             return None
 
     def list_snapshots(self) -> List[dict]:
@@ -488,7 +506,7 @@ class SnapshotManager:
                     for snap in query
                 ]
             except Exception as e:
-                print(f"[Error] Fallo al listar historial: {e}")
+                logger.debug(f"[Error] Fallo al listar historial: {e}")
                 return []
 
     def delete_snapshot(self, timestamp: str) -> bool:
@@ -501,7 +519,7 @@ class SnapshotManager:
                     self.prune_objects()
                     return True
             except Exception as e:
-                print(f"[Error] No se pudo eliminar el snapshot: {e}")
+                logger.debug(f"[Error] No se pudo eliminar el snapshot: {e}")
             return False
 
     def rename_snapshot(self, timestamp: str, new_message: str) -> bool:
@@ -514,7 +532,7 @@ class SnapshotManager:
                 q.execute()
                 return True
             except Exception as e:
-                print(f"[Error] No se pudo renombrar el snapshot: {e}")
+                logger.debug(f"[Error] No se pudo renombrar el snapshot: {e}")
                 return False
 
     def prune_objects(self) -> int:
@@ -528,7 +546,9 @@ class SnapshotManager:
                 for asset in SnapshotAsset.select(SnapshotAsset.file_hash):
                     referenced_hashes.add(asset.file_hash)
             except Exception as e:
-                print(f"[Error] No se pudieron leer las referencias activas: {e}")
+                logger.debug(
+                    f"[Error] No se pudieron leer las referencias activas: {e}"
+                )
                 return 0
 
             deleted_count = 0
@@ -549,7 +569,9 @@ class SnapshotManager:
                             except OSError:
                                 pass
                         except Exception as e:
-                            print(f"[Error] No se pudo eliminar {path.name}: {e}")
+                            logger.debug(
+                                f"[Error] No se pudo eliminar {path.name}: {e}"
+                            )
             return deleted_count
 
     def _migrate_legacy_snapshots(self):
@@ -569,7 +591,7 @@ class SnapshotManager:
         if not legacy_folders:
             return
 
-        print(
+        logger.debug(
             f"\n[Migration] Se detectaron {len(legacy_folders)} snapshots del formato anterior. Migrando..."
         )
 
@@ -648,7 +670,7 @@ class SnapshotManager:
                 shutil.rmtree(folder)
 
             except Exception as e:
-                print(
+                logger.debug(
                     f"[Migration Warning] No se pudo migrar la carpeta legacy {folder.name}: {e}"
                 )
 
@@ -658,4 +680,4 @@ class SnapshotManager:
             except Exception:
                 pass
 
-        print("[Migration] Proceso de migración finalizado.")
+        logger.debug("[Migration] Proceso de migración finalizado.")

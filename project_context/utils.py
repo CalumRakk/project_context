@@ -306,10 +306,10 @@ def resolve_prompt(project_path: Union[str, Path]) -> str:
         try:
             content = prompt_file.read_text(encoding="utf-8").strip()
             if content:
-                print(f"Usando prompt personalizado desde: {prompt_file.name}")
+                logger.debug(f"Usando prompt personalizado desde: {prompt_file.name}")
                 return content
         except Exception as e:
-            print(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
+            logger.debug(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
 
     return PROMPT_TEMPLATE
 

@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, List, Optional, cast
@@ -16,6 +17,7 @@ from project_context.exceptions import (
     AuthenticationFailedError,
     FreshInstallRequiredError,
 )
+from project_context.profiles import profile_manager
 from project_context.schema import (
     ChatIAStudio,
     Chunk,
@@ -25,8 +27,9 @@ from project_context.schema import (
     DriveDocument,
     Role,
 )
-from project_context.profiles import profile_manager
 from project_context.utils import COMMIT_TASK_MARKER, UI
+
+logger = logging.getLogger(__name__)
 
 
 class ChunkFactory:
@@ -263,7 +266,9 @@ class GoogleDriveManager:
                     break
             return items
         except HttpError as error:
-            print(f"Error al listar archivos en la carpeta '{folder_id}': {error}")
+            logger.error(
+                f"Error al listar archivos en la carpeta '{folder_id}': {error}"
+            )
             return []
 
     def find_item_by_name(self, name: str, parent_id: str = "root") -> Optional[dict]:
@@ -280,7 +285,7 @@ class GoogleDriveManager:
             items = response.get("files", [])
             return items[0] if items else None
         except HttpError as error:
-            print(f"Error al buscar el item '{name}': {error}")
+            logger.error(f"Error al buscar el item '{name}': {error}")
             return None
 
     def get_file_content(self, file_id: str) -> Optional[bytes]:
@@ -293,7 +298,12 @@ class GoogleDriveManager:
                 status, done = downloader.next_chunk()
             return file_stream.getvalue()
         except HttpError as error:
-            print(f"Error HTTP al descargar archivo '{file_id}': {error}")
+            if error.resp.status == 404:
+                logger.debug(
+                    f"El archivo con ID '{file_id}' no está disponible para descarga (404)."
+                )
+            else:
+                logger.error(f"Error HTTP al descargar archivo '{file_id}': {error}")
             return None
 
     def update_file_from_memory(
@@ -321,17 +331,24 @@ class GoogleDriveManager:
             content.encode("utf-8"), mime_type, metadata=file_metadata
         )
         if file:
-            print(f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")')
+            logger.debug(
+                f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")'
+            )
         return file
 
     def get_file_metadata(
         self, file_id: str, fields: str = "id, name, modifiedTime, md5Checksum"
     ) -> Optional[dict]:
-        """Obtiene metadatos de un archivo permitiendo personalizar los campos solicitados."""
+        """Obtiene metadatos de un archivo en Drive de forma segura."""
         try:
             return self.service.files().get(fileId=file_id, fields=fields).execute()
         except HttpError as error:
-            print(f"Error al obtener metadata de '{file_id}': {error}")
+            if error.resp.status == 404:
+                logger.debug(
+                    f"El archivo con ID '{file_id}' no existe en Google Drive (404 esperado)."
+                )
+            else:
+                logger.error(f"Error al obtener metadata de '{file_id}': {error}")
             return None
 
     def find_files_by_query(
@@ -346,7 +363,7 @@ class GoogleDriveManager:
             )
             return response.get("files", [])
         except HttpError as error:
-            print(f"Error al buscar archivos por consulta '{query}': {error}")
+            logger.debug(f"Error al buscar archivos por consulta '{query}': {error}")
             return []
 
     def delete_file(self, file_id: str) -> bool:
@@ -355,7 +372,7 @@ class GoogleDriveManager:
             self.service.files().delete(fileId=file_id).execute()
             return True
         except HttpError as error:
-            print(f"Error al eliminar archivo '{file_id}': {error}")
+            logger.error(f"Error al eliminar archivo '{file_id}': {error}")
             return False
 
     def _upload_to_drive(
@@ -414,20 +431,24 @@ class AIStudioDriveManager:
     def _find_ai_studio_folder(self) -> Optional[str]:
         folder = self.gdm.find_item_by_name(self.AI_STUDIO_FOLDER_NAME)
         if not folder:
-            print(f"La carpeta '{self.AI_STUDIO_FOLDER_NAME}' no fue encontrada.")
+            logger.debug(
+                f"La carpeta '{self.AI_STUDIO_FOLDER_NAME}' no fue encontrada."
+            )
             return None
         return folder.get("id")
 
     def get_chat_ia_studio(self, chat_id: str) -> Optional[ChatIAStudio]:
         content_bytes = self.gdm.get_file_content(chat_id)
         if not content_bytes:
-            print(f"No se pudo obtener el contenido del chat con ID '{chat_id}'.")
+            logger.debug(
+                f"No se pudo obtener el contenido del chat con ID '{chat_id}'."
+            )
             return None
         try:
             chat_content = json.loads(content_bytes.decode("utf-8"))
             return ChatIAStudio(**chat_content)
         except json.JSONDecodeError as e:
-            print(f"Error al decodificar el JSON del chat '{chat_id}': {e}")
+            logger.debug(f"Error al decodificar el JSON del chat '{chat_id}': {e}")
             return None
 
     def create_chat_file(
@@ -457,7 +478,7 @@ class AIStudioDriveManager:
             )
             return bool(result)
         except Exception as e:
-            print(f"Error actualizando chat: {e}")
+            logger.debug(f"Error actualizando chat: {e}")
             return False
 
     @contextmanager
@@ -488,7 +509,7 @@ class AIStudioDriveManager:
             with self.modify_chat(chat_id) as chat:
                 chunks = chat.chunkedPrompt.chunks
                 if not chunks:
-                    print("El chat ya está vacío.")
+                    logger.debug("El chat ya está vacío.")
                     return True
 
                 cut_idx = -1
@@ -511,18 +532,18 @@ class AIStudioDriveManager:
                         else:
                             cut_idx = doc_idx
                     else:
-                        print("Error: Estructura de contexto inválida.")
+                        logger.debug("Error: Estructura de contexto inválida.")
                         return False
 
                 original_count = len(chunks)
                 new_chunks = chunks[: cut_idx + 1]
 
                 if len(new_chunks) == original_count:
-                    print("El chat ya está limpio.")
+                    logger.debug("El chat ya está limpio.")
                     return True
 
                 chat.chunkedPrompt.chunks = new_chunks
-                print(
+                logger.debug(
                     f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
                 )
             return True

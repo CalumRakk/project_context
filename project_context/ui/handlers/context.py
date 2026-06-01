@@ -167,7 +167,6 @@ def cmd_context_ls(ctx: SessionContext, args: list[str]):
         console.print("  [bold red]Exclusiones aplicadas (Descartes):[/]")
         for exc in items.exclusions:
             console.print(f"    - {exc}")
-    print("")
 
 
 @registry.register("context:reset", require_chat=True)
