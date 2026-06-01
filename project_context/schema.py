@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
 
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field
@@ -267,13 +267,20 @@ class CliSessionPayload(BaseModel):
     profile_name: str
     profile_data: ProfileMetadata
     credentials: Optional[Credentials] = None
-    api: Optional["AIStudioDriveManager"] = None
+    api_raw: Optional[Any] = Field(default=None, alias="api", repr=False)
     state: Optional[LocalProjectState] = None
+
+    @property
+    def api(self) -> Optional["AIStudioDriveManager"]:
+        return cast(Optional["AIStudioDriveManager"], self.api_raw)
+
+    @api.setter
+    def api(self, value: Optional["AIStudioDriveManager"]) -> None:
+        self.api_raw = value
 
 
 def get_session_payload(ctx: Any) -> CliSessionPayload:
     """Retorna el payload de la sesión con tipado estático garantizado."""
-    from typing import cast
 
     if ctx.obj is None:
         raise ValueError(
