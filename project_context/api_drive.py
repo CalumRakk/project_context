@@ -313,13 +313,12 @@ class GoogleDriveManager:
     def update_file_from_memory(
         self, file_id: str, content: str, mime_type: str
     ) -> Optional[dict]:
-        with self._lock:
-            updated_file = self._upload_to_drive(
-                content.encode("utf-8"),
-                mime_type,
-                file_id=file_id,
-                fields="id, name, modifiedTime",
-            )
+        updated_file = self._upload_to_drive(
+            content.encode("utf-8"),
+            mime_type,
+            file_id=file_id,
+            fields="id, name, modifiedTime",
+        )
         if updated_file:
             UI.success("Archivo actualizado en Drive.")
         return updated_file
