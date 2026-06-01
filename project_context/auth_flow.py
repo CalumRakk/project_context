@@ -17,7 +17,11 @@ from project_context.exceptions import (
     SecretFileMissingError,
 )
 from project_context.profiles import profile_manager
-from project_context.schema import CliSessionPayload, ValidationRequirement
+from project_context.schema import (
+    CliSessionPayload,
+    ProfileMetadata,
+    ValidationRequirement,
+)
 from project_context.ui.ui import UI
 
 
@@ -57,7 +61,6 @@ class AuthFlowEvaluator:
                         "No hay ningún perfil de usuario activo configurado actualmente."
                     )
 
-        # Cargar datos del perfil resuelto
         profile_file = profile_manager.profiles_dir / f"{self.resolved_profile}.json"
         try:
             self.profile_data = json.loads(profile_file.read_text(encoding="utf-8"))
@@ -66,10 +69,10 @@ class AuthFlowEvaluator:
                 f"El archivo del perfil '{self.resolved_profile}' está dañado o corrupto: {e}"
             )
 
-        # Si el requerimiento es solo resolver el perfil, finalizamos aquí de manera segura
         if requirement == ValidationRequirement.PROFILE:
             return CliSessionPayload(
-                profile_name=self.resolved_profile, profile_data=self.profile_data
+                profile_name=self.resolved_profile,
+                profile_data=ProfileMetadata(**self.profile_data),
             )
 
         creds = self._load_cached_token()
@@ -79,7 +82,7 @@ class AuthFlowEvaluator:
                 self.credentials = creds
                 return CliSessionPayload(
                     profile_name=self.resolved_profile,
-                    profile_data=self.profile_data,
+                    profile_data=ProfileMetadata(**self.profile_data),
                     credentials=self.credentials,
                 )
 
@@ -114,13 +117,12 @@ class AuthFlowEvaluator:
         fetched_email = self._fetch_user_email(creds)
         self._verify_email_consistency(fetched_email)
 
-        # Guardar token autorizado para futuras sesiones
         self._save_authorized_token(fetched_email, creds)
         self.credentials = creds
 
         return CliSessionPayload(
             profile_name=self.resolved_profile,
-            profile_data=self.profile_data,
+            profile_data=ProfileMetadata(**self.profile_data),
             credentials=self.credentials,
         )
 
@@ -154,7 +156,6 @@ class AuthFlowEvaluator:
             try:
                 creds.refresh(Request())
 
-                # Actualizar el archivo de token en disco
                 email = self.profile_data.get("email")
                 secret_name = self.profile_data.get("associated_secret", "")
                 associated_secret_clean = (
@@ -243,15 +244,14 @@ def verify_and_populate_context(
     evaluator = AuthFlowEvaluator(requested_profile=profile_override)
 
     try:
-        # Ejecutar preflight del diagrama de flujo
         payload = evaluator.execute_preflight(requirement)
 
-        # Si requiere autenticación completa, inicializar las herramientas de Drive y guardarlas en el payload
         if requirement == ValidationRequirement.FULL_AUTH:
             from project_context.api_drive import (
                 AIStudioDriveManager,
                 GoogleDriveManager,
             )
+            from project_context.utils import load_project_context_state
 
             gdm = GoogleDriveManager(
                 secrets_file=evaluator.secrets_file,
@@ -260,7 +260,10 @@ def verify_and_populate_context(
             )
             payload.api = AIStudioDriveManager(gdm=gdm)
 
-        # Inyectar el payload validado en el contexto de Typer
+            # Cargamos el estado local del proyecto durante el preflight
+            project_path = Path.cwd()
+            payload.state = load_project_context_state(project_path)
+
         ctx.obj = payload
 
     except FreshInstallRequiredError:

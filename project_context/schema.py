@@ -1,29 +1,11 @@
-from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from project_context.api_drive import AIStudioDriveManager
-    from project_context.history import SnapshotManager
-
-
-@dataclass
-class SessionContext:
-    api: "AIStudioDriveManager"
-    state: dict
-    project_path: Path
-    monitor: "SnapshotManager"
-    session_media_root: Optional[Path] = None
-
-    def stop_monitor(self):
-        self.monitor.stop_monitoring()
-
-    def start_monitor(self):
-        if self.state.get("monitor_active"):
-            self.monitor.start_monitoring()
 
 
 class FileDrive(BaseModel):
@@ -184,7 +166,6 @@ class RunSettings(BaseModel):
             "models/gemini-flash-lite-latest",
         ],
     )
-    # TODO: los modelos "pequeños" de gemini-2* ahora son de pago.
     temperature: float = 1.0
     topP: float = 0.95
     topK: int = 64
@@ -216,20 +197,14 @@ class RunSettings(BaseModel):
         Evita que parámetros avanzados queden como 'ruido' al cambiar a modelos más simples.
         """
         model_lower = self.model.lower()
-
-        # Determinamos de manera general si el modelo soporta razonamiento avanzado (Thinking)
-        # por lo común, las variantes 'pro' de las series 2.5 y modelos específicos de razonamiento
         supports_thinking = "pro" in model_lower or "thinking" in model_lower
 
         if not supports_thinking:
-            # Al cambiar a un modelo estándar (como gemini-2.5-flash o gemini-3.5-flash),
-            # limpiamos los campos de control de pensamiento para no generar un esquema corrupto.
             self.thinkingBudget = None
             self.thinkingLevel = None
             self.enableAgentThinkingSummariesControl = None
             self.enableAgentCollaborativePlanningControl = None
 
-            # Ajuste de temperatura sugerida para modelos estándar rápidos
             if "flash" in model_lower:
                 self.temperature = 1.0
 
@@ -270,12 +245,18 @@ class LocalProjectState(BaseModel):
 
 
 class ValidationRequirement(Enum):
-    NONE = 0  # No requiere ninguna comprobación (ej. --help, --version)
-    SETUP = (
-        1  # Requiere estructura básica del sistema pero no perfiles (ej. secrets add)
-    )
-    PROFILE = 2  # Requiere que el perfil resuelto exista (ej. profile use / info)
-    FULL_AUTH = 3  # Requiere perfil resuelto, secreto físico y token válido u OAuth (ej. run, update, shell)
+    NONE = 0
+    SETUP = 1
+    PROFILE = 2
+    FULL_AUTH = 3
+
+
+class ProfileMetadata(BaseModel):
+    """Metadatos de perfil verificados por Pydantic."""
+
+    email: Optional[str] = None
+    associated_secret: Optional[str] = None
+    created_at: Optional[float] = None
 
 
 class CliSessionPayload(BaseModel):
@@ -284,6 +265,18 @@ class CliSessionPayload(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     profile_name: str
-    profile_data: dict
-    credentials: Optional[Any] = None  # Almacena google.oauth2.credentials.Credentials
-    api: Optional[Any] = None  # Almacena AIStudioDriveManager autenticado
+    profile_data: ProfileMetadata
+    credentials: Optional[Credentials] = None
+    api: Optional["AIStudioDriveManager"] = None
+    state: Optional[LocalProjectState] = None
+
+
+def get_session_payload(ctx: Any) -> CliSessionPayload:
+    """Retorna el payload de la sesión con tipado estático garantizado."""
+    from typing import cast
+
+    if ctx.obj is None:
+        raise ValueError(
+            "El contexto de la sesión no ha sido inicializado o es inválido."
+        )
+    return cast(CliSessionPayload, ctx.obj)

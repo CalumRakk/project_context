@@ -5,13 +5,13 @@ import typer
 from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
+from project_context.api_drive import AIStudioDriveManager
 from project_context.auth_flow import verify_and_populate_context
-from project_context.schema import ValidationRequirement
+from project_context.schema import ValidationRequirement, get_session_payload
 from project_context.ui.interactive import interactive_session
 from project_context.utils import (
     UI,
     get_local_context_dir,
-    load_project_context_state,
 )
 
 
@@ -53,10 +53,9 @@ def shell_command(
                 profile_override=use_profile,
             )
 
-            payload = ctx.obj
+            payload = get_session_payload(ctx)
             api = payload.api
-
-            state = load_project_context_state(project_path)
+            state = payload.state
 
             if state is None or not state.chat_id:
                 typer.secho(
@@ -66,6 +65,9 @@ def shell_command(
                 )
                 raise typer.Exit(code=1)
 
+            assert isinstance(api, AIStudioDriveManager), (
+                "El API no ha sido inicializado correctamente."
+            )
             interactive_session(api, state, project_path)
 
     except Timeout:

@@ -5,13 +5,13 @@ import typer
 from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
+from project_context.api_drive import AIStudioDriveManager
 from project_context.auth_flow import verify_and_populate_context
 from project_context.ops import initialize_project_context, update_context
-from project_context.schema import ValidationRequirement
+from project_context.schema import ValidationRequirement, get_session_payload
 from project_context.utils import (
     UI,
     get_local_context_dir,
-    load_project_context_state,
     save_project_context_state,
 )
 
@@ -57,11 +57,13 @@ def update_command(
                 profile_override=use_profile,
             )
 
-            payload = ctx.obj
+            payload = get_session_payload(ctx)
             api = payload.api
+            state = payload.state
 
-            state = load_project_context_state(project_path)
-
+            assert isinstance(api, AIStudioDriveManager), (
+                "El API no ha sido inicializado correctamente."
+            )
             if state is None:
                 state = initialize_project_context(api, project_path)
             else:
