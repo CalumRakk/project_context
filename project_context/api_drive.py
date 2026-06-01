@@ -14,9 +14,10 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.exceptions import (
-    AssociatedSecretMissingError,
     AuthenticationFailedError,
     FreshInstallRequiredError,
+    SecretAssociationMissingError,
+    SecretFileMissingError,
 )
 from project_context.profiles import profile_manager
 from project_context.schema import (
@@ -87,24 +88,20 @@ class GoogleDriveManager:
         Orquesta el flujo de autenticación de forma declarativa.
         Sigue de manera secuencial los rombos de decisión del diagrama de flujo.
         """
-        # ¿Existe token de sesión?
+
         creds = self._load_cached_credentials()
 
-        # ¿Se puede usar o refrescar?
         if creds and self._validate_and_refresh_credentials(creds):
             UI.success("Conexión exitosa utilizando credenciales existentes.")
             return creds
 
-        # ¿Tiene secreto asociado? e ¿Existe el secreto?
         self._verify_secret_files_readiness()
-
-        # [Iniciar flujo OAuth]
         creds = self._run_interactive_oauth_flow()
         return creds
 
     def _load_cached_credentials(self) -> Optional[Credentials]:
-        """Intenta leer el token local correspondiente al perfil activo."""
-        profile_data = profile_manager.get_active_profile_data()
+        """Intenta leer el token local correspondiente al perfil en uso."""
+        profile_data = profile_manager.load_profile_data(self.profile_name)
         registered_email = profile_data.get("email")
         secret_name = self.client_secrets_file.name
 
@@ -151,13 +148,14 @@ class GoogleDriveManager:
     def _verify_secret_files_readiness(self) -> None:
         """Garantiza la presencia del archivo físico de secretos necesario para OAuth."""
         if not self.client_secrets_file.name:
-            raise AssociatedSecretMissingError(
-                f"El perfil '{self.profile_name}' no tiene un secreto asociado."
+            raise SecretAssociationMissingError(
+                f"El perfil '{self.profile_name}' no tiene un secreto asociado en sus metadatos."
             )
 
         if not self.client_secrets_file.exists():
-            raise AssociatedSecretMissingError(
-                f"No se encontró el archivo de credenciales '{self.client_secrets_file.name}'.\n"
+            raise SecretFileMissingError(
+                f"No se encontró el archivo de credenciales '{self.client_secrets_file.name}' "
+                f"asignado al perfil '{self.profile_name}'.\n"
                 f"Ruta esperada: {self.client_secrets_file}"
             )
 
@@ -174,7 +172,6 @@ class GoogleDriveManager:
                 f"El flujo de autenticación OAuth interactivo fue cancelado o falló: {e}"
             )
 
-        # Validación del correo obtenido (¿Funcionó?)
         fetched_email = self._fetch_user_email(creds)
         self._verify_email_consistency(fetched_email)
         self._save_authorized_token(fetched_email, creds)

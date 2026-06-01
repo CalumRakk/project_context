@@ -149,4 +149,3 @@ class CommandRegistry:
 
 
 registry = CommandRegistry()
-registry = CommandRegistry()
