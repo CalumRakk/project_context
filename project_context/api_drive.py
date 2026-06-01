@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, List, Optional, cast
@@ -58,6 +59,7 @@ class GoogleDriveManager:
     def __init__(
         self, secrets_file: Optional[Path] = None, profile_name: Optional[str] = None
     ):
+        self._lock = threading.Lock()
         if secrets_file:
             self.client_secrets_file = secrets_file
             self.profile_name = profile_name or "temp_validation"
@@ -250,16 +252,17 @@ class GoogleDriveManager:
         page_token = None
         try:
             while True:
-                response = (
-                    self.service.files()
-                    .list(
-                        q=f"'{folder_id}' in parents and trashed = false",
-                        spaces="drive",
-                        fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
-                        pageToken=page_token,
+                with self._lock:
+                    response = (
+                        self.service.files()
+                        .list(
+                            q=f"'{folder_id}' in parents and trashed = false",
+                            spaces="drive",
+                            fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                            pageToken=page_token,
+                        )
+                        .execute()
                     )
-                    .execute()
-                )
                 items.extend(response.get("files", []))
                 page_token = response.get("nextPageToken")
                 if not page_token:
@@ -290,13 +293,14 @@ class GoogleDriveManager:
 
     def get_file_content(self, file_id: str) -> Optional[bytes]:
         try:
-            request = self.service.files().get_media(fileId=file_id)
-            file_stream = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_stream, request)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-            return file_stream.getvalue()
+            with self._lock:
+                request = self.service.files().get_media(fileId=file_id)
+                file_stream = io.BytesIO()
+                downloader = MediaIoBaseDownload(file_stream, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                return file_stream.getvalue()
         except HttpError as error:
             if error.resp.status == 404:
                 logger.debug(
@@ -309,12 +313,13 @@ class GoogleDriveManager:
     def update_file_from_memory(
         self, file_id: str, content: str, mime_type: str
     ) -> Optional[dict]:
-        updated_file = self._upload_to_drive(
-            content.encode("utf-8"),
-            mime_type,
-            file_id=file_id,
-            fields="id, name, modifiedTime",
-        )
+        with self._lock:
+            updated_file = self._upload_to_drive(
+                content.encode("utf-8"),
+                mime_type,
+                file_id=file_id,
+                fields="id, name, modifiedTime",
+            )
         if updated_file:
             UI.success("Archivo actualizado en Drive.")
         return updated_file
@@ -389,18 +394,19 @@ class GoogleDriveManager:
             media = MediaIoBaseUpload(
                 content_stream, mimetype=mime_type, resumable=True
             )
-            if file_id:
-                return (
-                    self.service.files()
-                    .update(fileId=file_id, media_body=media, fields=fields)
-                    .execute()
-                )
-            else:
-                return (
-                    self.service.files()
-                    .create(body=metadata, media_body=media, fields=fields)
-                    .execute()
-                )
+            with self._lock:
+                if file_id:
+                    return (
+                        self.service.files()
+                        .update(fileId=file_id, media_body=media, fields=fields)
+                        .execute()
+                    )
+                else:
+                    return (
+                        self.service.files()
+                        .create(body=metadata, media_body=media, fields=fields)
+                        .execute()
+                    )
         except HttpError as error:
             UI.error(f"Error en operación de subida/actualización de Drive: {error}")
             return None
