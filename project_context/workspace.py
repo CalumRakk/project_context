@@ -72,7 +72,7 @@ class ProjectContext:
         output.write_text(context, encoding="utf-8")
         return output
 
-    def save_project_context_state(self, state_data: ProjectState):
+    def save_project_context_state(self, state_data: "ProjectState"):
         """Guarda el estado del proyecto serializado desde el modelo Pydantic."""
         content = state_data.model_dump_json(indent=2, by_alias=True)
         self._state_path.write_text(content, encoding="utf-8")
@@ -97,6 +97,7 @@ class ProjectContext:
 
     def save_stash(self, filename: str, content: str):
         """Almacena una copia de seguridad en memoria en el subdirectorio local."""
+        # TODO: puede ser confuso el termino "content" como str, porque depende utilizar chat_data.model_dump_json() antes.
         self._get_stash_path(filename).write_text(content, encoding="utf-8")
 
     def load_stash(self, filename: str) -> Optional[str]:

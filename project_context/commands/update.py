@@ -43,9 +43,9 @@ def update_command(
         )
 
         if state is None:
-            state = initialize_project_context(api, project_path)
+            state = initialize_project_context(api, workspace)
         else:
-            state = update_context(api, project_path, state)
+            state = update_context(api, workspace, state)
 
         workspace.save_project_context_state(state)
         UI.success("Sincronización de contexto completada con éxito.")

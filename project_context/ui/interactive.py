@@ -63,7 +63,6 @@ def create_interactive_completer(
 def interactive_session(
     api: AIStudioDriveManager,
     state: ProjectState,
-    project_path: Path,
     workspace: ProjectContext,
 ):
     from project_context.ui.ui import UI
@@ -73,9 +72,9 @@ def interactive_session(
     ctx = SessionContext(
         api=api,
         state=state,
-        project_path=project_path,
+        project_path=workspace.project_path,
         workspace=workspace,
-        monitor=SnapshotManager(api, project_path, state),
+        monitor=SnapshotManager(api, workspace.project_path, state),
     )
 
     def handle_exit(sig, frame):
@@ -92,7 +91,7 @@ def interactive_session(
     UI.info(f"[Chat] Iniciando sesión con chat_id {state.chat_id}...")
 
     commands_list = list(registry.commands.keys())
-    completer = create_interactive_completer(project_path, commands_list)
+    completer = create_interactive_completer(workspace.project_path, commands_list)
 
     session = PromptSession(completer=completer, history=InMemoryHistory())
     consecutive_errors = 0

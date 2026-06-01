@@ -7,12 +7,9 @@ from project_context.schema import ChunksDocument, ChunksText
 from project_context.ui.registry import SessionContext, registry
 from project_context.utils import (
     UI,
-    clear_stash,
     console,
     get_context_tree,
     human_to_int,
-    load_stash,
-    save_stash,
 )
 
 
@@ -95,11 +92,11 @@ def cmd_update(ctx: SessionContext, args: list[str]):
     if ctx.state.story_mode:
         UI.info("Modo historia activo. Procesando actualización...")
         new_state = apply_story_update(
-            ctx.api, ctx.project_path, ctx.state, media_root_hint=ctx.session_media_root
+            ctx.api, ctx.workspace, ctx.state, media_root_hint=ctx.session_media_root
         )
         ctx.update_state(new_state)
     else:
-        new_state = update_context(ctx.api, ctx.project_path, ctx.state)
+        new_state = update_context(ctx.api, ctx.workspace, ctx.state)
         ctx.update_state(new_state)
 
         has_focus = bool(ctx.context_items.files or ctx.context_items.folders)
@@ -226,7 +223,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
             "No se pudo descargar el chat desde Drive para realizar el respaldo."
         )
 
-    save_stash(ctx.project_path, "vanish_stash.json", chat_data.model_dump_json())
+    ctx.workspace.save_stash("vanish_stash.json", chat_data.model_dump_json())
 
     UI.info("Estableciendo pantalla limpia en Google Drive...")
     vanish_chunks = [ChunksText(text="✨ vanish off ✨", role="user")]
@@ -243,7 +240,7 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
             "Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia."
         )
     else:
-        clear_stash(ctx.project_path, "vanish_stash.json")
+        ctx.workspace.clear_stash("vanish_stash.json")
         raise ChatSessionError(
             "Ocurrió un problema al actualizar el chat en Drive para activar vanish."
         )
@@ -256,7 +253,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
         UI.warn("El modo vanish no está activo en este momento.")
         return
 
-    stashed_json = load_stash(ctx.project_path, "vanish_stash.json")
+    stashed_json = ctx.workspace.load_stash("vanish_stash.json")
     if not stashed_json:
         ctx.state.vanished = False
         ctx.update_state(ctx.state)
@@ -270,7 +267,7 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
     )
 
     if success:
-        clear_stash(ctx.project_path, "vanish_stash.json")
+        ctx.workspace.clear_stash("vanish_stash.json")
         ctx.state.vanished = False
         ctx.update_state(ctx.state)
         UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
