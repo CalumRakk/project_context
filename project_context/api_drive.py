@@ -57,12 +57,18 @@ class GoogleDriveManager:
     SCOPES = ["https://www.googleapis.com/auth/drive"]
 
     def __init__(
-        self, secrets_file: Optional[Path] = None, profile_name: Optional[str] = None
+        self,
+        secrets_file: Optional[Path] = None,
+        profile_name: Optional[str] = None,
+        credentials: Optional[Credentials] = None,
     ):
         self._lock = threading.Lock()
-        if secrets_file:
+        self.profile_name = profile_name or "temp_validation"
+        if credentials:
+            self.credentials = credentials
+            self.client_secrets_file = secrets_file or Path()
+        elif secrets_file:
             self.client_secrets_file = secrets_file
-            self.profile_name = profile_name or "temp_validation"
             self.credentials = self._authenticate_explicit()
         else:
             self.profile_name = profile_manager.get_active_profile_name()
@@ -425,8 +431,8 @@ class AIStudioDriveManager:
     AI_STUDIO_FOLDER_NAME = "Google AI Studio"
     MIME_PROMPT = "application/vnd.google-makersuite.prompt"
 
-    def __init__(self):
-        self.gdm = GoogleDriveManager()
+    def __init__(self, gdm: Optional[GoogleDriveManager] = None):
+        self.gdm = gdm or GoogleDriveManager()
         self.ai_studio_folder = cast(str, self._find_ai_studio_folder())
         if not self.ai_studio_folder:
             raise FileNotFoundError(

@@ -35,13 +35,25 @@ class InvalidCommandArgumentError(ProjectContextError):
 
 
 class ProfileConfigNotFoundError(ProjectContextError):
-    """Se lanza cuando el perfil de usuario especificado no existe."""
+    """Se lanza cuando el perfil de usuario especificado o activo no existe."""
 
     pass
 
 
 class AssociatedSecretMissingError(ProjectContextError):
-    """Se lanza cuando falta el archivo físico de secretos necesario para re-autenticar la sesión."""
+    """Se lanza de forma genérica si falta la asociación del secreto (retrocompatibilidad)."""
+
+    pass
+
+
+class SecretAssociationMissingError(ProjectContextError):
+    """Se lanza cuando un perfil resuelto no tiene un secreto asociado en sus metadatos (Decisión 7)."""
+
+    pass
+
+
+class SecretFileMissingError(ProjectContextError):
+    """Se lanza cuando el archivo de secretos físico (.json) no se encuentra en el disco (Decisión 8)."""
 
     pass
 
@@ -53,12 +65,12 @@ class ProfileConfigurationCorruptError(ProjectContextError):
 
 
 class FreshInstallRequiredError(ProjectContextError):
-    """Se lanza cuando el entorno carece por completo de perfiles o credenciales de Drive instaladas."""
+    """Se lanza cuando el entorno carece por completo de perfiles o credenciales de Drive (Decisión 4)."""
 
     pass
 
 
 class AuthenticationFailedError(ProjectContextError):
-    """Se lanza cuando el flujo de autenticación interactivo (OAuth) falla o es cancelado."""
+    """Se lanza cuando el flujo de autenticación interactivo (OAuth) falla o es cancelado (Decisión 9)."""
 
     pass

@@ -5,10 +5,9 @@ import typer
 from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
-from project_context.api_drive import AIStudioDriveManager
-from project_context.auth_flow import safe_verify_profile
+from project_context.auth_flow import verify_and_populate_context
 from project_context.ops import initialize_project_context, update_context
-from project_context.profiles import profile_manager
+from project_context.schema import ValidationRequirement
 from project_context.utils import (
     UI,
     get_local_context_dir,
@@ -18,6 +17,7 @@ from project_context.utils import (
 
 
 def update_command(
+    ctx: typer.Context,
     use_profile: Annotated[
         Optional[str],
         typer.Option(
@@ -51,19 +51,14 @@ def update_command(
 
     try:
         with lock:
-            target_profile = use_profile or profile_manager.get_active_profile_name()
+            verify_and_populate_context(
+                ctx,
+                requirement=ValidationRequirement.FULL_AUTH,
+                profile_override=use_profile,
+            )
 
-            safe_verify_profile(target_profile)
-
-            if use_profile:
-                profile_manager.set_temporary_profile(use_profile)
-                UI.info(f"Usando perfil temporal: [bold]{use_profile}[/]")
-
-            try:
-                api = AIStudioDriveManager()
-            except Exception as e:
-                UI.error(f"Error inicializando Drive: {e}")
-                raise typer.Exit(code=1)
+            payload = ctx.obj
+            api = payload.api
 
             state = load_project_context_state(project_path)
 

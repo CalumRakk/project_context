@@ -1,6 +1,7 @@
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -266,3 +267,23 @@ class LocalProjectState(BaseModel):
     story_anchor: Optional[str] = None
     commit_mode: bool = False
     vanished: bool = False
+
+
+class ValidationRequirement(Enum):
+    NONE = 0  # No requiere ninguna comprobación (ej. --help, --version)
+    SETUP = (
+        1  # Requiere estructura básica del sistema pero no perfiles (ej. secrets add)
+    )
+    PROFILE = 2  # Requiere que el perfil resuelto exista (ej. profile use / info)
+    FULL_AUTH = 3  # Requiere perfil resuelto, secreto físico y token válido u OAuth (ej. run, update, shell)
+
+
+class CliSessionPayload(BaseModel):
+    """Contenedor de estado verificado inyectado en el contexto de Typer (ctx.obj)."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    profile_name: str
+    profile_data: dict
+    credentials: Optional[Any] = None  # Almacena google.oauth2.credentials.Credentials
+    api: Optional[Any] = None  # Almacena AIStudioDriveManager autenticado

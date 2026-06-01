@@ -1,142 +1,268 @@
 import json
-from typing import Optional
+from pathlib import Path
+from typing import Optional, cast
 
 import typer
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 from project_context.exceptions import (
-    AssociatedSecretMissingError,
+    AuthenticationFailedError,
     FreshInstallRequiredError,
     ProfileConfigNotFoundError,
     ProfileConfigurationCorruptError,
+    SecretAssociationMissingError,
+    SecretFileMissingError,
 )
 from project_context.profiles import profile_manager
+from project_context.schema import CliSessionPayload, ValidationRequirement
 from project_context.ui.ui import UI
 
 
-class AuthContext:
-    """Mantiene el estado de la validación actual del flujo de autenticación."""
+class AuthFlowEvaluator:
+    """Implementación limpia y secuencial del diagrama de flujo de autenticación."""
 
     def __init__(self, requested_profile: Optional[str] = None):
         self.requested_profile: Optional[str] = requested_profile
         self.resolved_profile: Optional[str] = None
         self.profile_data: dict = {}
         self.credentials: Optional[Credentials] = None
-        self.has_usable_token: bool = False
+        self.secrets_file: Optional[Path] = None
 
-
-class AuthFlowEvaluator:
-    """Implementación limpia de la secuencia de comprobaciones de credenciales."""
-
-    def __init__(self, context: AuthContext):
-        self.ctx = context
-        self.pm = profile_manager
-
-    def evaluate_static_preflight(self) -> None:
-        """
-        Ejecuta secuencialmente las validaciones estáticas del diagrama.
-        Lanza excepciones específicas del dominio ante fallos de configuración.
-        """
-        self._resolve_profile_step()
-        self._evaluate_token_step()
-
-        # Si el token ya está autenticado y listo, finalizamos con éxito
-        if self.ctx.has_usable_token:
-            return
-
-        self._verify_secret_association_step()
-        self._verify_secret_file_exists_step()
-
-    def _resolve_profile_step(self):
-        """Rombos: ¿Se especificó perfil? -> ¿Existe perfil? -> ¿Hay perfil activo?"""
-        available_profiles = self.pm.list_profiles()
-
-        if self.ctx.requested_profile:
-            if self.ctx.requested_profile not in available_profiles:
+    def execute_preflight(
+        self, requirement: ValidationRequirement
+    ) -> CliSessionPayload:
+        """Sigue de manera estricta los rombos de decisión del diagrama de flujo."""
+        if self.requested_profile:
+            available_profiles = profile_manager.list_profiles()
+            if self.requested_profile not in available_profiles:
                 raise ProfileConfigNotFoundError(
-                    f"El perfil de usuario '{self.ctx.requested_profile}' no existe en este equipo."
+                    f"El perfil de usuario '{self.requested_profile}' no existe en este equipo."
                 )
-            self.ctx.resolved_profile = self.ctx.requested_profile
+            self.resolved_profile = self.requested_profile
         else:
-            active_profile = self.pm.get_active_profile_name()
-            if not active_profile:
-                available_secrets = list(self.pm.secrets_dir.glob("*.json"))
-                if not available_profiles and not available_secrets:
+            active_profile = profile_manager.get_active_profile_name()
+            if active_profile:
+                self.resolved_profile = active_profile
+            else:
+                available_secrets = list(profile_manager.secrets_dir.glob("*.json"))
+                if not available_secrets:
                     raise FreshInstallRequiredError(
-                        "No se han detectado perfiles ni credenciales de Google Drive configuradas."
+                        "No se han detectado perfiles ni credenciales de Google Drive en este sistema."
                     )
-                raise ProfileConfigNotFoundError(
-                    "No hay ningún perfil de usuario activo configurado actualmente."
-                )
-            self.ctx.resolved_profile = active_profile
+                else:
+                    raise ProfileConfigNotFoundError(
+                        "No hay ningún perfil de usuario activo configurado actualmente."
+                    )
 
-        # Cargar los datos del perfil validado
-        profile_file = self.pm.profiles_dir / f"{self.ctx.resolved_profile}.json"
+        # Cargar datos del perfil resuelto
+        profile_file = profile_manager.profiles_dir / f"{self.resolved_profile}.json"
         try:
-            self.ctx.profile_data = json.loads(profile_file.read_text(encoding="utf-8"))
+            self.profile_data = json.loads(profile_file.read_text(encoding="utf-8"))
         except Exception as e:
             raise ProfileConfigurationCorruptError(
-                f"El archivo del perfil '{self.ctx.resolved_profile}' está dañado o corrupto: {e}"
+                f"El archivo del perfil '{self.resolved_profile}' está dañado o corrupto: {e}"
             )
 
-    def _evaluate_token_step(self):
-        """Rombos: ¿Existe token de sesión? -> ¿Se puede usar o refrescar?"""
-        email = self.ctx.profile_data.get("email")
-        secret_name = self.ctx.profile_data.get("associated_secret")
+        # Si el requerimiento es solo resolver el perfil, finalizamos aquí de manera segura
+        if requirement == ValidationRequirement.PROFILE:
+            return CliSessionPayload(
+                profile_name=self.resolved_profile, profile_data=self.profile_data
+            )
 
+        creds = self._load_cached_token()
+
+        if creds:
+            if self._validate_and_refresh_token(creds):
+                self.credentials = creds
+                return CliSessionPayload(
+                    profile_name=self.resolved_profile,
+                    profile_data=self.profile_data,
+                    credentials=self.credentials,
+                )
+
+        secret_name = self.profile_data.get("associated_secret")
+        if not secret_name:
+            raise SecretAssociationMissingError(
+                f"El perfil '{self.resolved_profile}' requiere iniciar sesión, "
+                f"pero no tiene un archivo de secretos asociado en sus metadatos."
+            )
+
+        associated_secret_clean = (
+            secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
+        )
+        self.secrets_file = profile_manager.secrets_dir / associated_secret_clean
+
+        if not self.secrets_file.exists():
+            raise SecretFileMissingError(
+                f"El secreto asociado '{associated_secret_clean}' no se encuentra físicamente en el disco."
+            )
+
+        UI.info("Iniciando flujo de autenticación interactivo en el navegador...")
+        try:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(self.secrets_file), ["https://www.googleapis.com/auth/drive"]
+            )
+            creds = cast(Credentials, flow.run_local_server(port=0))
+        except Exception as e:
+            raise AuthenticationFailedError(
+                f"El flujo de autenticación OAuth interactivo fue cancelado o falló: {e}"
+            )
+
+        fetched_email = self._fetch_user_email(creds)
+        self._verify_email_consistency(fetched_email)
+
+        # Guardar token autorizado para futuras sesiones
+        self._save_authorized_token(fetched_email, creds)
+        self.credentials = creds
+
+        return CliSessionPayload(
+            profile_name=self.resolved_profile,
+            profile_data=self.profile_data,
+            credentials=self.credentials,
+        )
+
+    def _load_cached_token(self) -> Optional[Credentials]:
+        email = self.profile_data.get("email")
+        secret_name = self.profile_data.get("associated_secret")
         if not email or not secret_name:
-            self.ctx.has_usable_token = False
-            return
+            return None
 
         associated_secret_clean = (
             secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
         )
         token_name = f"{email}__{associated_secret_clean}"
-        token_path = self.pm.tokens_dir / token_name
+        token_path = profile_manager.tokens_dir / token_name
 
-        if token_path.exists():
+        if not token_path.exists():
+            return None
+
+        try:
+            return Credentials.from_authorized_user_file(
+                str(token_path), ["https://www.googleapis.com/auth/drive"]
+            )
+        except Exception:
+            return None
+
+    def _validate_and_refresh_token(self, creds: Credentials) -> bool:
+        if creds.valid:
+            return True
+
+        if creds.expired and creds.refresh_token:
             try:
-                creds = Credentials.from_authorized_user_file(str(token_path))
-                if creds.valid or (creds.expired and creds.refresh_token):
-                    self.ctx.credentials = creds
-                    self.ctx.has_usable_token = True
-            except Exception:
-                self.ctx.has_usable_token = False
+                creds.refresh(Request())
 
-    def _verify_secret_association_step(self):
-        """Rombo: ¿Tiene secreto asociado?"""
-        secret_name = self.ctx.profile_data.get("associated_secret")
-        if not secret_name:
-            raise AssociatedSecretMissingError(
-                f"El perfil '{self.ctx.resolved_profile}' requiere re-autenticarse, "
-                f"pero no tiene un archivo de secretos asociado."
+                # Actualizar el archivo de token en disco
+                email = self.profile_data.get("email")
+                secret_name = self.profile_data.get("associated_secret", "")
+                associated_secret_clean = (
+                    secret_name
+                    if secret_name.endswith(".json")
+                    else f"{secret_name}.json"
+                )
+
+                token_name = f"{email}__{associated_secret_clean}"
+                token_path = profile_manager.tokens_dir / token_name
+                token_path.write_text(creds.to_json(), encoding="utf-8")
+
+                UI.info("Token de acceso renovado automáticamente de forma segura.")
+                return True
+            except Exception as e:
+                UI.warn(f"No se pudo refrescar el token de forma automática: {e}")
+
+        return False
+
+    def _fetch_user_email(self, creds: Credentials) -> str:
+        try:
+            temp_service = build("drive", "v3", credentials=creds)
+            about_info = temp_service.about().get(fields="user(emailAddress)").execute()
+            email = about_info.get("user", {}).get("emailAddress")
+            if not email:
+                raise ValueError(
+                    "La respuesta de Google API no contiene una dirección de correo válida."
+                )
+            return email
+        except Exception as e:
+            raise AuthenticationFailedError(
+                f"Validación de sesión de usuario fallida: {e}"
             )
 
-    def _verify_secret_file_exists_step(self):
-        """Rombo: ¿Existe el secreto?"""
-        secret_name = self.ctx.profile_data.get("associated_secret", "")
+    def _verify_email_consistency(self, fetched_email: str) -> None:
+        registered_email = self.profile_data.get("email")
+
+        if registered_email and fetched_email.lower() != registered_email.lower():
+            raise ValueError(
+                f"Conflicto de seguridad: La cuenta de Google autenticada ({fetched_email}) "
+                f"no coincide con el correo asignado a este perfil ({registered_email}).\n"
+                f"Por favor, cambia de perfil o vuelve a configurar las credenciales."
+            )
+
+        if not registered_email:
+            self.profile_data["email"] = fetched_email
+            assert self.resolved_profile is not None, (
+                "El perfil resuelto no puede ser None en este punto del flujo."
+            )
+            profile_manager.save_profile_data(self.resolved_profile, self.profile_data)
+            UI.info(
+                f"Correo electrónico [bold]{fetched_email}[/] asociado al perfil '{self.resolved_profile}'."
+            )
+
+    def _save_authorized_token(self, email: str, creds: Credentials) -> None:
+        secret_name = self.profile_data.get("associated_secret", "")
         associated_secret_clean = (
             secret_name if secret_name.endswith(".json") else f"{secret_name}.json"
         )
-        associated_secret_path = self.pm.secrets_dir / associated_secret_clean
+        token_name = f"{email}__{associated_secret_clean}"
+        token_path = profile_manager.tokens_dir / token_name
 
-        if not associated_secret_path.exists():
-            raise AssociatedSecretMissingError(
-                f"El perfil '{self.ctx.resolved_profile}' requiere re-autenticarse, pero su secreto asociado "
-                f"'{associated_secret_clean}' no se encuentra físicamente en el disco."
+        try:
+            token_path.write_text(creds.to_json(), encoding="utf-8")
+            UI.success(
+                "Token de acceso guardado de forma segura para futuras sesiones."
+            )
+        except Exception as e:
+            UI.error(
+                f"Fallo al registrar el token de sesión en el almacenamiento local: {e}"
             )
 
 
-def safe_verify_profile(profile_name: Optional[str] = None) -> None:
+def verify_and_populate_context(
+    ctx: typer.Context,
+    requirement: ValidationRequirement,
+    profile_override: Optional[str] = None,
+) -> None:
     """
-    Envoltura interactiva para capturar los fallos del flujo y asitir al usuario.
-    Centraliza el UX de la interfaz CLI.
+    Asistente de preflight para el contexto de Typer.
+    Analiza el requerimiento, ejecuta el flujo y asiste visualmente ante errores de seguridad.
     """
-    ctx = AuthContext(profile_name)
-    evaluator = AuthFlowEvaluator(ctx)
+    if requirement == ValidationRequirement.NONE:
+        return
+
+    evaluator = AuthFlowEvaluator(requested_profile=profile_override)
 
     try:
-        evaluator.evaluate_static_preflight()
+        # Ejecutar preflight del diagrama de flujo
+        payload = evaluator.execute_preflight(requirement)
+
+        # Si requiere autenticación completa, inicializar las herramientas de Drive y guardarlas en el payload
+        if requirement == ValidationRequirement.FULL_AUTH:
+            from project_context.api_drive import (
+                AIStudioDriveManager,
+                GoogleDriveManager,
+            )
+
+            gdm = GoogleDriveManager(
+                secrets_file=evaluator.secrets_file,
+                profile_name=payload.profile_name,
+                credentials=payload.credentials,
+            )
+            payload.api = AIStudioDriveManager(gdm=gdm)
+
+        # Inyectar el payload validado en el contexto de Typer
+        ctx.obj = payload
+
     except FreshInstallRequiredError:
         UI.error(
             "No se ha detectado ninguna credencial de Google Drive en este equipo.",
@@ -158,7 +284,7 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
 
     except ProfileConfigNotFoundError as e:
         available_profiles = profile_manager.list_profiles()
-        if not profile_name:
+        if not profile_override:
             UI.error(str(e), spacing="top")
             if available_profiles:
                 UI.educational_tip(
@@ -182,7 +308,7 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
                 )
         else:
             UI.error(
-                f"ERROR: El perfil especificado '{profile_name}' no existe.",
+                f"ERROR: El perfil especificado '{profile_override}' no existe.",
                 spacing="top",
             )
             if available_profiles:
@@ -199,27 +325,42 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
                 UI.educational_tip(
                     title="Crea el perfil especificado",
                     message=(
-                        f"No hay perfiles registrados. Si deseas crear el perfil '{profile_name}' "
+                        f"No hay perfiles registrados. Si deseas crear el perfil '{profile_override}' "
                         "y asociarlo a tus credenciales, ejecuta:"
                     ),
-                    commands=[f"project_context profile add {profile_name}"],
+                    commands=[f"project_context profile add {profile_override}"],
                     spacing="bottom",
                 )
         raise typer.Exit(code=1)
 
-    except AssociatedSecretMissingError as e:
-        resolved_profile = ctx.resolved_profile or "default"
-        profile_data = profile_manager.load_profile_data(resolved_profile)
-        secret_name = profile_data.get("associated_secret", f"{resolved_profile}.json")
+    except SecretAssociationMissingError as e:
+        resolved_profile = evaluator.resolved_profile or "default"
+        UI.error(str(e), spacing="top")
+        UI.educational_tip(
+            title="Vincular Secreto Requerido",
+            message=(
+                f"La sesión para el perfil '{resolved_profile}' requiere iniciar el flujo OAuth, "
+                f"pero no tiene asignado un secreto de Google Cloud Console en el sistema."
+            ),
+            commands=["project_context profile set-secrets /ruta/a/tu/archivo.json"],
+            spacing="bottom",
+        )
+        raise typer.Exit(code=1)
+
+    except SecretFileMissingError as e:
+        resolved_profile = evaluator.resolved_profile or "default"
+        secret_name = evaluator.profile_data.get(
+            "associated_secret", f"{resolved_profile}.json"
+        )
         if not secret_name.endswith(".json"):
             secret_name += ".json"
 
         UI.error(str(e), spacing="top")
         UI.educational_tip(
-            title="Vincular Secreto Requerido",
+            title="Archivo de Secreto Faltante",
             message=(
-                f"La sesión para el perfil '{resolved_profile}' requiere iniciar el flujo OAuth en el navegador, "
-                f"pero se necesita el archivo de secretos físicos '{secret_name}' en el banco global."
+                f"El perfil '{resolved_profile}' tiene asignado el secreto '{secret_name}', "
+                f"pero el archivo no se encuentra físicamente en la carpeta de secretos."
             ),
             commands=[
                 f"project_context secrets add /ruta/a/tu/archivo.json --name {secret_name.replace('.json', '')}"
@@ -230,15 +371,15 @@ def safe_verify_profile(profile_name: Optional[str] = None) -> None:
 
     except ProfileConfigurationCorruptError as e:
         UI.error(str(e), spacing="top")
-        if profile_name:
+        if profile_override:
             UI.educational_tip(
                 title="Perfil Corrupto",
-                message=(
-                    "La estructura del archivo del perfil no es válida. Puedes restablecerlo "
-                    "creándolo nuevamente."
-                ),
-                commands=[f"project_context profile add {profile_name}"],
+                message="La estructura del archivo del perfil no es válida. Puedes restablecerlo creándolo nuevamente.",
+                commands=[f"project_context profile add {profile_override}"],
                 spacing="bottom",
             )
         raise typer.Exit(code=1)
+
+    except AuthenticationFailedError as e:
+        UI.error(str(e), spacing="top")
         raise typer.Exit(code=1)
