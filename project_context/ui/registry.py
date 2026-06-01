@@ -9,16 +9,17 @@ from project_context.exceptions import (
     VanishModeActiveError,
 )
 from project_context.history import SnapshotManager
-from project_context.schema import LocalContextItems, LocalProjectState
-from project_context.utils import save_project_context_state
+from project_context.schema import LocalContextItems, ProjectState
+from project_context.workspace import ProjectContext
 
 
 @dataclass
 class SessionContext:
     api: AIStudioDriveManager
-    state: LocalProjectState  # Tipo de dato estructurado
+    state: ProjectState
     project_path: Path
     monitor: SnapshotManager
+    workspace: ProjectContext
     session_media_root: Optional[Path] = None
 
     def stop_monitor(self):
@@ -29,18 +30,17 @@ class SessionContext:
             self.monitor.start_monitoring()
 
     def pause_monitor(self):
-        """Informa al monitor que detenga la evaluación temporalmente."""
         self.monitor.pause_monitoring()
 
     def resume_monitor(self):
-        """Reanuda el monitoreo si el estado global del monitor está activo."""
         if self.state.monitor_active:
             self.monitor.resume_monitoring()
 
-    def update_state(self, new_state: LocalProjectState):
+    def update_state(self, new_state: ProjectState):
+        """Actualiza el estado de la sesión y persiste los cambios usando el Workspace Manager."""
         self.state = new_state
         self.monitor.state = new_state
-        save_project_context_state(self.project_path, new_state)
+        self.workspace.save_project_context_state(new_state)
 
     @property
     def chat_id(self) -> str:
@@ -56,7 +56,6 @@ class SessionContext:
 
     @property
     def context_items(self) -> LocalContextItems:
-        """Retorna el modelo de configuración de enfoque de forma tipada."""
         return self.state.context_items
 
 

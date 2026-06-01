@@ -251,7 +251,7 @@ def verify_and_populate_context(
                 AIStudioDriveManager,
                 GoogleDriveManager,
             )
-            from project_context.utils import load_project_context_state
+            from project_context.workspace import ProjectContext
 
             gdm = GoogleDriveManager(
                 secrets_file=evaluator.secrets_file,
@@ -260,9 +260,12 @@ def verify_and_populate_context(
             )
             payload.api = AIStudioDriveManager(gdm=gdm)
 
-            # Cargamos el estado local del proyecto durante el preflight
             project_path = Path.cwd()
-            payload.state = load_project_context_state(project_path)
+            workspace = ProjectContext(project_path)
+            if workspace.is_initialized:
+                payload.state = workspace.load_project_context_state()
+            else:
+                payload.state = None
 
         ctx.obj = payload
 

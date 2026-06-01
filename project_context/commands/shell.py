@@ -2,17 +2,13 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from filelock import FileLock, Timeout
 from typing_extensions import Annotated
 
 from project_context.api_drive import AIStudioDriveManager
 from project_context.auth_flow import verify_and_populate_context
 from project_context.schema import ValidationRequirement, get_session_payload
 from project_context.ui.interactive import interactive_session
-from project_context.utils import (
-    UI,
-    get_local_context_dir,
-)
+from project_context.workspace import ProjectContext
 
 
 def shell_command(
@@ -20,7 +16,8 @@ def shell_command(
     use_profile: Annotated[
         Optional[str],
         typer.Option(
-            "--use", help="Usa un perfil específico temporalmente para esta ejecución."
+            "--use",
+            help="Usa un perfil específico temporalmente para esta ejecución.",
         ),
     ] = None,
 ):
@@ -28,51 +25,28 @@ def shell_command(
     Entra directamente a la consola interactiva (shell) omitiendo el análisis local de archivos.
     """
     project_path = Path.cwd()
-    local_dir = project_path / ".project_context"
-    state_path = local_dir / "state.json"
 
-    if not state_path.exists():
-        typer.secho(
-            "Error: Este directorio no ha sido inicializado como un proyecto de project_context.\n"
-            "Por favor, ejecuta primero 'project_context run' o 'project_context update' para inicializarlo.",
-            fg=typer.colors.RED,
-            bold=True,
+    with ProjectContext(project_path) as workspace:
+        verify_and_populate_context(
+            ctx,
+            requirement=ValidationRequirement.FULL_AUTH,
+            profile_override=use_profile,
         )
-        raise typer.Exit(code=1)
 
-    local_dir = get_local_context_dir(project_path)
-    lock_path = local_dir / "app.lock"
+        payload = get_session_payload(ctx)
+        api = payload.api
+        state = payload.state
 
-    lock = FileLock(lock_path, timeout=0)
-
-    try:
-        with lock:
-            verify_and_populate_context(
-                ctx,
-                requirement=ValidationRequirement.FULL_AUTH,
-                profile_override=use_profile,
+        if state is None or not state.chat_id:
+            typer.secho(
+                "Error: No se encontró información del chat en el estado local.\n"
+                "Por favor, ejecuta primero 'project_context run' para sincronizar tu proyecto.",
+                fg=typer.colors.RED,
+                bold=True,
             )
+            raise typer.Exit(code=1)
 
-            payload = get_session_payload(ctx)
-            api = payload.api
-            state = payload.state
-
-            if state is None or not state.chat_id:
-                typer.secho(
-                    "Error: No se encontró información del chat en el estado local.\n"
-                    "Por favor, ejecuta primero 'project_context run' para sincronizar tu proyecto.",
-                    fg=typer.colors.RED,
-                )
-                raise typer.Exit(code=1)
-
-            assert isinstance(api, AIStudioDriveManager), (
-                "El API no ha sido inicializado correctamente."
-            )
-            interactive_session(api, state, project_path)
-
-    except Timeout:
-        UI.error(
-            "Ya existe una instancia de project_context operando activamente en este proyecto.\n"
-            "Por favor, cierra la sesión abierta en la otra terminal antes de iniciar una nueva."
+        assert isinstance(api, AIStudioDriveManager), (
+            "El API no ha sido inicializado correctamente."
         )
-        raise typer.Exit(code=1)
+        interactive_session(api, state, project_path, workspace)

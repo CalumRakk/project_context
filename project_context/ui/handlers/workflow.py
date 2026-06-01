@@ -23,11 +23,8 @@ from project_context.utils import (
     IMAGE_INSERTION_PROMPT,
     IMAGE_INSERTION_RESPONSE,
     UI,
-    clear_stash,
     console,
     get_potential_media_folders,
-    load_stash,
-    save_stash,
 )
 
 
@@ -88,7 +85,8 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
         return
 
     UI.info("Restaurando chat original desde copia de seguridad...")
-    stashed_json = load_stash(ctx.project_path, "chat_stash.json")
+    # Cambiado a uso del Workspace Manager
+    stashed_json = ctx.workspace.load_stash("chat_stash.json")
 
     if not stashed_json:
         ctx.state.commit_mode = False
@@ -103,7 +101,8 @@ def cmd_commit_restore(ctx: SessionContext, args: list[str]):
         mime_type=ctx.api.MIME_PROMPT,
     )
 
-    clear_stash(ctx.project_path, "chat_stash.json")
+    # Cambiado a uso del Workspace Manager
+    ctx.workspace.clear_stash("chat_stash.json")
     ctx.state.commit_mode = False
     ctx.update_state(ctx.state)
 
@@ -167,7 +166,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
             "No se pudo descargar el chat para realizar la copia de respaldo."
         )
 
-    save_stash(ctx.project_path, "chat_stash.json", chat_data.model_dump_json())
+    ctx.workspace.save_stash("chat_stash.json", chat_data.model_dump_json())
 
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:

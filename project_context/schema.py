@@ -228,7 +228,7 @@ class LocalContextItems(BaseModel):
     exclusions: List[str] = Field(default_factory=list)
 
 
-class LocalProjectState(BaseModel):
+class ProjectState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     path: str
@@ -245,9 +245,13 @@ class LocalProjectState(BaseModel):
 
 
 class ValidationRequirement(Enum):
+    # No requiere ninguna comprobación
     NONE = 0
+    # Requiere estructura básica del sistema pero no perfiles (ej. secrets add)
     SETUP = 1
+    # Requiere que el perfil resuelto exista (ej. profile use / info)
     PROFILE = 2
+    # Requiere perfil resuelto, secreto físico y token válido u OAuth (ej. run, update, shell)
     FULL_AUTH = 3
 
 
@@ -268,7 +272,7 @@ class CliSessionPayload(BaseModel):
     profile_data: ProfileMetadata
     credentials: Optional[Credentials] = None
     api_raw: Optional[Any] = Field(default=None, alias="api", repr=False)
-    state: Optional[LocalProjectState] = None
+    state: Optional[ProjectState] = None
 
     @property
     def api(self) -> Optional["AIStudioDriveManager"]:

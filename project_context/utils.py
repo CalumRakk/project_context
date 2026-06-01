@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import re
@@ -12,7 +11,7 @@ import pathspec
 from rich.console import Console
 from rich.theme import Theme
 
-from project_context.schema import LocalContextItems, LocalProjectState
+from project_context.schema import LocalContextItems
 from project_context.ui.ui import UI
 
 logger = logging.getLogger(__name__)
@@ -117,14 +116,6 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
     return []
 
 
-def get_local_context_dir(project_path: Union[str, Path]) -> Path:
-    """Obtiene y garantiza la existencia del directorio de metadatos local."""
-    path = Path(project_path)
-    local_dir = path / ".project_context"
-    local_dir.mkdir(parents=True, exist_ok=True)
-    return local_dir
-
-
 def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] = None):
     """Verifica y añade la regla de exclusión del directorio local a .gitignore."""
     project_path = Path(project_path)
@@ -220,47 +211,6 @@ def generate_context(
 
     full_context = final_tree + "\n" + final_content
     return full_context, total_tokens
-
-
-def save_context(project_path: Union[str, Path], context: str) -> Path:
-    """Guarda el contexto consolidado en last_context.txt."""
-    project_path = Path(project_path)
-    local_dir = get_local_context_dir(project_path)
-    output = local_dir / "last_context.txt"
-    output.write_text(context, encoding="utf-8")
-    return output
-
-
-def save_project_context_state(
-    project_path: Union[str, Path], project_context_state: LocalProjectState
-):
-    """Guarda el estado del proyecto serializado desde el modelo Pydantic."""
-    project_path = Path(project_path)
-    local_dir = get_local_context_dir(project_path)
-    output_path = local_dir / "state.json"
-
-    content = project_context_state.model_dump_json(indent=2, by_alias=True)
-    output_path.write_text(content, encoding="utf-8")
-
-    ensure_gitignore(project_path, project_context_state.model_dump())
-
-
-def load_project_context_state(
-    project_path: Union[str, Path],
-) -> Optional[LocalProjectState]:
-    """Carga y valida el archivo state.json convirtiéndolo en un modelo Pydantic."""
-    project_path = Path(project_path)
-    local_dir = get_local_context_dir(project_path)
-    state_path = local_dir / "state.json"
-
-    if state_path.exists():
-        try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
-            return LocalProjectState(**data)
-        except Exception as e:
-            logger.error(f"Error cargando y validando state.json: {e}")
-            return None
-    return None
 
 
 def has_files_modified_since(
@@ -387,25 +337,6 @@ def extract_image_references(file_path: Path) -> List[Tuple[str, bool]]:
     if not file_path.exists():
         return []
     return extract_image_references_from_text(file_path.read_text(encoding="utf-8"))
-
-
-def _get_stash_path(project_path: Union[str, Path], filename: str) -> Path:
-    return get_local_context_dir(project_path) / filename
-
-
-def save_stash(project_path: Union[str, Path], filename: str, content: str):
-    _get_stash_path(project_path, filename).write_text(content, encoding="utf-8")
-
-
-def load_stash(project_path: Union[str, Path], filename: str) -> Optional[str]:
-    path = _get_stash_path(project_path, filename)
-    return path.read_text(encoding="utf-8") if path.exists() else None
-
-
-def clear_stash(project_path: Union[str, Path], filename: str):
-    path = _get_stash_path(project_path, filename)
-    if path.exists():
-        path.unlink()
 
 
 def get_context_tree(

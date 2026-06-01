@@ -11,9 +11,9 @@ from project_context.api_drive import AIStudioDriveManager
 from project_context.exceptions import ProjectContextError
 from project_context.history import SnapshotManager
 from project_context.profiles import profile_manager
-from project_context.schema import LocalProjectState
+from project_context.schema import ProjectState
 from project_context.ui.commands import SessionContext, registry
-from project_context.utils import UI
+from project_context.workspace import ProjectContext
 
 
 def create_interactive_completer(
@@ -61,14 +61,20 @@ def create_interactive_completer(
 
 
 def interactive_session(
-    api: AIStudioDriveManager, state: LocalProjectState, project_path: Path
+    api: AIStudioDriveManager,
+    state: ProjectState,
+    project_path: Path,
+    workspace: ProjectContext,
 ):
+    from project_context.ui.ui import UI
+
     UI.info("Sesión interactiva iniciada. Escribe [bold]help[/] para comandos.")
 
     ctx = SessionContext(
         api=api,
         state=state,
         project_path=project_path,
+        workspace=workspace,
         monitor=SnapshotManager(api, project_path, state),
     )
 

@@ -11,7 +11,7 @@ from typing import List, Optional
 from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
 
 from project_context.api_drive import AIStudioDriveManager
-from project_context.schema import LocalProjectState
+from project_context.schema import ProjectState
 from project_context.utils import compute_md5
 
 db = SqliteDatabase(None)
@@ -56,7 +56,7 @@ def decompress_data(data: bytes) -> bytes:
 
 class SnapshotManager:
     def __init__(
-        self, api: AIStudioDriveManager, project_path: Path, state: LocalProjectState
+        self, api: AIStudioDriveManager, project_path: Path, state: ProjectState
     ):
         self.api = api
         self.project_path = project_path

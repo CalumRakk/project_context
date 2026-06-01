@@ -74,3 +74,15 @@ class AuthenticationFailedError(ProjectContextError):
     """Se lanza cuando el flujo de autenticación interactivo (OAuth) falla o es cancelado (Decisión 9)."""
 
     pass
+
+
+class StateNotFoundError(ProjectContextError):
+    """Se lanza cuando se intenta acceder a un estado inexistente."""
+
+    pass
+
+
+class StateJSONDecodeError(ProjectContextError):
+    """Se lanza cuando el json de state.json no se puede decodificar."""
+
+    pass
