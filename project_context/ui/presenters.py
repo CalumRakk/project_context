@@ -7,6 +7,7 @@ from project_context.exceptions import (
     FreshInstallRequiredError,
     ProfileConfigNotFoundError,
     ProfileConfigurationCorruptError,
+    ProjectContextError,
     SecretAssociationMissingError,
     SecretFileMissingError,
 )
@@ -101,6 +102,10 @@ class AuthConsolePresenter:
             raise typer.Exit(code=1)
 
         elif isinstance(error, ValueError) and "Conflicto de seguridad" in str(error):
+            UI.error(str(error), spacing="top")
+            raise typer.Exit(code=1)
+
+        elif isinstance(error, ProjectContextError):
             UI.error(str(error), spacing="top")
             raise typer.Exit(code=1)
 

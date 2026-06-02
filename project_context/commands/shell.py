@@ -6,7 +6,6 @@ from typing_extensions import Annotated
 
 from project_context.auth_service import AuthService
 from project_context.ui.interactive import interactive_session
-from project_context.ui.presenters import AuthConsolePresenter
 from project_context.workspace import ProjectContext
 
 
@@ -25,13 +24,10 @@ def shell_command(
     project_path = Path.cwd()
 
     with ProjectContext(project_path) as workspace:
-        try:
-            session = AuthService.initialize_session(
-                profile_override=use_profile,
-                project_path=project_path,
-            )
-        except Exception as e:
-            AuthConsolePresenter.handle_error(e)
+        session = AuthService.initialize_session(
+            profile_override=use_profile,
+            project_path=project_path,
+        )
 
         api = session.api
         state = session.state

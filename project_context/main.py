@@ -116,4 +116,34 @@ app.command(name="shell")(shell.shell_command)
 
 
 def main():
-    app()
+    import logging
+    import sys
+
+    from project_context.exceptions import ProjectContextError
+    from project_context.ui.presenters import AuthConsolePresenter
+    from project_context.ui.ui import UI
+
+    logger = logging.getLogger("project_context.main")
+
+    try:
+        app()
+    except ProjectContextError as e:
+        # Los errores de dominio conocidos se delegan al presentador de consola
+        AuthConsolePresenter.handle_error(e)
+
+    except KeyboardInterrupt:
+        # Manejo limpio de Ctrl+C fuera de la sesión interactiva
+        UI.print("\n[orange1]![/] Ejecución interrumpida por el usuario.", indent=False)
+        # Código de salida estándar para interrupciones por señal (SIGINT)
+        sys.exit(130)
+
+    except Exception as e:
+        # Registramos el traceback completo en el archivo de log local de forma silenciosa
+        logger.exception("Error inesperado en el hilo de ejecución principal:")
+
+        # Presentamos un mensaje simplificado al usuario en consola
+        UI.error(f"Ocurrió un error inesperado: {e}", spacing="top")
+        UI.info(
+            "Se han registrado los detalles técnicos en los archivos de registro (logs) de la aplicación."
+        )
+        sys.exit(1)
