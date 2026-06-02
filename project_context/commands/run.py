@@ -5,18 +5,16 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from project_context.api_drive import AIStudioDriveManager
-from project_context.auth_flow import verify_and_populate_context
+from project_context.auth_service import AuthService
 from project_context.ops import initialize_project_context, update_context
-from project_context.schema import ValidationRequirement, get_session_payload
 from project_context.ui.interactive import interactive_session
+from project_context.ui.presenters import AuthConsolePresenter
 from project_context.workspace import ProjectContext
 
 logger = logging.getLogger(__name__)
 
 
 def run_command(
-    ctx: typer.Context,
     use_profile: Annotated[
         Optional[str],
         typer.Option(
@@ -31,19 +29,16 @@ def run_command(
     project_path = Path.cwd()
 
     with ProjectContext(project_path) as workspace:
-        verify_and_populate_context(
-            ctx,
-            requirement=ValidationRequirement.FULL_AUTH,
-            profile_override=use_profile,
-        )
+        try:
+            session = AuthService.initialize_session(
+                profile_override=use_profile,
+                project_path=project_path,
+            )
+        except Exception as e:
+            AuthConsolePresenter.handle_error(e)
 
-        payload = get_session_payload(ctx)
-        api = payload.api
-        state = payload.state
-
-        assert isinstance(api, AIStudioDriveManager), (
-            "El API no ha sido inicializado correctamente."
-        )
+        api = session.api
+        state = session.state
 
         if state is None:
             state = initialize_project_context(api, workspace)

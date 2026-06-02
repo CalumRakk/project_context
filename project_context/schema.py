@@ -1,11 +1,9 @@
-from enum import Enum
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
-from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
-    from project_context.api_drive import AIStudioDriveManager
+    pass
 
 
 class FileDrive(BaseModel):
@@ -242,52 +240,3 @@ class ProjectState(BaseModel):
     story_anchor: Optional[str] = None
     commit_mode: bool = False
     vanished: bool = False
-
-
-class ValidationRequirement(Enum):
-    # No requiere ninguna comprobación
-    NONE = 0
-    # Requiere estructura básica del sistema pero no perfiles (ej. secrets add)
-    SETUP = 1
-    # Requiere que el perfil resuelto exista (ej. profile use / info)
-    PROFILE = 2
-    # Requiere perfil resuelto, secreto físico y token válido u OAuth (ej. run, update, shell)
-    FULL_AUTH = 3
-
-
-class ProfileMetadata(BaseModel):
-    """Metadatos de perfil verificados por Pydantic."""
-
-    email: Optional[str] = None
-    associated_secret: Optional[str] = None
-    created_at: Optional[float] = None
-
-
-class CliSessionPayload(BaseModel):
-    """Contenedor de estado verificado inyectado en el contexto de Typer (ctx.obj)."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    profile_name: str
-    profile_data: ProfileMetadata
-    credentials: Optional[Credentials] = None
-    api_raw: Optional[Any] = Field(default=None, alias="api", repr=False)
-    state: Optional[ProjectState] = None
-
-    @property
-    def api(self) -> Optional["AIStudioDriveManager"]:
-        return cast(Optional["AIStudioDriveManager"], self.api_raw)
-
-    @api.setter
-    def api(self, value: Optional["AIStudioDriveManager"]) -> None:
-        self.api_raw = value
-
-
-def get_session_payload(ctx: Any) -> CliSessionPayload:
-    """Retorna el payload de la sesión con tipado estático garantizado."""
-
-    if ctx.obj is None:
-        raise ValueError(
-            "El contexto de la sesión no ha sido inicializado o es inválido."
-        )
-    return cast(CliSessionPayload, ctx.obj)
