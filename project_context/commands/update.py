@@ -39,4 +39,4 @@ def update_command(
             state = update_context(api, workspace, state)
 
         workspace.save_project_context_state(state)
-        UI.success("Sincronización de contexto completada con éxito.")
+        UI.success("Sincronización de contexto completada.")

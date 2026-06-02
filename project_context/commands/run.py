@@ -6,7 +6,7 @@ import typer
 from typing_extensions import Annotated
 
 from project_context.auth_service import AuthService
-from project_context.ops import initialize_project_context, update_context
+from project_context.ops import initialize_project_context
 from project_context.ui.interactive import interactive_session
 from project_context.workspace import ProjectContext
 
@@ -38,8 +38,5 @@ def run_command(
 
         if state is None:
             state = initialize_project_context(api, workspace)
-        else:
-            state = update_context(api, workspace, state)
 
-        workspace.save_project_context_state(state)
         interactive_session(api, state, workspace)

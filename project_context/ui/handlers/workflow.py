@@ -71,7 +71,7 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
         "[bold red]¿Reconstruir chat y contexto por completo? (s/n): [/]"
     )
     if confirm.lower() == "s":
-        new_state = rebuild_project_context(ctx.api, ctx.project_path, ctx.state)
+        new_state = rebuild_project_context(ctx.api, ctx.workspace, ctx.state)
         ctx.update_state(new_state)
 
 
@@ -298,7 +298,7 @@ def cmd_story(ctx: SessionContext, args: list[str]):
     ctx.update_state(ctx.state)
 
     new_state = apply_story_update(
-        ctx.api, ctx.project_path, ctx.state, media_root_hint=ctx.session_media_root
+        ctx.api, ctx.workspace, ctx.state, media_root_hint=ctx.session_media_root
     )
     ctx.update_state(new_state)
 

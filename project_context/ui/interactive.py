@@ -67,8 +67,6 @@ def interactive_session(
 ):
     from project_context.ui.ui import UI
 
-    UI.info("Sesión interactiva iniciada. Escribe [bold]help[/] para comandos.")
-
     ctx = SessionContext(
         api=api,
         state=state,
@@ -88,7 +86,10 @@ def interactive_session(
 
     ctx.start_monitor()
 
-    UI.info(f"[Chat] Iniciando sesión con chat_id {state.chat_id}...")
+    url = f"https://aistudio.google.com/prompts/{state.chat_id}"
+    UI.success(f"Chat iniciado: {url} ")
+    UI.info("Escribe [green]help[/] para comandos.")
+    UI.info("Escribe [green]update[/] para sincronizar los cambios con Drive.")
 
     commands_list = list(registry.commands.keys())
     completer = create_interactive_completer(workspace.project_path, commands_list)
