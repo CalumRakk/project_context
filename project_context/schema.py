@@ -239,4 +239,5 @@ class ProjectState(BaseModel):
     story_mode: bool = False
     story_anchor: Optional[str] = None
     commit_mode: bool = False
+    # TODO: ELIMINAR commit_mode
     vanished: bool = False

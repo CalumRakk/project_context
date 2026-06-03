@@ -81,6 +81,7 @@ def cmd_history(ctx: SessionContext, args: list[str]):
             header_style="bold magenta",
         )
         table.add_column("Timestamp (ID)", style="dim", no_wrap=True)
+        table.add_column("Tipo", no_wrap=True)
         table.add_column("Fecha/Hora", no_wrap=True)
         table.add_column("Mensaje", style="cyan")
 
@@ -88,8 +89,17 @@ def cmd_history(ctx: SessionContext, args: list[str]):
         for tid in page_chunk:
             info = ctx.monitor.get_snapshot_info(tid)
             if info:
+                category = info.get("category", "user")
+                if category == "user":
+                    cat_str = "[bold green]USER[/]"
+                elif category == "stash":
+                    cat_str = "[bold orange1]STASH[/]"
+                else:
+                    cat_str = "[dim cyan]AUTO[/]"
+
                 table.add_row(
                     info["timestamp"],
+                    cat_str,
                     info["human_time"],
                     info.get("message") or "-",
                 )

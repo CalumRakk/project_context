@@ -216,14 +216,21 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
         UI.warn("El modo vanish ya se encuentra activo.")
         return
 
-    UI.info("Guardando copia de seguridad del chat (Vanish Stash)...")
+    UI.info("Guardando copia de seguridad del chat en base de datos local (Stash)...")
+    try:
+        ctx.monitor.create_named_snapshot(
+            message="Antes de vanish:on", category="stash"
+        )
+    except Exception as e:
+        raise ChatSessionError(
+            f"No se pudo crear el snapshot de respaldo para Vanish: {e}"
+        )
+
     chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
     if not chat_data:
         raise ChatSessionError(
-            "No se pudo descargar el chat desde Drive para realizar el respaldo."
+            "No se pudo obtener el chat desde Drive para activar vanish."
         )
-
-    ctx.workspace.save_stash("vanish_stash.json", chat_data.model_dump_json())
 
     UI.info("Estableciendo pantalla limpia en Google Drive...")
     vanish_chunks = [ChunksText(text="✨ vanish off ✨", role="user")]
@@ -240,7 +247,6 @@ def cmd_vanish_on(ctx: SessionContext, args: list[str]):
             "Recarga la pestaña en Google AI Studio (F5) para aplicar la vista limpia."
         )
     else:
-        ctx.workspace.clear_stash("vanish_stash.json")
         raise ChatSessionError(
             "Ocurrió un problema al actualizar el chat en Drive para activar vanish."
         )
@@ -253,31 +259,39 @@ def cmd_vanish_off(ctx: SessionContext, args: list[str]):
         UI.warn("El modo vanish no está activo en este momento.")
         return
 
-    stashed_json = ctx.workspace.load_stash("vanish_stash.json")
-    if not stashed_json:
-        ctx.state.vanished = False
-        ctx.update_state(ctx.state)
-        raise ChatSessionError(
-            "No se encontró el archivo de respaldo de Vanish para restaurar."
-        )
+    UI.info("Buscando último snapshot de respaldo tipo 'stash'...")
+    latest_stash = ctx.monitor.get_latest_snapshot_by_category("stash")
 
-    UI.info("Restaurando conversación y contexto original...")
-    success = ctx.api.gdm.update_file_from_memory(
-        file_id=ctx.chat_id, content=stashed_json, mime_type=ctx.api.MIME_PROMPT
+    if not latest_stash:
+        snapshots = ctx.monitor.list_snapshots()
+        if snapshots:
+            latest_stash = snapshots[0]
+            UI.warn(
+                "No se encontró ningún snapshot tipo 'stash'. Se utilizará el último snapshot general."
+            )
+        else:
+            raise ChatSessionError(
+                "No se encontró ningún snapshot para realizar la recuperación de Vanish."
+            )
+
+    UI.info(
+        f"Restaurando conversación y contexto original desde snapshot [{latest_stash['timestamp']}]..."
     )
-
-    if success:
-        ctx.workspace.clear_stash("vanish_stash.json")
-        ctx.state.vanished = False
-        ctx.update_state(ctx.state)
-        UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
-        UI.info(
-            "Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado."
-        )
-    else:
-        raise ChatSessionError(
-            "No se pudo escribir el archivo original en Drive para desactivar vanish."
-        )
+    ctx.stop_monitor()
+    try:
+        if ctx.monitor.restore_snapshot(latest_stash["timestamp"]):
+            ctx.state.vanished = False
+            ctx.update_state(ctx.state)
+            UI.success("¡Chat original restaurado con éxito! Saliendo del modo Vanish.")
+            UI.info(
+                "Recarga la pestaña en Google AI Studio (F5) para ver el chat recuperado."
+            )
+        else:
+            raise ChatSessionError(
+                "No se pudo escribir el archivo original en Drive para desactivar vanish."
+            )
+    finally:
+        ctx.start_monitor()
 
 
 @registry.register("vanish", require_chat=True, allow_in_vanish=True)

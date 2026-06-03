@@ -20,6 +20,7 @@ from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.ui.registry import SessionContext, registry
 from project_context.utils import (
+    COMMIT_TASK_MARKER,
     IMAGE_INSERTION_PROMPT,
     IMAGE_INSERTION_RESPONSE,
     UI,
@@ -75,39 +76,57 @@ def cmd_reset(ctx: SessionContext, args: list[str]):
         ctx.update_state(new_state)
 
 
+def is_chat_remotely_in_commit_mode(ctx: SessionContext) -> bool:
+    """Verifica si el chat en Google Drive ya se encuentra estructurado en modo commit."""
+    chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
+    if not chat_data:
+        return False
+    for chunk in chat_data.chunkedPrompt.chunks:
+        if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+            return True
+    return False
+
+
 @registry.register(
     "commit:done", "commit:restore", "commit:clear", "commit:rm", require_chat=True
 )
 def cmd_commit_restore(ctx: SessionContext, args: list[str]):
     """Restaura el chat original desactivando el modo de commit rápido."""
-    if not ctx.state.commit_mode:
-        UI.info("No estás en modo commit rápido. No hay nada que restaurar.")
+    UI.info("Buscando último snapshot de respaldo tipo 'stash'...")
+
+    latest_stash = ctx.monitor.get_latest_snapshot_by_category("stash")
+
+    if not latest_stash:
+        snapshots = ctx.monitor.list_snapshots()
+        if snapshots:
+            latest_stash = snapshots[0]
+            UI.warn(
+                "No se encontró ningún snapshot tipo 'stash'. Se usará el último snapshot general."
+            )
+        else:
+            raise ChatSessionError(
+                "No se encontraron snapshots en el sistema para proceder."
+            )
+
+    UI.info(
+        f"Punto de restauración seleccionado: [{latest_stash['timestamp']}] '{latest_stash.get('message') or '-'}'"
+    )
+    confirm = console.input("[bold red]¿Confirmas la restauración del chat? (s/n): [/]")
+    if confirm.lower() != "s":
+        UI.info("Operación cancelada.")
         return
 
-    UI.info("Restaurando chat original desde copia de seguridad...")
-    # Cambiado a uso del Workspace Manager
-    stashed_json = ctx.workspace.load_stash("chat_stash.json")
-
-    if not stashed_json:
-        ctx.state.commit_mode = False
-        ctx.update_state(ctx.state)
-        raise ChatSessionError(
-            "No se encontró el respaldo del chat en almacenamiento local."
-        )
-
-    ctx.api.gdm.update_file_from_memory(
-        file_id=ctx.chat_id,
-        content=stashed_json,
-        mime_type=ctx.api.MIME_PROMPT,
-    )
-
-    # Cambiado a uso del Workspace Manager
-    ctx.workspace.clear_stash("chat_stash.json")
-    ctx.state.commit_mode = False
-    ctx.update_state(ctx.state)
-
-    UI.success("¡Chat original restaurado!")
-    UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+    ctx.stop_monitor()
+    try:
+        if ctx.monitor.restore_snapshot(latest_stash["timestamp"]):
+            ctx.state.commit_mode = False
+            ctx.update_state(ctx.state)
+            UI.success("¡Chat original restaurado con éxito!")
+            UI.info("Ve a AI Studio y REFRESCA LA PÁGINA (F5).")
+        else:
+            raise ChatSessionError("La restauración del archivo en Drive falló.")
+    finally:
+        ctx.start_monitor()
 
 
 @registry.register("commit:all", require_chat=True)
@@ -121,16 +140,13 @@ def cmd_commit_all(ctx: SessionContext, args: list[str]):
 @registry.register("commit", require_chat=True)
 def cmd_commit(ctx: SessionContext, args: list[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
-    if ctx.state.commit_mode:
-        UI.warn(
-            "Ya estás en modo commit. Ve a AI Studio o usa 'commit done' para restaurar."
-        )
-        return
 
-    if args:
+    is_commit = is_chat_remotely_in_commit_mode(ctx)
+    if args and not is_commit:
         sub = args[0].lower()
         if sub in ["clear", "done", "restore", "rm"]:
             return cmd_commit_restore(ctx, args[1:])
+
         elif sub in ["-a", "--all", "all"]:
             return cmd_commit_all(ctx, args[1:])
 
@@ -150,7 +166,7 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
                 prompt_text = generate_commit_prompt_text(ctx.project_path)
                 if not prompt_text:
                     raise ChatSessionError(
-                        "No se pudo generar el diff de Git después del stage forzado."
+                        "No se pudo generar el diff de Git después del stage."
                     )
             else:
                 UI.info("Operación cancelada.")
@@ -159,14 +175,19 @@ def cmd_commit(ctx: SessionContext, args: list[str]):
             UI.warn("El repositorio está limpio. No hay cambios pendientes.")
             return
 
-    UI.info("Guardando copia de seguridad del chat actual (Stash)...")
+    # 1. Crear snapshot atómico tipo STASH
+    UI.info("Generando snapshot de respaldo en base de datos local...")
+    try:
+        ctx.monitor.create_named_snapshot(
+            message="Antes de entrar en modo commit", category="stash"
+        )
+    except Exception as e:
+        raise ChatSessionError(f"No se pudo crear el snapshot del sistema: {e}")
+
+    UI.info("Descargando configuración del chat actual...")
     chat_data = ctx.api.get_chat_ia_studio(ctx.chat_id)
     if not chat_data:
-        raise ChatSessionError(
-            "No se pudo descargar el chat para realizar la copia de respaldo."
-        )
-
-    ctx.workspace.save_stash("chat_stash.json", chat_data.model_dump_json())
+        raise ChatSessionError("No se pudo descargar el chat de Drive.")
 
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:

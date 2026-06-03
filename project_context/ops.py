@@ -45,16 +45,15 @@ def create_default_run_settings() -> RunSettings:
 
 
 def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
-    """
-    Genera el prompt completo para la tarea de commit.
-    Retorna None si no hay cambios en stage.
-    """
+    """Genera el prompt completo para la tarea de commit."""
     diff_content = get_diff_message(project_path)
 
     if not diff_content:
         return None
 
+    # Prependemos el marcador estándar de commit
     prompt_text = (
+        f"{COMMIT_TASK_MARKER}\n\n"
         "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas Conventional Commits. "
         "Tienes adjunto a este chat el contexto del proyecto para que entiendas la arquitectura general.\n\n"
         "He realizado los siguientes cambios (git diff --cached):\n\n"
