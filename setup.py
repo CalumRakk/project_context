@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 from project_context import __version__
 
@@ -8,11 +8,7 @@ setup(
     author="CalumRakk",
     author_email="leocasti2@gmail.com",
     description="A CLI tool for managing project context with Google AI Studio",
-    packages=[
-        "project_context",
-        "project_context.commands",
-        "project_context.ui",
-    ],
+    packages=find_packages(),
     install_requires=[
         "typer==0.21.1",
         "gitingest @ git+https://github.com/CalumRakk/gitingest.git@fix/windows-encoding-support",

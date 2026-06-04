@@ -20,3 +20,5 @@ tests/
 .project_context/
 
 .project_context*
+*.zip
+notas.md
