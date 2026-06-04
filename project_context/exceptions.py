@@ -34,12 +34,6 @@ class InvalidCommandArgumentError(ProjectContextError):
     pass
 
 
-class ProfileConfigNotFoundError(ProjectContextError):
-    """Se lanza cuando el perfil de usuario especificado o activo no existe."""
-
-    pass
-
-
 class AssociatedSecretMissingError(ProjectContextError):
     """Se lanza de forma genérica si falta la asociación del secreto (retrocompatibilidad)."""
 
@@ -58,8 +52,32 @@ class SecretFileMissingError(ProjectContextError):
     pass
 
 
-class ProfileConfigurationCorruptError(ProjectContextError):
+class ProfileConfigCorruptError(ProjectContextError):
     """Se lanza si el archivo de configuración del perfil se encuentra corrupto o ilegible."""
+
+    pass
+
+
+class ProfileConfigNotFoundError(ProjectContextError):
+    """Se lanza cuando el perfil de usuario especificado o activo no existe."""
+
+    pass
+
+
+class ProfileNotFoundError(ProjectContextError):
+    """Se lanza cuando se intenta acceder a un perfil inexistente."""
+
+    pass
+
+
+class ProfileActiveNotFoundError(ProjectContextError):
+    """Se lanza cuando se intenta acceder a un perfil activo inexistente."""
+
+    pass
+
+
+class ProfileTokenNotFoundError(ProjectContextError):
+    """Se lanza cuando se intenta acceder a un token de perfil inexistente."""
 
     pass
 

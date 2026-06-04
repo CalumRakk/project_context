@@ -4,13 +4,22 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
+from project_context.api_drive import GoogleDriveManager
 from project_context.auth_service import AuthService
-from project_context.ops import initialize_project_context, update_context
+from project_context.ops import update_context
+from project_context.profiles import ProfileManager
 from project_context.ui.ui import UI
 from project_context.workspace import ProjectContext
 
 
 def update_command(
+    project_path: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--project-path",
+            help="Ruta del proyecto a sincronizar con Google Drive.",
+        ),
+    ] = None,
     use_profile: Annotated[
         Optional[str],
         typer.Option(
@@ -22,21 +31,19 @@ def update_command(
     """
     Sincroniza los cambios del código del proyecto con Google Drive y sale de inmediato.
     """
-    project_path = Path.cwd()
+    project_path = Path.cwd() if project_path is None else project_path
+
+    auth = AuthService()
+    profile_manager = ProfileManager()
 
     with ProjectContext(project_path) as workspace:
-        session = AuthService.initialize_session(
-            profile_override=use_profile,
-            project_path=project_path,
-        )
+        profile_name = profile_manager.resolve_profile_name(use_profile)
+        profile_config = profile_manager.load_profile_data(profile_name)
 
-        api = session.api
-        state = session.state
+        creds = auth.authenticate(profile_config.token_path, profile_config.secret_path)
 
-        if state is None:
-            state = initialize_project_context(api, workspace)
-        else:
-            state = update_context(api, workspace, state)
+        api = GoogleDriveManager(creds)
 
-        workspace.save_project_context_state(state)
+        update_context(api, workspace)
+
         UI.success("Sincronización de contexto completada.")

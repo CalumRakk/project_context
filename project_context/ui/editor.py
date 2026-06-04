@@ -4,7 +4,7 @@ import time
 
 import typer
 
-from project_context.api_drive import AIStudioDriveManager
+from project_context.api_drive import GoogleDriveManager
 from project_context.schema import ChunksDocument, ChunksImage, ChunksText
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def get_full_content_for_pager(chunk) -> str:
     return "\n".join(output)
 
 
-def run_editor_mode(api: AIStudioDriveManager, chat_id: str):
+def run_editor_mode(api: GoogleDriveManager, chat_id: str):
     """
     Lógica encapsulada del editor visual.
     Funciona como una 'ventana modal' sobre la consola.

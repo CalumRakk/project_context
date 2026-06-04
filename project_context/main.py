@@ -8,7 +8,7 @@ from typing import Annotated, Optional
 import typer
 
 from project_context import __version__
-from project_context.commands import dev, profile, run, secrets, shell, update
+from project_context.commands import run, secrets, update
 from project_context.logging_config import setup_logging
 from project_context.utils import get_app_root_dir
 
@@ -105,14 +105,14 @@ def global_options(
 
 
 # Registro de sub-grupos
-app.add_typer(profile.app, name="profile")
-app.add_typer(dev.app, name="dev")
+# app.add_typer(profile.app, name="profile")
+# app.add_typer(dev.app, name="dev")
 app.add_typer(secrets.app, name="secrets")
 
 # Registro de comandos principales de primer nivel
 app.command(name="run")(run.run_command)
 app.command(name="update")(update.update_command)
-app.command(name="shell")(shell.shell_command)
+# app.command(name="shell")(shell.shell_command)
 
 
 def main():

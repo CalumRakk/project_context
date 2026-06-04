@@ -3,12 +3,10 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-from rich.table import Table
 
-from project_context.profiles import profile_manager
+from project_context.profiles import ProfileManager
 from project_context.utils import (
     UI,
-    console,
     validate_google_secrets_file,
 )
 
@@ -49,6 +47,7 @@ def add_secret(
     """
     Instala un archivo de secretos OAuth en el banco global de credenciales.
     """
+    profile_manager = ProfileManager()
     if not validate_google_secrets_file(secrets_path):
         UI.error(
             "El archivo provisto no tiene una estructura de secretos de Google OAuth válida.\n"
@@ -84,9 +83,10 @@ def add_secret(
 
         if associate:
             active_profile = profile_manager.get_active_profile_name()
-            profile_data = profile_manager.get_active_profile_data()
-            profile_data["associated_secret"] = target_name
-            profile_manager.save_active_profile_data(profile_data)
+            assert active_profile is not None, "Perfil activo no encontrado"
+
+            profile_data = profile_manager.load_profile_data(active_profile)
+            profile_data.associated_secret = target_name
             UI.success(
                 f"Secreto '{target_name}' asociado al perfil activo '{active_profile}'."
             )
@@ -96,102 +96,102 @@ def add_secret(
         raise typer.Exit(code=1)
 
 
-@app.command("list")
-def list_secrets():
-    """
-    Muestra los secretos instalados en el sistema y los perfiles que dependen de ellos.
-    """
-    association_map = profile_manager.get_secrets_association_map()
+# @app.command("list")
+# def list_secrets():
+#     """
+#     Muestra los secretos instalados en el sistema y los perfiles que dependen de ellos.
+#     """
+#     association_map = profile_manager.get_secrets_association_map()
 
-    if not association_map:
-        UI.info(
-            "No se han encontrado secretos registrados en el banco de credenciales."
-        )
-        return
+#     if not association_map:
+#         UI.info(
+#             "No se han encontrado secretos registrados en el banco de credenciales."
+#         )
+#         return
 
-    table = Table(
-        title="\nBanco Global de Secretos",
-        show_header=True,
-        header_style="bold magenta",
-    )
-    table.add_column("Nombre del Secreto", style="cyan")
-    table.add_column("Estado Físico", style="green")
-    table.add_column("Perfiles que lo utilizan", style="yellow")
+#     table = Table(
+#         title="\nBanco Global de Secretos",
+#         show_header=True,
+#         header_style="bold magenta",
+#     )
+#     table.add_column("Nombre del Secreto", style="cyan")
+#     table.add_column("Estado Físico", style="green")
+#     table.add_column("Perfiles que lo utilizan", style="yellow")
 
-    for secret_name, data in association_map.items():
-        status_str = (
-            "Encontrado" if data["exists_on_disk"] else "[bold red]FALTANTE EN DISCO[/]"
-        )
-        profiles_list = data["associated_profiles"]
-        profiles_str = (
-            ", ".join(profiles_list)
-            if profiles_list
-            else "Sin perfiles vinculados (Huérfano)"
-        )
+#     for secret_name, data in association_map.items():
+#         status_str = (
+#             "Encontrado" if data["exists_on_disk"] else "[bold red]FALTANTE EN DISCO[/]"
+#         )
+#         profiles_list = data["associated_profiles"]
+#         profiles_str = (
+#             ", ".join(profiles_list)
+#             if profiles_list
+#             else "Sin perfiles vinculados (Huérfano)"
+#         )
 
-        table.add_row(secret_name, status_str, profiles_str)
+#         table.add_row(secret_name, status_str, profiles_str)
 
-    console.print(table)
-    console.print("")
+#     console.print(table)
+#     console.print("")
 
 
-@app.command("remove")
-def remove_secret(
-    name: Annotated[
-        str,
-        typer.Argument(
-            help="Nombre del secreto que deseas eliminar (ej: personal o personal.json)."
-        ),
-    ],
-):
-    """
-    Elimina un archivo de secretos del sistema de forma segura.
-    """
-    target_name = name if name.endswith(".json") else f"{name}.json"
-    association_map = profile_manager.get_secrets_association_map()
+# @app.command("remove")
+# def remove_secret(
+#     name: Annotated[
+#         str,
+#         typer.Argument(
+#             help="Nombre del secreto que deseas eliminar (ej: personal o personal.json)."
+#         ),
+#     ],
+# ):
+#     """
+#     Elimina un archivo de secretos del sistema de forma segura.
+#     """
+#     target_name = name if name.endswith(".json") else f"{name}.json"
+#     association_map = profile_manager.get_secrets_association_map()
 
-    if target_name not in association_map:
-        UI.error(f"El secreto '{target_name}' no está registrado en el sistema.")
-        raise typer.Exit(code=1)
+#     if target_name not in association_map:
+#         UI.error(f"El secreto '{target_name}' no está registrado en el sistema.")
+#         raise typer.Exit(code=1)
 
-    secret_data = association_map[target_name]
+#     secret_data = association_map[target_name]
 
-    associated_profiles = secret_data["associated_profiles"]
-    if associated_profiles:
-        UI.warn(
-            f"⚠️ El secreto '{target_name}' está siendo utilizado por los siguientes perfiles:\n"
-            f"   - {', '.join(associated_profiles)}\n\n"
-            f"Si lo eliminas, estos perfiles no podrán renovar sus sesiones de Google Drive "
-            f"hasta que se les asocie otro secreto válido."
-        )
-        confirm = typer.confirm(
-            f"¿Estás seguro de que deseas eliminar permanentemente '{target_name}'?",
-            default=False,
-        )
-        if not confirm:
-            UI.info("Eliminación cancelada.")
-            raise typer.Exit()
-    else:
-        confirm = typer.confirm(
-            f"¿Deseas eliminar permanentemente el secreto '{target_name}'?",
-            default=True,
-        )
-        if not confirm:
-            UI.info("Eliminación cancelada.")
-            raise typer.Exit()
+#     associated_profiles = secret_data["associated_profiles"]
+#     if associated_profiles:
+#         UI.warn(
+#             f"⚠️ El secreto '{target_name}' está siendo utilizado por los siguientes perfiles:\n"
+#             f"   - {', '.join(associated_profiles)}\n\n"
+#             f"Si lo eliminas, estos perfiles no podrán renovar sus sesiones de Google Drive "
+#             f"hasta que se les asocie otro secreto válido."
+#         )
+#         confirm = typer.confirm(
+#             f"¿Estás seguro de que deseas eliminar permanentemente '{target_name}'?",
+#             default=False,
+#         )
+#         if not confirm:
+#             UI.info("Eliminación cancelada.")
+#             raise typer.Exit()
+#     else:
+#         confirm = typer.confirm(
+#             f"¿Deseas eliminar permanentemente el secreto '{target_name}'?",
+#             default=True,
+#         )
+#         if not confirm:
+#             UI.info("Eliminación cancelada.")
+#             raise typer.Exit()
 
-    # Proceder con la eliminación física del archivo
-    file_path = secret_data["path"]
-    try:
-        if file_path.exists():
-            file_path.unlink()
-            UI.success(f"Archivo de credenciales '{target_name}' eliminado del disco.")
+#     # Proceder con la eliminación física del archivo
+#     file_path = secret_data["path"]
+#     try:
+#         if file_path.exists():
+#             file_path.unlink()
+#             UI.success(f"Archivo de credenciales '{target_name}' eliminado del disco.")
 
-        # Eliminar tokens de acceso residuales asociados a este secreto
-        removed_tokens = profile_manager.remove_tokens_for_secret(target_name)
-        if removed_tokens > 0:
-            UI.info(f"Se limpiaron {removed_tokens} token(s) de sesión residual(es).")
+#         # Eliminar tokens de acceso residuales asociados a este secreto
+#         removed_tokens = profile_manager.remove_tokens_for_secret(target_name)
+#         if removed_tokens > 0:
+#             UI.info(f"Se limpiaron {removed_tokens} token(s) de sesión residual(es).")
 
-    except Exception as e:
-        UI.error(f"Ocurrió un error al intentar eliminar el recurso: {e}")
-        raise typer.Exit(code=1)
+#     except Exception as e:
+#         UI.error(f"Ocurrió un error al intentar eliminar el recurso: {e}")
+#         raise typer.Exit(code=1)

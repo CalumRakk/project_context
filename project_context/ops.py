@@ -3,7 +3,10 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from project_context.api_drive import AIStudioDriveManager, ChunkFactory
+from project_context.api_drive import (
+    ChunkFactory,
+    GoogleDriveManager,
+)
 from project_context.git_ops import get_diff_message
 from project_context.schema import (
     ChatIAStudio,
@@ -80,7 +83,7 @@ def _create_base_chat_chunks(
 
 
 def initialize_project_context(
-    api: AIStudioDriveManager, projectcontext: ProjectContext
+    api: GoogleDriveManager, projectcontext: ProjectContext
 ) -> ProjectState:
     UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
 
@@ -101,7 +104,9 @@ def initialize_project_context(
     )
 
     chat_filename = projectcontext.project_path.name + "_chat.prompt"
-    chat_id = api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
+    chat_id = api.create_chat_file(
+        folder_id=api.ai_studio_folder, file_name=chat_filename, chat_data=chat_data
+    )
     if not chat_id:
         raise ValueError("No se pudo crear el chat en Google Drive.")
 
@@ -116,16 +121,14 @@ def initialize_project_context(
     return ProjectState(**initial_state)
 
 
-def update_context(
-    api: AIStudioDriveManager, projectcontext: ProjectContext, state: ProjectState
-) -> ProjectState:
-    chat_id = state.chat_id
-    file_id = state.file_id
+def update_context(api: GoogleDriveManager, projectcontext: ProjectContext):
+    chat_id = projectcontext.chat_id
+    file_id = projectcontext.file_id
+    folder_id = api.ai_studio_folder
 
-    # Autocuración: Si los archivos en Drive no existen, recrear de forma limpia preservando lo local
     try:
-        context_exists = api.gdm.get_file_metadata(file_id) if file_id else None
-        chat_exists = api.gdm.get_file_metadata(chat_id) if chat_id else None
+        context_exists = api.get_file_metadata(file_id) if file_id else None
+        chat_exists = api.get_file_metadata(chat_id) if chat_id else None
     except Exception:
         context_exists = None
         chat_exists = None
@@ -150,20 +153,22 @@ def update_context(
         )
 
         chat_filename = projectcontext.project_path.name + "_chat.prompt"
-        new_chat_id = api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
+        new_chat_id = api.create_chat_file(
+            folder_id, file_name=chat_filename, chat_data=chat_data
+        )
         if not new_chat_id:
             raise ValueError("No se pudo re-inicializar el chat en Google Drive.")
 
-        state.chat_id = new_chat_id
-        state.file_id = context_chunk.file_id  # type: ignore
-        state.md5 = content_md5
+        projectcontext.chat_id = new_chat_id
+        projectcontext.file_id = context_chunk.file_id  # type: ignore
+        projectcontext.md5 = content_md5
 
         UI.success(
             f"¡Sesión re-inicializada con éxito! Nuevo Chat ID: [dim]{new_chat_id}[/]"
         )
-        return state
+        return projectcontext
 
-    context_items = state.context_items
+    context_items = projectcontext.context_items
     has_custom_focus = bool(context_items.files or context_items.folders)
 
     scope_name = (
@@ -178,15 +183,15 @@ def update_context(
     path_context = projectcontext.save_context(content)
     current_md5 = compute_md5(path_context)
 
-    if current_md5 == state.md5:
+    if current_md5 == projectcontext.md5:
         UI.warn("El contenido del contexto es idéntico al actual en Drive.")
-        state.last_modified = projectcontext.project_path.stat().st_mtime
-        return state
+        projectcontext.last_modified = projectcontext.project_path.stat().st_mtime
+        return projectcontext
 
     logger.debug("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
 
     assert file_id is not None
-    api.gdm.update_file_from_memory(file_id, content, "text/plain")
+    api.update_file_from_memory(file_id, content, "text/plain")
 
     logger.debug("Actualizando metadatos del chat (Token Count)...")
     try:
@@ -207,15 +212,15 @@ def update_context(
     except Exception as e:
         UI.error(f"Fallo al actualizar los tokens en el chat: {e}")
 
-    state.last_modified = projectcontext.project_path.stat().st_mtime
-    state.md5 = current_md5
+    projectcontext.last_modified = projectcontext.project_path.stat().st_mtime
+    projectcontext.md5 = current_md5
     UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
 
-    return state
+    return projectcontext
 
 
 def sync_context(
-    api: AIStudioDriveManager, projectcontext: ProjectContext
+    api: GoogleDriveManager, projectcontext: ProjectContext
 ) -> Tuple[ChunksDocument, str]:
     content, expected_tokens = generate_context(projectcontext.project_path)
     path_context = projectcontext.save_context(content)
@@ -223,7 +228,7 @@ def sync_context(
 
     mimetype = "text/plain"
     filename = projectcontext.project_path.name + "_context.txt"
-    document = api.gdm.create_file_from_memory(
+    document = api.create_file_from_memory(
         folder_id=api.ai_studio_folder,
         file_name=filename,
         content=content,
@@ -239,14 +244,14 @@ def sync_context(
 
 
 def _ensure_image_chunk_pair(
-    api: AIStudioDriveManager, img_path: Path, reference_str: str
+    api: GoogleDriveManager, img_path: Path, reference_str: str
 ) -> List:
     """
     Comprueba si una imagen existe en el directorio de Drive; si no, la sube.
     Retorna el par de bloques [Texto Referencia, Imagen Multimodal].
     """
     drive_name = f"ctx_{img_path.name}"
-    drive_file = api.gdm.find_item_by_name(drive_name, parent_id=api.ai_studio_folder)
+    drive_file = api.find_item_by_name(drive_name, parent_id=api.ai_studio_folder)
 
     if not drive_file:
         UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
@@ -254,7 +259,7 @@ def _ensure_image_chunk_pair(
             with open(img_path, "rb") as f:
                 content = f.read()
             mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
-            drive_file = api.gdm.upload_binary_to_drive(
+            drive_file = api.upload_binary_to_drive(
                 api.ai_studio_folder, drive_name, content, mime
             )
         except Exception as e:
@@ -274,7 +279,7 @@ def _ensure_image_chunk_pair(
 
 
 def sync_images(
-    api: AIStudioDriveManager,
+    api: GoogleDriveManager,
     project_path: Path,
     specific_files: Optional[list[Path]] = None,
 ) -> list:
@@ -293,7 +298,7 @@ def sync_images(
 
 
 def rebuild_project_context(
-    api: AIStudioDriveManager, projectcontext: ProjectContext, state: ProjectState
+    api: GoogleDriveManager, projectcontext: ProjectContext, state: ProjectState
 ) -> ProjectState:
     """
     Realiza un Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
@@ -316,7 +321,7 @@ def rebuild_project_context(
     current_md5 = compute_md5(path_context)
 
     UI.info("Actualizando archivo de contexto maestro...")
-    api.gdm.update_file_from_memory(file_id, content, "text/plain")
+    api.update_file_from_memory(file_id, content, "text/plain")
 
     new_chunks = _create_base_chat_chunks(
         file_id, expected_tokens, projectcontext.project_path
@@ -392,7 +397,7 @@ def resolve_image_paths(
 
 
 def extract_chat_assets(
-    api: AIStudioDriveManager, chat_id: str
+    api: GoogleDriveManager, chat_id: str
 ) -> Tuple[ChatIAStudio, Dict]:
     """
     Descarga el JSON del chat y los contenidos binarios referenciados.
@@ -409,12 +414,12 @@ def extract_chat_assets(
         if file_id and file_id not in assets:
             try:
                 metadata = (
-                    api.gdm.service.files()
+                    api.service.files()
                     .get(fileId=file_id, fields="id, name, mimeType")
                     .execute()
                 )
 
-                content_bytes = api.gdm.get_file_content(file_id)
+                content_bytes = api.get_file_content(file_id)
                 if content_bytes:
                     assets[file_id] = {
                         "name": metadata.get("name", f"asset_{file_id}"),
@@ -432,11 +437,11 @@ def extract_chat_assets(
 
 
 def transfer_chat_to_profile(
-    api: AIStudioDriveManager,
+    api: GoogleDriveManager,
     state: ProjectState,
     project_path: Path,
     target_profile: str,
-) -> Tuple[AIStudioDriveManager, ProjectState]:
+) -> Tuple[GoogleDriveManager, ProjectState]:
     """
     Realiza la migración de cuenta, sube los archivos, parchea el JSON
     y establece el nuevo estado seguro.
@@ -454,7 +459,7 @@ def transfer_chat_to_profile(
     profile_manager.set_active_profile(target_profile)
 
     try:
-        new_api = AIStudioDriveManager()
+        new_api = GoogleDriveManager()
     except Exception as e:
         raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
 
@@ -470,7 +475,7 @@ def transfer_chat_to_profile(
     UI.info("Subiendo archivos al nuevo Drive y generando mapa de IDs...")
     id_map = {}
     for old_id, asset_data in assets.items():
-        new_file = new_api.gdm.upload_binary_to_drive(
+        new_file = new_api.upload_binary_to_drive(
             folder_id=new_api.ai_studio_folder,
             file_name=asset_data["name"],
             content=asset_data["bytes"],
@@ -611,7 +616,7 @@ def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
 
 
 def apply_story_update(
-    api: AIStudioDriveManager,
+    api: GoogleDriveManager,
     projectcontext: ProjectContext,
     state: ProjectState,
     media_root_hint: Optional[Path] = None,
@@ -699,7 +704,7 @@ def apply_story_update(
 
 
 def sync_story_images(
-    api: AIStudioDriveManager,
+    api: GoogleDriveManager,
     project_path: Path,
     resolved_images: List[Tuple[Path, str]],
 ) -> list:

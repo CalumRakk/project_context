@@ -1,77 +1,58 @@
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from project_context.api_drive import AIStudioDriveManager
+from project_context.api_drive import GoogleDriveManager
 from project_context.exceptions import (
     InvalidCommandArgumentError,
     MissingStateError,
-    VanishModeActiveError,
 )
-from project_context.history import SnapshotManager
-from project_context.schema import LocalContextItems, ProjectState
+from project_context.schema import LocalContextItems
 from project_context.workspace import ProjectContext
 
 
-@dataclass
 class SessionContext:
-    api: AIStudioDriveManager
-    state: ProjectState
-    project_path: Path
-    monitor: SnapshotManager
-    workspace: ProjectContext
-    session_media_root: Optional[Path] = None
+    def __init__(
+        self,
+        api: GoogleDriveManager,
+        workspace: ProjectContext,
+    ):
+        self.api = api
+        self.workspace = workspace
 
-    def stop_monitor(self):
-        self.monitor.stop_monitoring()
-
-    def start_monitor(self):
-        if self.state.monitor_active:
-            self.monitor.start_monitoring()
-
-    def pause_monitor(self):
-        self.monitor.pause_monitoring()
-
-    def resume_monitor(self):
-        if self.state.monitor_active:
-            self.monitor.resume_monitoring()
-
-    def update_state(self, new_state: ProjectState):
-        """Actualiza el estado de la sesión y persiste los cambios usando el Workspace Manager."""
-        self.state = new_state
-        self.monitor.state = new_state
-        self.workspace.save_project_context_state(new_state)
+    @property
+    def project_path(self) -> Path:
+        return self.workspace.project_path
 
     @property
     def chat_id(self) -> str:
-        if not self.state.chat_id:
+        chat_id = self.workspace.chat_id
+        if not chat_id:
             raise MissingStateError("No se encontró una sesión de chat activa.")
-        return self.state.chat_id
+        return chat_id
 
     @property
     def file_id(self) -> str:
-        if not self.state.file_id:
+        file_id = self.workspace.file_id
+        if not file_id:
             raise MissingStateError("Falta el identificador del archivo de contexto.")
-        return self.state.file_id
+        return file_id
 
     @property
     def context_items(self) -> LocalContextItems:
-        return self.state.context_items
+        return self.workspace.context_items
 
 
 class CommandMetadata:
+    """Metadatos de configuración para comandos de la CLI."""
+
     def __init__(
         self,
         handler: Callable[[SessionContext, List[str]], Optional[bool]],
         require_chat: bool,
-        allow_in_vanish: bool,
-        manage_monitor: bool,
         description: Optional[str] = None,
     ):
         self.handler = handler
         self.require_chat = require_chat
-        self.allow_in_vanish = allow_in_vanish
-        self.manage_monitor = manage_monitor
 
         if description:
             self.description = description
@@ -82,6 +63,8 @@ class CommandMetadata:
 
 
 class CommandRegistry:
+    """Enrutador de comandos interactivos limpio y sin efectos colaterales de monitoreo o vanish."""
+
     def __init__(self):
         self.commands: Dict[str, CommandMetadata] = {}
 
@@ -89,16 +72,13 @@ class CommandRegistry:
         self,
         *names: str,
         require_chat: bool = False,
-        allow_in_vanish: bool = False,
-        manage_monitor: bool = True,
         description: Optional[str] = None,
+        **kwargs,
     ):
         def decorator(func: Callable[[SessionContext, List[str]], Optional[bool]]):
             meta = CommandMetadata(
                 handler=func,
                 require_chat=require_chat,
-                allow_in_vanish=allow_in_vanish,
-                manage_monitor=manage_monitor,
                 description=description,
             )
             for name in names:
@@ -113,38 +93,24 @@ class CommandRegistry:
         cmd_meta = None
         resolved_args = args_list
 
-        # Enrutamiento jerárquico dinámico (Option B Namespace Routing)
         if args_list:
             subcommand_candidate = f"{name}:{args_list[0].lower()}"
             if subcommand_candidate in self.commands:
                 cmd_meta = self.commands[subcommand_candidate]
                 resolved_args = args_list[1:]
 
-        # Fallback al comando base en caso de no haber subcomando
         if not cmd_meta:
             cmd_meta = self.commands.get(name)
 
         if not cmd_meta:
             raise InvalidCommandArgumentError(f"Comando desconocido: '{name}'")
 
-        if ctx.state.vanished and not cmd_meta.allow_in_vanish:
-            raise VanishModeActiveError(
-                "La consola está congelada en modo vanish. Usa 'vanish off' para restaurar la sesión."
-            )
-
-        if cmd_meta.require_chat and not ctx.state.chat_id:
+        if cmd_meta.require_chat and not ctx.workspace.chat_id:
             raise MissingStateError(
                 "No se encontró una sesión de chat activa en este proyecto."
             )
 
-        if cmd_meta.manage_monitor:
-            ctx.pause_monitor()
-
-        try:
-            return cmd_meta.handler(ctx, resolved_args)
-        finally:
-            if cmd_meta.manage_monitor:
-                ctx.resume_monitor()
+        return cmd_meta.handler(ctx, resolved_args)
 
 
 registry = CommandRegistry()

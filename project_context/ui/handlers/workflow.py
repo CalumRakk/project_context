@@ -15,7 +15,6 @@ from project_context.ops import (
     resolve_image_paths,
     sync_images,
 )
-from project_context.profiles import profile_manager
 from project_context.schema import ChunksText
 from project_context.ui.editor import run_editor_mode
 from project_context.ui.registry import SessionContext, registry

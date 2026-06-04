@@ -5,13 +5,13 @@ import typer
 from project_context.exceptions import (
     AuthenticationFailedError,
     FreshInstallRequiredError,
+    ProfileConfigCorruptError,
     ProfileConfigNotFoundError,
-    ProfileConfigurationCorruptError,
     ProjectContextError,
     SecretAssociationMissingError,
     SecretFileMissingError,
 )
-from project_context.profiles import profile_manager
+from project_context.profiles import ProfileManager
 from project_context.ui.ui import UI
 
 
@@ -40,6 +40,7 @@ class AuthConsolePresenter:
             raise typer.Exit(code=1)
 
         elif isinstance(error, ProfileConfigNotFoundError):
+            profile_manager = ProfileManager()
             available_profiles = profile_manager.list_profiles()
             UI.error(str(error), spacing="top")
 
@@ -93,7 +94,7 @@ class AuthConsolePresenter:
             )
             raise typer.Exit(code=1)
 
-        elif isinstance(error, ProfileConfigurationCorruptError):
+        elif isinstance(error, ProfileConfigCorruptError):
             UI.error(str(error), spacing="top")
             raise typer.Exit(code=1)
 

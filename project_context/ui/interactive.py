@@ -1,5 +1,4 @@
 import shlex
-import signal
 import sys
 from pathlib import Path
 
@@ -7,12 +6,11 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter, PathCompleter, WordCompleter
 from prompt_toolkit.history import InMemoryHistory
 
-from project_context.api_drive import AIStudioDriveManager
+from project_context.api_drive import GoogleDriveManager
 from project_context.exceptions import ProjectContextError
-from project_context.history import SnapshotManager
-from project_context.profiles import profile_manager
-from project_context.schema import ProjectState
-from project_context.ui.commands import SessionContext, registry
+from project_context.profiles import ProfileManager
+from project_context.ui.commands import registry
+from project_context.ui.ui import UI
 from project_context.workspace import ProjectContext
 
 
@@ -22,6 +20,7 @@ def create_interactive_completer(
     """
     Construye un completador jerárquico dinámico a partir de las claves del registro.
     """
+    profile_manager = ProfileManager()
     profiles = profile_manager.list_profiles()
     project_path_completer = PathCompleter(
         expanduser=True, get_paths=lambda: [str(project_path)]
@@ -36,7 +35,6 @@ def create_interactive_completer(
             if parent not in nested_dict or not isinstance(nested_dict[parent], dict):
                 nested_dict[parent] = {}
 
-            # Asociar el completador adecuado según la semántica
             if parent in ["context", "story", "images"] and sub in [
                 "add",
                 "rm",
@@ -46,7 +44,6 @@ def create_interactive_completer(
             else:
                 nested_dict[parent][sub] = None
 
-    # Agregar comandos planos (que no actúan como padres de subcomandos)
     for cmd_name in commands:
         if ":" not in cmd_name:
             if cmd_name not in nested_dict:
@@ -61,33 +58,21 @@ def create_interactive_completer(
 
 
 def interactive_session(
-    api: AIStudioDriveManager,
-    state: ProjectState,
+    api: GoogleDriveManager,
     workspace: ProjectContext,
 ):
-    from project_context.ui.ui import UI
+    """
+    Inicia la consola interactiva (shell) sincronizada con Google Drive.
+    Se adapta a firmas de llamada flexibles para mantener la robustez.
+    """
 
-    ctx = SessionContext(
-        api=api,
-        state=state,
-        project_path=workspace.project_path,
-        workspace=workspace,
-        monitor=SnapshotManager(api, workspace.project_path, state),
-    )
+    from project_context.ui.registry import SessionContext
 
-    def handle_exit(sig, frame):
-        UI.info("Cerrando sesión de forma segura...")
-        ctx.stop_monitor()
-        sys.exit(0)
+    ctx = SessionContext(api=api, workspace=workspace)
+    chat_id = workspace.chat_id
 
-    signal.signal(signal.SIGINT, handle_exit)
-    if sys.platform != "win32":
-        signal.signal(signal.SIGTERM, handle_exit)
-
-    ctx.start_monitor()
-
-    url = f"https://aistudio.google.com/prompts/{state.chat_id}"
-    UI.success(f"Chat iniciado: {url} ")
+    url = f"https://aistudio.google.com/prompts/{chat_id}"
+    UI.success(f"Chat iniciado: {url}")
     UI.info("Escribe [green]help[/] para comandos.")
     UI.info("Escribe [green]update[/] para sincronizar los cambios con Drive.")
 
@@ -123,21 +108,18 @@ def interactive_session(
 
         except (EOFError, KeyboardInterrupt):
             UI.info("Saliendo...")
-            ctx.stop_monitor()
             break
         except ProjectContextError as e:
             UI.error(str(e))
             consecutive_errors += 1
             if consecutive_errors > 10:
                 UI.error("Demasiados errores consecutivos. Saliendo de forma segura...")
-                ctx.stop_monitor()
                 sys.exit(1)
         except Exception as e:
             UI.error(f"Error inesperado de ejecución: {e}")
             consecutive_errors += 1
             if consecutive_errors > 10:
                 UI.error(
-                    "Demasiados errores inesperados consecutivos. Saliendo de forma segura..."
+                    "Demasiados inesperados errores consecutivos. Saliendo de forma segura..."
                 )
-                ctx.stop_monitor()
                 sys.exit(1)

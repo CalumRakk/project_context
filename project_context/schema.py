@@ -1,3 +1,5 @@
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -226,18 +228,29 @@ class LocalContextItems(BaseModel):
     exclusions: List[str] = Field(default_factory=list)
 
 
+class ProfileConfig(BaseModel):
+    email: str
+    associated_secret: str
+    created_at: float = Field(default_factory=time.time)
+
+    token_path: Path
+    secret_path: Path
+
+
 class ProjectState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    path: str
-    last_modified: float
-    md5: str
     chat_id: str
     file_id: str
+    file_md5: str = Field(default_factory=str, alias="md5")
+
+    last_modified: float
     context_items: LocalContextItems = Field(default_factory=LocalContextItems)
-    monitor_active: bool = False
-    story_mode: bool = False
-    story_anchor: Optional[str] = None
-    commit_mode: bool = False
-    # TODO: ELIMINAR commit_mode
-    vanished: bool = False
+
+    # path: str
+    # monitor_active: bool = False
+    # story_mode: bool = False
+    # story_anchor: Optional[str] = None
+    # commit_mode: bool = False
+    # # TODO: ELIMINAR commit_mode
+    # vanished: bool = False

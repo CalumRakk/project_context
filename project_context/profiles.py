@@ -2,9 +2,15 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
-from project_context.ui.ui import UI
+from project_context.exceptions import (
+    ProfileActiveNotFoundError,
+    ProfileConfigCorruptError,
+    ProfileConfigNotFoundError,
+    ProfileNotFoundError,
+)
+from project_context.schema import ProfileConfig
 from project_context.utils import get_app_root_dir
 
 logger = logging.getLogger(__name__)
@@ -50,10 +56,6 @@ class ProfileManager:
             except Exception:
                 pass
 
-    def set_temporary_profile(self, profile_name: str):
-        """Establece un perfil activo solo para la ejecución actual en memoria."""
-        self._temp_profile = profile_name
-
     def get_active_profile_name(self) -> Optional[str]:
         if self._temp_profile:
             return self._temp_profile
@@ -91,120 +93,43 @@ class ProfileManager:
     def list_profiles(self) -> list[str]:
         return [f.stem for f in self.profiles_dir.glob("*.json")]
 
-    def load_profile_data(self, profile_name: str) -> dict:
+    def load_profile_data(self, profile_name: str) -> ProfileConfig:
         profile_file = self.profiles_dir / f"{profile_name}.json"
         if not profile_file.exists():
-            return {}
+            raise ProfileConfigNotFoundError(
+                f"El perfil '{profile_name}' no existe en el sistema."
+            )
         try:
-            return json.loads(profile_file.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+            data = json.loads(profile_file.read_text(encoding="utf-8"))
+            email = data.get("email")
+            associated_secret = data.get("associated_secret")
+            token_path = self.tokens_dir / f"{email}__{associated_secret}"
+            secret_path = self.secrets_dir / data["associated_secret"]
+            return ProfileConfig(**data, token_path=token_path, secret_path=secret_path)
+        except json.JSONDecodeError:
+            raise ProfileConfigCorruptError(
+                f"El perfil '{profile_name}' no contiene una estructura JSON legible."
+            )
 
-    def save_profile_data(self, profile_name: str, data: dict):
+    def save_profile_data(self, profile_name: str, data: ProfileConfig):
         profile_file = self.profiles_dir / f"{profile_name}.json"
         profile_file.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(data.model_dump_json(), indent=2), encoding="utf-8"
         )
 
-    def get_active_profile_data(self) -> dict:
-        name = self.get_active_profile_name()
-        if not name:
-            return {}
-        return self.load_profile_data(name)
+    def resolve_profile_name(self, override: Optional[str]) -> str:
+        if override:
+            available = self.list_profiles()
+            if override not in available:
+                raise ProfileNotFoundError(
+                    f"El perfil de usuario '{override}' no existe en este equipo."
+                )
+            return override
 
-    def save_active_profile_data(self, data: dict):
-        name = self.get_active_profile_name()
-        if not name:
-            raise ValueError("No hay ningún perfil activo configurado.")
-        self.save_profile_data(name, data)
+        active = self.get_active_profile_name()
+        if active:
+            return active
 
-    def resolve_secrets_file(self) -> Tuple[Path, str]:
-        profile_name = self.get_active_profile_name()
-        if not profile_name:
-            raise ValueError("No hay ningún perfil activo configurado.")
-
-        profile_data = self.get_active_profile_data()
-        secret_name = profile_data.get("associated_secret")
-
-        available_secrets = sorted(
-            [f for f in self.secrets_dir.glob("*.json") if f.is_file()]
+        raise ProfileActiveNotFoundError(
+            "No hay ningún perfil de usuario activo configurado actualmente."
         )
-
-        if secret_name:
-            if not secret_name.endswith(".json"):
-                secret_name += ".json"
-            specific_path = self.secrets_dir / secret_name
-            if specific_path.exists():
-                return specific_path, f"Asociado al perfil ({secret_name})"
-
-        if len(available_secrets) == 1:
-            auto_secret = available_secrets[0]
-            profile_data["associated_secret"] = auto_secret.name
-            self.save_profile_data(profile_name, profile_data)
-            UI.info(
-                f"Auto-asociando el único secreto disponible: [bold]{auto_secret.name}[/]"
-            )
-            return auto_secret, f"Auto-detectado ({auto_secret.name})"
-
-        elif len(available_secrets) > 1:
-            raise ValueError(
-                f"Conflicto de credenciales: Se detectaron {len(available_secrets)} secretos y "
-                f"el perfil '{profile_name}' no tiene un secreto asociado.\n"
-                f"Especifique uno usando: set-secrets o cambie de perfil."
-            )
-
-        else:
-            fallback_name = secret_name if secret_name else f"{profile_name}.json"
-            if not fallback_name.endswith(".json"):
-                fallback_name += ".json"
-            return self.secrets_dir / fallback_name, "Predeterminado (Faltante)"
-
-    def get_secrets_association_map(self) -> dict:
-        association_map = {}
-        if self.secrets_dir.exists():
-            for file in self.secrets_dir.glob("*.json"):
-                association_map[file.name] = {
-                    "path": file,
-                    "associated_profiles": [],
-                    "exists_on_disk": True,
-                }
-
-        profiles = self.list_profiles()
-        for profile_name in profiles:
-            profile_data = self.load_profile_data(profile_name)
-            secret_name = profile_data.get("associated_secret")
-
-            if secret_name:
-                if not secret_name.endswith(".json"):
-                    secret_name += ".json"
-                if secret_name not in association_map:
-                    association_map[secret_name] = {
-                        "path": self.secrets_dir / secret_name,
-                        "associated_profiles": [],
-                        "exists_on_disk": False,
-                    }
-                association_map[secret_name]["associated_profiles"].append(profile_name)
-
-        return association_map
-
-    def remove_tokens_for_secret(self, secret_name: str) -> int:
-        if not secret_name.endswith(".json"):
-            secret_name += ".json"
-
-        removed_count = 0
-        if self.tokens_dir.exists():
-            for token_file in self.tokens_dir.iterdir():
-                if token_file.is_file() and token_file.name.endswith(
-                    f"__{secret_name}"
-                ):
-                    try:
-                        token_file.unlink()
-                        removed_count += 1
-                    except Exception as e:
-                        logger.warning(
-                            f"No se pudo limpiar el token residual '{token_file.name}': {e}"
-                        )
-        return removed_count
-
-
-profile_manager = ProfileManager()

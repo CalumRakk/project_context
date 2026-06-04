@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Self
 
@@ -9,62 +10,214 @@ from filelock import FileLock, Timeout
 from project_context.exceptions import StateNotFoundError
 
 if TYPE_CHECKING:
-    from project_context.schema import ProjectState
+    from project_context.schema import LocalContextItems, ProjectState
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectContext:
-    """
-    Workspace Manager encargado de la persistencia local del proyecto,
-    control de concurrencia y operaciones sobre archivos de metadatos locales.
-    """
-
     def __init__(self, project_path: Optional[Path] = None):
         self.project_path = project_path or Path.cwd()
         self.local_dir = self.project_path / ".project_context"
         self._state_path = self.local_dir / "state.json"
-        self.local_dir.mkdir(parents=True, exist_ok=True)
         self._lock_path = self.local_dir / "app.lock"
+
+        self.snapshots_dir = self.local_dir / "snapshots"
+        self.objects_dir = self.snapshots_dir / "objects"
+        self.context_store_dir = self.snapshots_dir / "context_store"
+
         self._lock: Optional[FileLock] = None
+        self._state: Optional["ProjectState"] = None
+
+        self.is_multiple_instances = bool(
+            os.getenv("PROJECT_CONTEXT_MULTIPLE_INSTANCES")
+        )
 
     @property
     def is_initialized(self) -> bool:
-        """Determina si el proyecto local tiene un estado inicializado."""
-        return self._state_path.exists() and self._state_path.is_file()
+        return self.local_dir.exists()
+
+    def _initialize(self):
+        confirm = typer.confirm(
+            "Este directorio no ha sido inicializado como un proyecto de project_context.\n"
+            "¿Deseas inicializar un nuevo contexto de proyecto en la ruta actual?",
+            default=True,
+        )
+        if not confirm:
+            from project_context.ui.ui import UI
+
+            UI.info("Operación cancelada.")
+            raise typer.Exit()
+
+        self.local_dir.mkdir(parents=True, exist_ok=True)
+        self.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.objects_dir.mkdir(parents=True, exist_ok=True)
 
     def __enter__(self) -> Self:
         if not self.is_initialized:
-            confirm = typer.confirm(
-                "Este directorio no ha sido inicializado como un proyecto de project_context.\n"
-                "¿Deseas inicializar un nuevo contexto de proyecto en la ruta actual?",
-                default=True,
-            )
-            if not confirm:
+            self._initialize()
+
+        if self.is_multiple_instances is False:
+            self._lock = FileLock(self._lock_path, timeout=0)
+            try:
+                self._lock.acquire(timeout=0)
+            except Timeout:
                 from project_context.ui.ui import UI
 
-                UI.info("Operación cancelada.")
-                raise typer.Exit()
+                UI.error(
+                    "Ya existe una instancia de project_context operando activamente en este proyecto.\n"
+                    "Por favor, cierra la sesión abierta en la otra terminal antes de iniciar una nueva."
+                )
+                raise typer.Exit(code=1)
 
-        self._lock = FileLock(self._lock_path, timeout=0)
-        try:
-            self._lock.acquire(timeout=0)
-            return self
-        except Timeout:
-            from project_context.ui.ui import UI
-
-            UI.error(
-                "Ya existe una instancia de project_context operando activamente en este proyecto.\n"
-                "Por favor, cierra la sesión abierta en la otra terminal antes de iniciar una nueva."
-            )
-            raise typer.Exit(code=1)
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._lock:
+        if self._lock and self.is_multiple_instances is False:
             try:
                 self._lock.release()
             except Exception as e:
                 logger.debug(f"Error liberando el archivo de bloqueo: {e}")
+
+    # --- GESTIÓN DE ESTADO TRANSPARENTE ---
+
+    def _ensure_state_loaded(self):
+        if self._state is None:
+            try:
+                self._state = self.load_project_context_state()
+            except StateNotFoundError:
+                from project_context.schema import LocalContextItems, ProjectState
+
+                self._state = ProjectState(
+                    chat_id="",
+                    file_id="",
+                    md5="",
+                    last_modified=0.0,
+                    context_items=LocalContextItems(),
+                )
+
+    def save(self):
+        """Guarda explícitamente el estado actual en el disco."""
+        if self._state is not None:
+            self.save_project_context_state(self._state)
+
+    @property
+    def chat_id(self) -> str:
+        self._ensure_state_loaded()
+        return self._state.chat_id if self._state else ""
+
+    @chat_id.setter
+    def chat_id(self, value: str):
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.chat_id = value
+            self.save()
+
+    @property
+    def file_id(self) -> str:
+        self._ensure_state_loaded()
+        return self._state.file_id if self._state else ""
+
+    @file_id.setter
+    def file_id(self, value: str):
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.file_id = value
+            self.save()
+
+    @property
+    def md5(self) -> str:
+        self._ensure_state_loaded()
+        if self._state:
+            return getattr(self._state, "file_md5", getattr(self._state, "md5", ""))
+        return ""
+
+    @md5.setter
+    def md5(self, value: str):
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.file_md5 = value
+            if hasattr(self._state, "md5"):
+                setattr(self._state, "md5", value)
+            self.save()
+
+    @property
+    def last_modified(self) -> float:
+        self._ensure_state_loaded()
+        return self._state.last_modified if self._state else 0.0
+
+    @last_modified.setter
+    def last_modified(self, value: float):
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.last_modified = value
+            self.save()
+
+    @property
+    def context_items(self) -> "LocalContextItems":
+        self._ensure_state_loaded()
+        from project_context.schema import LocalContextItems
+
+        if self._state and hasattr(self._state, "context_items"):
+            return self._state.context_items
+        return LocalContextItems()
+
+    @context_items.setter
+    def context_items(self, value: "LocalContextItems"):
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.context_items = value
+            self.save()
+
+    @property
+    def story_mode(self) -> bool:
+        self._ensure_state_loaded()
+        return getattr(self._state, "story_mode", False) if self._state else False
+
+    @story_mode.setter
+    def story_mode(self, value: bool):
+        self._ensure_state_loaded()
+        if self._state:
+            setattr(self._state, "story_mode", value)
+            self.save()
+
+    @property
+    def story_anchor(self) -> Optional[str]:
+        self._ensure_state_loaded()
+        return getattr(self._state, "story_anchor", None) if self._state else None
+
+    @story_anchor.setter
+    def story_anchor(self, value: Optional[str]):
+        self._ensure_state_loaded()
+        if self._state:
+            setattr(self._state, "story_anchor", value)
+            self.save()
+
+    @property
+    def vanished(self) -> bool:
+        self._ensure_state_loaded()
+        return getattr(self._state, "vanished", False) if self._state else False
+
+    @vanished.setter
+    def vanished(self, value: bool):
+        self._ensure_state_loaded()
+        if self._state:
+            setattr(self._state, "vanished", value)
+            self.save()
+
+    @property
+    def commit_mode(self) -> bool:
+        self._ensure_state_loaded()
+        return getattr(self._state, "commit_mode", False) if self._state else False
+
+    @commit_mode.setter
+    def commit_mode(self, value: bool):
+        self._ensure_state_loaded()
+        if self._state:
+            setattr(self._state, "commit_mode", value)
+            self.save()
+
+    # --- OPERACIONES DE PERSISTENCIA ---
 
     def save_context(self, context: str) -> Path:
         """Guarda el contexto consolidado en last_context.txt."""
@@ -78,7 +231,7 @@ class ProjectContext:
         self._state_path.write_text(content, encoding="utf-8")
         self.ensure_gitignore(state_data.model_dump())
 
-    def load_project_context_state(self):
+    def load_project_context_state(self) -> "ProjectState":
         """Carga y valida el archivo state.json convirtiéndolo en un modelo Pydantic."""
         from project_context.schema import ProjectState
 
@@ -97,7 +250,6 @@ class ProjectContext:
 
     def save_stash(self, filename: str, content: str):
         """Almacena una copia de seguridad en memoria en el subdirectorio local."""
-        # TODO: puede ser confuso el termino "content" como str, porque depende utilizar chat_data.model_dump_json() antes.
         self._get_stash_path(filename).write_text(content, encoding="utf-8")
 
     def load_stash(self, filename: str) -> Optional[str]:
