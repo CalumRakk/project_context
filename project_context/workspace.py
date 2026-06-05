@@ -1,13 +1,17 @@
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Self
 
+import gitingest
 import typer
 from filelock import FileLock, Timeout
 
 from project_context.exceptions import StateNotFoundError
+from project_context.schema import Context
+from project_context.utils import get_ignore_patterns, human_to_int
 
 if TYPE_CHECKING:
     from project_context.schema import LocalContextItems, ProjectState
@@ -44,7 +48,7 @@ class ProjectContext:
             default=True,
         )
         if not confirm:
-            from project_context.ui.ui import UI
+            from project_context.ui import UI
 
             UI.info("Operación cancelada.")
             raise typer.Exit()
@@ -62,7 +66,7 @@ class ProjectContext:
             try:
                 self._lock.acquire(timeout=0)
             except Timeout:
-                from project_context.ui.ui import UI
+                from project_context.ui import UI
 
                 UI.error(
                     "Ya existe una instancia de project_context operando activamente en este proyecto.\n"
@@ -78,8 +82,6 @@ class ProjectContext:
                 self._lock.release()
             except Exception as e:
                 logger.debug(f"Error liberando el archivo de bloqueo: {e}")
-
-    # --- GESTIÓN DE ESTADO TRANSPARENTE ---
 
     def _ensure_state_loaded(self):
         if self._state is None:
@@ -217,8 +219,6 @@ class ProjectContext:
             setattr(self._state, "commit_mode", value)
             self.save()
 
-    # --- OPERACIONES DE PERSISTENCIA ---
-
     def save_context(self, context: str) -> Path:
         """Guarda el contexto consolidado en last_context.txt."""
         output = self.local_dir / "last_context.txt"
@@ -245,24 +245,6 @@ class ProjectContext:
                 "El archivo state.json no contiene una estructura JSON legible."
             ) from e
 
-    def _get_stash_path(self, filename: str) -> Path:
-        return self.local_dir / filename
-
-    def save_stash(self, filename: str, content: str):
-        """Almacena una copia de seguridad en memoria en el subdirectorio local."""
-        self._get_stash_path(filename).write_text(content, encoding="utf-8")
-
-    def load_stash(self, filename: str) -> Optional[str]:
-        """Recupera el contenido de un respaldo local si existe."""
-        path = self._get_stash_path(filename)
-        return path.read_text(encoding="utf-8") if path.exists() else None
-
-    def clear_stash(self, filename: str):
-        """Elimina físicamente un archivo de respaldo local."""
-        path = self._get_stash_path(filename)
-        if path.exists():
-            path.unlink()
-
     def ensure_gitignore(self, state_dict: Optional[dict] = None):
         """Verifica y añade la regla de exclusión del directorio local a .gitignore."""
         if state_dict and state_dict.get("auto_gitignore") is False:
@@ -279,7 +261,7 @@ class ProjectContext:
             if any(line == rule or line == ".project_context" for line in lines):
                 return
 
-            from project_context.ui.ui import UI
+            from project_context.ui import UI
 
             UI.info("Añadiendo '.project_context/' a .gitignore...")
             suffix = "\n" if content and not content.endswith("\n") else ""
@@ -291,6 +273,85 @@ class ProjectContext:
             gitignore_path.write_text(new_content, encoding="utf-8")
             UI.success(".gitignore actualizado automáticamente.")
         except Exception as e:
-            from project_context.ui.ui import UI
+            from project_context.ui import UI
 
             UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
+
+    def generate_context(self) -> Context:
+        if not self.context_items or (
+            not self.context_items.files and not self.context_items.folders
+        ):
+            custom_ignores = get_ignore_patterns(self.project_path, ".contextignore")
+            summary, tree, content = gitingest.ingest(
+                self.project_path.as_posix(), exclude_patterns=set(custom_ignores)
+            )
+            estimated_tokens = human_to_int(summary.split()[-1])
+
+            text = tree + "\n\n" + content
+            return Context(text=text, token_count=estimated_tokens)
+
+        custom_ignores = get_ignore_patterns(self.project_path, ".contextignore")
+
+        final_tree = "Directory structure (Custom Focus):\n"
+        final_content = ""
+        total_tokens = 0
+
+        files = self.context_items.files
+        if files:
+            final_tree += "└── [Archivos Específicos Añadidos]\n"
+            for idx, f_path in enumerate(files):
+                real_path = self.project_path / f_path
+                prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+                final_tree += f"{prefix}{f_path}\n"
+
+                if real_path.exists() and real_path.is_file():
+                    try:
+                        text = real_path.read_text(encoding="utf-8")
+                        final_content += f"================================================\nFILE: {f_path}\n================================================\n{text}\n\n"
+                        total_tokens += len(text) // 4
+                    except Exception as e:
+                        final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
+
+        folders = self.context_items.folders
+        exclusions = self.context_items.exclusions
+        if folders:
+            final_tree += "└── [Carpetas Específicas Añadidas]\n"
+            for folder in folders:
+                real_folder = self.project_path / folder
+                if real_folder.exists() and real_folder.is_dir():
+                    folder_path_obj = Path(folder)
+                    folder_specific_ignores = list(custom_ignores)
+
+                    for exc in exclusions:
+                        exc_path = Path(exc)
+                        try:
+                            rel_exc = exc_path.relative_to(folder_path_obj)
+                            folder_specific_ignores.append(str(rel_exc.as_posix()))
+                        except ValueError:
+                            pass
+
+                    summary, tree, content = gitingest.ingest(
+                        str(real_folder), exclude_patterns=set(folder_specific_ignores)
+                    )
+
+                    indented_tree = "\n".join(
+                        f"    {line}" for line in tree.splitlines()
+                    )
+                    final_tree += f"{indented_tree}\n"
+
+                    final_content += f"{content}\n"
+                    total_tokens += human_to_int(summary.split()[-1])
+
+        full_context = final_tree + "\n" + final_content
+        return Context(text=full_context, token_count=total_tokens)
+
+    @staticmethod
+    def create_state(chat_id: str, file_id: str, file_md5: str) -> "ProjectState":
+        from project_context.schema import ProjectState
+
+        return ProjectState(
+            chat_id=chat_id,
+            file_id=file_id,
+            md5=file_md5,
+            last_modified=time.time(),
+        )

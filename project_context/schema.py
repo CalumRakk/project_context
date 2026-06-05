@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
     pass
@@ -254,3 +254,22 @@ class ProjectState(BaseModel):
     # commit_mode: bool = False
     # # TODO: ELIMINAR commit_mode
     # vanished: bool = False
+
+
+class Context(BaseModel):
+    text: str
+    token_count: int
+    md5sum: str = Field(default_factory=str, alias="md5")
+
+    @model_validator(mode="after")
+    def compute_md5sum(self):
+        from project_context.utils import compute_md5
+
+        if bool(self.md5sum) is False:
+            self.md5sum = compute_md5(self.text)
+        return self
+
+
+class ContextRemote(BaseModel):
+    context: Context
+    file_id: str

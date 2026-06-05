@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 from contextlib import contextmanager
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, cast
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -13,13 +13,22 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from project_context.schema import (
     ChatIAStudio,
     Chunk,
+    ChunkedPrompt,
     ChunksDocument,
     ChunksImage,
     ChunksText,
+    ContextRemote,
     DriveDocument,
     Role,
+    RunSettings,
+    SystemInstruction,
 )
-from project_context.utils import COMMIT_TASK_MARKER, UI
+from project_context.utils import (
+    COMMIT_TASK_MARKER,
+    PROMPT_TEMPLATE,
+    RESPONSE_TEMPLATE,
+    UI,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,40 @@ class ChunkFactory:
     @staticmethod
     def create_image(file_id: str, role: Role = "user") -> ChunksImage:
         return ChunksImage(driveImage=DriveDocument(id=file_id), role=role)
+
+    @classmethod
+    def create_default_run_settings(cls) -> RunSettings:
+        """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
+        thinkingLevel = "THINKING_MEDIUM"
+        return RunSettings(
+            model="models/gemini-3.5-flash",
+            temperature=1.0,
+            topP=0.95,
+            topK=64,
+            maxOutputTokens=65536,
+            thinkingBudget=None,
+            thinkingLevel=thinkingLevel,
+        )
+
+    @classmethod
+    def build_initial_chat(cls, context_remote: ContextRemote):
+        """Construye los tres chunks iniciales estándar (Contexto, Prompt de bienvenida, Acuse de recibo)."""
+
+        context = context_remote.context
+        context_chunk = ChunkFactory.create_file(
+            context_remote.file_id, role="user", tokens=context.token_count
+        )
+        prompt_chunk = ChunkFactory.create_text(PROMPT_TEMPLATE, role="user")
+        model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
+        chunks = [context_chunk, prompt_chunk, model_chunk]
+        return ChatIAStudio(
+            runSettings=cls.create_default_run_settings(),
+            systemInstruction=SystemInstruction(),
+            chunkedPrompt=ChunkedPrompt(
+                chunks=chunks,
+                pendingInputs=[],
+            ),
+        )
 
 
 class GoogleDriveManager:
@@ -72,18 +115,19 @@ class GoogleDriveManager:
         self._ai_studio_folder_id = folder["id"]
         return self._ai_studio_folder_id
 
-    # --- MÉTODOS PRIVADOS DE BAJO NIVEL (NATIVOS) ---
-
     def _download_bytes(self, file_id: str) -> Optional[bytes]:
+        """Descarga un archivo de Drive en memoria y devuelve sus bytes."""
         try:
-            with self._lock:
-                request = self.service.files().get_media(fileId=file_id)
-                file_stream = io.BytesIO()
-                downloader = MediaIoBaseDownload(file_stream, request)
-                done = False
-                while not done:
-                    status, done = downloader.next_chunk()
-                return file_stream.getvalue()
+            request = self.service.files().get_media(fileId=file_id)
+            file_stream = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_stream, request)
+            done = False
+
+            while not done:
+                status, done = downloader.next_chunk()
+
+            return file_stream.getvalue()
+
         except HttpError as error:
             if error.resp.status == 404:
                 logger.debug(
@@ -151,8 +195,6 @@ class GoogleDriveManager:
             logger.debug(f"Error al buscar archivos por consulta '{query}': {error}")
             return []
 
-    # --- MÉTODOS PÚBLICOS DE ALTO NIVEL (DOMINIO) ---
-
     def list_files(self, folder_id: str = "root") -> list[dict]:
         items = []
         page_token = None
@@ -197,25 +239,27 @@ class GoogleDriveManager:
             logger.error(f"Error al buscar el item '{name}': {error}")
             return None
 
-    def get_file_content(self, file_id: str) -> Optional[bytes]:
-        return self._download_bytes(file_id)
-
     def update_file_from_memory(
         self, file_id: str, content: str, mime_type: str
-    ) -> Optional[dict]:
-        updated_file = self._upload_bytes(
+    ) -> str:
+        file = self._upload_bytes(
             content.encode("utf-8"),
             mime_type,
             file_id=file_id,
             fields="id, name, modifiedTime",
         )
-        if updated_file:
+        if file:
             UI.success("Archivo actualizado en Drive.")
-        return updated_file
+
+        if not file or "id" not in file:
+            raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
+
+        return cast(str, file["id"])
 
     def create_file_from_memory(
         self, folder_id: str, file_name: str, content: str, mime_type: str
-    ) -> Optional[dict]:
+    ) -> str:
+        """Crea un archivo en Drive con el contenido proporcionado."""
         file_metadata = {
             "name": file_name,
             "parents": [folder_id],
@@ -228,7 +272,10 @@ class GoogleDriveManager:
             logger.debug(
                 f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")'
             )
-        return file
+        if not file or "id" not in file:
+            raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
+
+        return cast(str, file["id"])
 
     def get_file_metadata(
         self, file_id: str, fields: str = "id, name, modifiedTime, md5Checksum"
@@ -258,52 +305,56 @@ class GoogleDriveManager:
         }
         return self._upload_bytes(content, mime_type, metadata=file_metadata)
 
-    # --- OPERACIONES DEL CHAT (MÉTODOS DE DOMINIO) ---
-
-    def get_chat_ia_studio(self, chat_id: str) -> Optional[ChatIAStudio]:
+    def get_chat(self, chat_id: str) -> ChatIAStudio:
         content_bytes = self._download_bytes(chat_id)
         if not content_bytes:
             logger.debug(
                 f"No se pudo obtener el contenido del chat con ID '{chat_id}'."
             )
-            return None
-        try:
-            chat_content = json.loads(content_bytes.decode("utf-8"))
-            return ChatIAStudio(**chat_content)
-        except json.JSONDecodeError as e:
-            logger.debug(f"Error al decodificar el JSON del chat '{chat_id}': {e}")
-            return None
+            raise
 
-    def create_chat_file(
+        chat_content = json.loads(content_bytes.decode("utf-8"))
+        return ChatIAStudio(**chat_content)
+
+    def create_chat(
         self, folder_id: str, file_name: str, chat_data: ChatIAStudio
-    ) -> Optional[str]:
+    ) -> str:
         content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
-        result = self.create_file_from_memory(
+        return self.create_file_from_memory(
             folder_id=folder_id,
             file_name=file_name,
             content=content_json,
             mime_type=self.MIME_PROMPT,
         )
-        return result.get("id") if result else None
 
-    def update_chat_file(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
-        try:
-            content_json = chat_data.model_dump_json(
-                exclude_none=True, exclude_unset=True
-            )
-            result = self.update_file_from_memory(
-                file_id=chat_id,
-                content=content_json,
-                mime_type=self.MIME_PROMPT,
-            )
-            return bool(result)
-        except Exception as e:
-            logger.debug(f"Error actualizando chat: {e}")
-            return False
+    def update_chat(self, chat_id: str, chat_data: ChatIAStudio):
+        """Actualiza el chat en Drive."""
+        content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
+        self.update_file_from_memory(
+            file_id=chat_id,
+            content=content_json,
+            mime_type=self.MIME_PROMPT,
+        )
+
+    # def update_chat(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
+    #     try:
+    #         content_json = chat_data.model_dump_json(
+    #             exclude_none=True, exclude_unset=True
+    #         )
+    #         result = self.update_file_from_memory(
+    #             file_id=chat_id,
+    #             content=content_json,
+    #             mime_type=self.MIME_PROMPT,
+    #         )
+    #         return bool(result)
+    #     except Exception as e:
+    #         logger.debug(f"Error actualizando chat: {e}")
+    #         return False
 
     @contextmanager
     def modify_chat(self, chat_id: str) -> Generator[ChatIAStudio, None, None]:
-        chat = self.get_chat_ia_studio(chat_id)
+
+        chat = self.get_chat(chat_id)
         if not chat:
             raise FileNotFoundError(f"Chat {chat_id} no encontrado o inaccesible.")
 
@@ -313,10 +364,10 @@ class GoogleDriveManager:
             UI.error(f"Error procesando chat (cambios descartados): {e}")
             raise e
         else:
-            if not self.update_chat_file(chat_id, chat):
+            if not self.update_chat(chat_id, chat):
                 raise IOError("Falló la escritura del chat en Google Drive.")
 
-    def clear_chat_ia_studio(self, chat_id: str) -> bool:
+    def clear_chat(self, chat_id: str) -> bool:
         try:
             with self.modify_chat(chat_id) as chat:
                 chunks = chat.chunkedPrompt.chunks
@@ -426,7 +477,7 @@ class GoogleDriveManager:
             return 0
 
     def has_pending_commit_suggestion(self, chat_id: str) -> bool:
-        chat = self.get_chat_ia_studio(chat_id)
+        chat = self.get_chat(chat_id)
         if not chat:
             return False
 
@@ -440,3 +491,13 @@ class GoogleDriveManager:
                         return False
                 return True
         return False
+
+    def can_access_file(self, file_id):
+        try:
+            self.service.files().get(fileId=file_id, fields="id").execute()
+            return True
+
+        except HttpError as e:
+            if e.resp.status == 404:
+                return False
+            raise

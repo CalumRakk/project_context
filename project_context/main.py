@@ -119,17 +119,15 @@ def main():
     import logging
     import sys
 
-    from project_context.exceptions import ProjectContextError
-    from project_context.ui.presenters import AuthConsolePresenter
-    from project_context.ui.ui import UI
+    from project_context.ui import UI
 
     logger = logging.getLogger("project_context.main")
 
     try:
         app()
-    except ProjectContextError as e:
-        # Los errores de dominio conocidos se delegan al presentador de consola
-        AuthConsolePresenter.handle_error(e)
+    # except ProjectContextError as e:
+    #     # Los errores de dominio conocidos se delegan al presentador de consola
+    #     AuthConsolePresenter.handle_error(e)
 
     except KeyboardInterrupt:
         # Manejo limpio de Ctrl+C fuera de la sesión interactiva

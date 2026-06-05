@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.theme import Theme
 
 from project_context.schema import LocalContextItems
-from project_context.ui.ui import UI
+from project_context.ui import UI
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,8 @@ def compute_md5(source: Union[bytes, str, Path]) -> str:
 
     if isinstance(source, bytes):
         hash_md5.update(source)
+    elif isinstance(source, str):
+        hash_md5.update(source.encode("utf-8"))
     else:
         file_path = Path(source)  # type: ignore
         with open(file_path, "rb") as f:
@@ -247,21 +249,21 @@ def has_files_modified_since(
     raise Exception("No se encontraron archivos modificados")
 
 
-def resolve_prompt(project_path: Union[str, Path]) -> str:
-    """Busca un archivo '.contextprompt' o retorna el template por defecto."""
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
-    prompt_file = project_path / ".contextprompt"
+# def resolve_prompt(project_path: Union[str, Path]) -> str:
+#     """Busca un archivo '.contextprompt' o retorna el template por defecto."""
+#     project_path = Path(project_path) if isinstance(project_path, str) else project_path
+#     prompt_file = project_path / ".contextprompt"
 
-    if prompt_file.exists() and prompt_file.is_file():
-        try:
-            content = prompt_file.read_text(encoding="utf-8").strip()
-            if content:
-                logger.debug(f"Usando prompt personalizado desde: {prompt_file.name}")
-                return content
-        except Exception as e:
-            logger.debug(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
+#     if prompt_file.exists() and prompt_file.is_file():
+#         try:
+#             content = prompt_file.read_text(encoding="utf-8").strip()
+#             if content:
+#                 logger.debug(f"Usando prompt personalizado desde: {prompt_file.name}")
+#                 return content
+#         except Exception as e:
+#             logger.debug(f"Advertencia: No se pudo leer {prompt_file.name}: {e}")
 
-    return PROMPT_TEMPLATE
+#     return PROMPT_TEMPLATE
 
 
 def get_filtered_files(project_path: Path, extensions: set[str]) -> list[Path]:

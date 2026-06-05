@@ -1,50 +1,25 @@
 import logging
-import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
-from project_context.api_drive import (
+from project_context.schema import (
+    ChunksDocument,
+    Context,
+    ContextRemote,
+)
+from project_context.services.api_drive import (
     ChunkFactory,
     GoogleDriveManager,
 )
-from project_context.git_ops import get_diff_message
-from project_context.schema import (
-    ChatIAStudio,
-    ChunkedPrompt,
-    ChunksDocument,
-    ChunksText,
-    ProjectState,
-    RunSettings,
-    SystemInstruction,
-)
+from project_context.services.git_ops import get_diff_message
 from project_context.utils import (
     COMMIT_TASK_MARKER,
-    RESPONSE_TEMPLATE,
     UI,
-    compute_md5,
-    extract_image_references,
-    generate_context,
-    get_filtered_files,
-    resolve_prompt,
 )
 from project_context.workspace import ProjectContext
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 logger = logging.getLogger(__name__)
-
-
-def create_default_run_settings() -> RunSettings:
-    """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
-    thinkingLevel = "THINKING_MEDIUM"
-    return RunSettings(
-        model="models/gemini-3.5-flash",
-        temperature=1.0,
-        topP=0.95,
-        topK=64,
-        maxOutputTokens=65536,
-        thinkingBudget=None,
-        thinkingLevel=thinkingLevel,
-    )
 
 
 def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
@@ -70,649 +45,548 @@ def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
     return prompt_text
 
 
-def _create_base_chat_chunks(
-    file_id: str, expected_tokens: int, project_path: Path
-) -> List:
-    """Construye los tres chunks iniciales estándar (Contexto, Prompt de bienvenida, Acuse de recibo)."""
-    context_chunk = ChunkFactory.create_file(
-        file_id, role="user", tokens=expected_tokens
-    )
-    prompt_chunk = ChunkFactory.create_text(resolve_prompt(project_path), role="user")
-    model_chunk = ChunkFactory.create_text(RESPONSE_TEMPLATE, role="model")
-    return [context_chunk, prompt_chunk, model_chunk]
+def build_filename_chat(project_path: Path) -> str:
+    # TODO: buscar una buena ubicacion.
+    return project_path.name + "_chat.prompt"
 
 
-def initialize_project_context(
-    api: GoogleDriveManager, projectcontext: ProjectContext
-) -> ProjectState:
-    UI.info("Primer uso para este proyecto. [bold]Creando contexto inicial...[/]")
-
-    context_chunk, content_md5 = sync_context(api, projectcontext)
-    chunks = _create_base_chat_chunks(
-        context_chunk.file_id,  # type: ignore
-        context_chunk.tokenCount,
-        projectcontext.project_path,
-    )
-
-    chat_data = ChatIAStudio(
-        runSettings=create_default_run_settings(),
-        systemInstruction=SystemInstruction(),
-        chunkedPrompt=ChunkedPrompt(
-            chunks=chunks,
-            pendingInputs=[],
-        ),
-    )
-
-    chat_filename = projectcontext.project_path.name + "_chat.prompt"
-    chat_id = api.create_chat_file(
-        folder_id=api.ai_studio_folder, file_name=chat_filename, chat_data=chat_data
-    )
-    if not chat_id:
-        raise ValueError("No se pudo crear el chat en Google Drive.")
-
-    initial_state = {
-        "path": str(projectcontext.project_path),
-        "last_modified": projectcontext.project_path.stat().st_mtime,
-        "md5": content_md5,
-        "chat_id": chat_id,
-        "file_id": context_chunk.file_id,
-    }
-    UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
-    return ProjectState(**initial_state)
-
-
-def update_context(api: GoogleDriveManager, projectcontext: ProjectContext):
-    chat_id = projectcontext.chat_id
-    file_id = projectcontext.file_id
-    folder_id = api.ai_studio_folder
-
-    try:
-        context_exists = api.get_file_metadata(file_id) if file_id else None
-        chat_exists = api.get_file_metadata(chat_id) if chat_id else None
-    except Exception:
-        context_exists = None
-        chat_exists = None
-
-    if not context_exists or not chat_exists:
-        UI.warn(
-            "(!) Los archivos de la sesión activa en Google Drive no están disponibles."
-        )
-        UI.info("Re-inicializando entorno en la nube preservando tu historial local...")
-
-        context_chunk, content_md5 = sync_context(api, projectcontext)
-        chunks = _create_base_chat_chunks(
-            context_chunk.file_id,  # type: ignore
-            context_chunk.tokenCount,
-            projectcontext.project_path,
-        )
-
-        chat_data = ChatIAStudio(
-            runSettings=create_default_run_settings(),
-            systemInstruction=SystemInstruction(),
-            chunkedPrompt=ChunkedPrompt(chunks=chunks, pendingInputs=[]),
-        )
-
-        chat_filename = projectcontext.project_path.name + "_chat.prompt"
-        new_chat_id = api.create_chat_file(
-            folder_id, file_name=chat_filename, chat_data=chat_data
-        )
-        if not new_chat_id:
-            raise ValueError("No se pudo re-inicializar el chat en Google Drive.")
-
-        projectcontext.chat_id = new_chat_id
-        projectcontext.file_id = context_chunk.file_id  # type: ignore
-        projectcontext.md5 = content_md5
-
-        UI.success(
-            f"¡Sesión re-inicializada con éxito! Nuevo Chat ID: [dim]{new_chat_id}[/]"
-        )
-        return projectcontext
-
-    context_items = projectcontext.context_items
-    has_custom_focus = bool(context_items.files or context_items.folders)
-
-    scope_name = (
-        "Enfoque Específico (Stage)" if has_custom_focus else "Raíz del proyecto"
-    )
-
-    logger.debug(f"Escaneando cambios en {scope_name}...")
-
-    content, new_tokens = generate_context(
-        projectcontext.project_path, context_items=context_items
-    )
-    path_context = projectcontext.save_context(content)
-    current_md5 = compute_md5(path_context)
-
-    if current_md5 == projectcontext.md5:
-        UI.warn("El contenido del contexto es idéntico al actual en Drive.")
-        projectcontext.last_modified = projectcontext.project_path.stat().st_mtime
-        return projectcontext
-
-    logger.debug("Cambios o nuevo enfoque detectado. Actualizando contexto en Drive...")
-
-    assert file_id is not None
-    api.update_file_from_memory(file_id, content, "text/plain")
-
-    logger.debug("Actualizando metadatos del chat (Token Count)...")
-    try:
-        with api.modify_chat(chat_id) as chat_data:
-            updated_metadata = False
-            for chunk in chat_data.chunkedPrompt.chunks:
-                if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
-                    chunk.tokenCount = new_tokens
-                    updated_metadata = True
-                    break
-
-            if updated_metadata:
-                UI.info(f"Metadatos actualizados: [bold]{new_tokens}[/] tokens.")
-            else:
-                UI.warn(
-                    "No se pudo encontrar el bloque de contexto en el chat para actualizar tokens."
-                )
-    except Exception as e:
-        UI.error(f"Fallo al actualizar los tokens en el chat: {e}")
-
-    projectcontext.last_modified = projectcontext.project_path.stat().st_mtime
-    projectcontext.md5 = current_md5
-    UI.success(f"Sincronización de enfoque ({scope_name}) completada.")
-
-    return projectcontext
-
-
-def sync_context(
-    api: GoogleDriveManager, projectcontext: ProjectContext
-) -> Tuple[ChunksDocument, str]:
-    content, expected_tokens = generate_context(projectcontext.project_path)
-    path_context = projectcontext.save_context(content)
-    content_md5 = compute_md5(path_context)
+def create_context_document(
+    api: GoogleDriveManager, filename: str, context: Context
+) -> ContextRemote:
+    """Crea el documento de contexto en google Drive y devuelve objeto."""
 
     mimetype = "text/plain"
-    filename = projectcontext.project_path.name + "_context.txt"
-    document = api.create_file_from_memory(
+    file_id = api.create_file_from_memory(
         folder_id=api.ai_studio_folder,
         file_name=filename,
-        content=content,
+        content=context.text,
         mime_type=mimetype,
     )
-    if not document or "id" not in document:
-        raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
-
-    chat_file = ChunkFactory.create_file(
-        file_id=document["id"], role="user", tokens=expected_tokens
-    )
-    return chat_file, content_md5
+    return ContextRemote(context=context, file_id=file_id)
 
 
-def _ensure_image_chunk_pair(
-    api: GoogleDriveManager, img_path: Path, reference_str: str
-) -> List:
-    """
-    Comprueba si una imagen existe en el directorio de Drive; si no, la sube.
-    Retorna el par de bloques [Texto Referencia, Imagen Multimodal].
-    """
-    drive_name = f"ctx_{img_path.name}"
-    drive_file = api.find_item_by_name(drive_name, parent_id=api.ai_studio_folder)
-
-    if not drive_file:
-        UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
-        try:
-            with open(img_path, "rb") as f:
-                content = f.read()
-            mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
-            drive_file = api.upload_binary_to_drive(
-                api.ai_studio_folder, drive_name, content, mime
-            )
-        except Exception as e:
-            UI.error(f"No se pudo subir la imagen {img_path.name}: {e}")
-            return []
-    else:
-        UI.info(f"Reutilizando imagen existente en Drive: [dim]{drive_name}[/]")
-
-    if drive_file:
-        prompt = ChunkFactory.create_text(
-            f"Archivo visual: {reference_str}", role="user"
-        )
-        image = ChunkFactory.create_image(drive_file["id"], role="user")
-        return [prompt, image]
-
-    return []
+def update_context_document(api: GoogleDriveManager, context: Context, file_id: str):
+    mimetype = "text/plain"
+    file_id = api.update_file_from_memory(file_id, context.text, mimetype)
+    return ContextRemote(context=context, file_id=file_id)
 
 
-def sync_images(
-    api: GoogleDriveManager,
-    project_path: Path,
-    specific_files: Optional[list[Path]] = None,
-) -> list:
-    """Sincroniza imágenes específicas o todo el proyecto."""
-    if specific_files is None:
-        valid_images = get_filtered_files(project_path, IMAGE_EXTENSIONS)
-    else:
-        valid_images = [f for f in specific_files if f.exists()]
+def create_or_update_chat(api: GoogleDriveManager, projectcontext: ProjectContext):
+    folder_id = api.ai_studio_folder
 
-    media_chunks = []
-    for img_path in valid_images:
-        rel_path = img_path.relative_to(project_path)
-        chunks = _ensure_image_chunk_pair(api, img_path, str(rel_path.as_posix()))
-        media_chunks.extend(chunks)
-    return media_chunks
-
-
-def rebuild_project_context(
-    api: GoogleDriveManager, projectcontext: ProjectContext, state: ProjectState
-) -> ProjectState:
-    """
-    Realiza un Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
-    Actualiza el contenido del context.txt y reconstruye la lista de chunks.
-    """
-    file_id = state.file_id
-    chat_id = state.chat_id
-
-    UI.info(f"Iniciando [bold red]Reset[/] del chat [dim]{chat_id}[/]...")
-
-    if not file_id or not chat_id:
+    if not api.can_access_file(folder_id):
         raise ValueError(
-            "No se encontraron los IDs necesarios en el estado para reconstruir."
+            f"No se pudo acceder a la carpeta {folder_id} en Google Drive."
         )
 
-    UI.info("Generando nuevo contexto con Gitingest...")
+    # Trabajo con el Archivo de Contexto
+    file_id = projectcontext.file_id
+    filename = build_filename_chat(projectcontext.project_path)
+    context = projectcontext.generate_context()
 
-    content, expected_tokens = generate_context(projectcontext.project_path)
-    path_context = projectcontext.save_context(content)
-    current_md5 = compute_md5(path_context)
-
-    UI.info("Actualizando archivo de contexto maestro...")
-    api.update_file_from_memory(file_id, content, "text/plain")
-
-    new_chunks = _create_base_chat_chunks(
-        file_id, expected_tokens, projectcontext.project_path
-    )
-
-    try:
-        with api.modify_chat(chat_id) as chat_data:
-            chat_data.chunkedPrompt.chunks = new_chunks
-            chat_data.chunkedPrompt.pendingInputs = []
-
-        UI.success("¡Chat y contexto reconstruido con éxito!")
-    except Exception as e:
-        UI.error(f"Error crítico al guardar la reconstrucción del chat: {e}")
-        raise ValueError("Error al guardar la reconstrucción del chat.")
-
-    state.last_modified = projectcontext.project_path.stat().st_mtime
-    state.md5 = current_md5
-
-    return state
-
-
-def find_pending_commit_tasks(chat_data: ChatIAStudio):
-    chunks = chat_data.chunkedPrompt.chunks
-    tasks_found = []
-
-    for i, chunk in enumerate(chunks):
-        if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
-            has_response = False
-            if i + 1 < len(chunks):
-                next_chunk = chunks[i + 1]
-                if getattr(next_chunk, "role", None) == "model":
-                    has_response = True
-
-            tasks_found.append(
-                {"index": i, "has_response": has_response, "chunk": chunk}
-            )
-    return tasks_found
-
-
-def resolve_image_paths(
-    project_path: Path,
-    source_file_rel_path: str,
-    media_root_hint: Optional[Path] = None,
-) -> Tuple[List[Path], List[str]]:
-    """
-    Dada una ruta de archivo fuente (ej: README.md), extrae referencias a imágenes
-    e intenta resolver sus rutas absolutas.
-    """
-    target_file = project_path / source_file_rel_path
-    if not target_file.exists():
-        raise FileNotFoundError(f"El archivo {source_file_rel_path} no existe.")
-
-    refs = extract_image_references(target_file)
-    if not refs:
-        return [], []
-
-    found_paths = []
-    missing_refs = []
-
-    for ref_text, is_wiki in refs:
-        candidate = (target_file.parent / ref_text).resolve()
-
-        if not candidate.exists() and is_wiki and media_root_hint:
-            candidate = (media_root_hint / ref_text).resolve()
-
-        if candidate.exists() and candidate.is_file():
-            if candidate not in found_paths:
-                found_paths.append(candidate)
-        else:
-            missing_refs.append(ref_text)
-
-    return found_paths, missing_refs
-
-
-def extract_chat_assets(
-    api: GoogleDriveManager, chat_id: str
-) -> Tuple[ChatIAStudio, Dict]:
-    """
-    Descarga el JSON del chat y los contenidos binarios referenciados.
-    Retorna el chat y un diccionario con los assets en memoria.
-    """
-    chat_data = api.get_chat_ia_studio(chat_id)
-    if not chat_data:
-        raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
-
-    assets = {}
-    for chunk in chat_data.chunkedPrompt.chunks:
-        file_id = chunk.file_id if chunk.is_file_reference else None
-
-        if file_id and file_id not in assets:
-            try:
-                metadata = (
-                    api.service.files()
-                    .get(fileId=file_id, fields="id, name, mimeType")
-                    .execute()
-                )
-
-                content_bytes = api.get_file_content(file_id)
-                if content_bytes:
-                    assets[file_id] = {
-                        "name": metadata.get("name", f"asset_{file_id}"),
-                        "mimeType": metadata.get(
-                            "mimeType", "application/octet-stream"
-                        ),
-                        "bytes": content_bytes,
-                    }
-                else:
-                    UI.warn(f"No se pudo descargar el binario del archivo: {file_id}")
-            except Exception as e:
-                UI.error(f"Error descargando el asset {file_id}: {e}")
-
-    return chat_data, assets
-
-
-def transfer_chat_to_profile(
-    api: GoogleDriveManager,
-    state: ProjectState,
-    project_path: Path,
-    target_profile: str,
-) -> Tuple[GoogleDriveManager, ProjectState]:
-    """
-    Realiza la migración de cuenta, sube los archivos, parchea el JSON
-    y establece el nuevo estado seguro.
-    """
-    from project_context.history import SnapshotManager
-    from project_context.profiles import profile_manager
-
-    UI.info("Extrayendo chat y archivos desde el Perfil Actual (A)...")
-    chat_data, assets = extract_chat_assets(api, state.chat_id)
-
-    old_file_id = state.file_id
-    old_md5 = state.md5
-
-    UI.info(f"Transicionando al perfil destino: {target_profile} (B)...")
-    profile_manager.set_active_profile(target_profile)
-
-    try:
-        new_api = GoogleDriveManager()
-    except Exception as e:
-        raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
-
-    target_project = ProjectContext(project_path)
-    target_state = target_project.load_project_context_state()
-    if target_state and target_state.chat_id:
-        UI.warn(
-            "El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo..."
-        )
-        backup_monitor = SnapshotManager(new_api, project_path, target_state)
-        backup_monitor.create_named_snapshot("Backup previo a migración entrante")
-
-    UI.info("Subiendo archivos al nuevo Drive y generando mapa de IDs...")
-    id_map = {}
-    for old_id, asset_data in assets.items():
-        new_file = new_api.upload_binary_to_drive(
-            folder_id=new_api.ai_studio_folder,
-            file_name=asset_data["name"],
-            content=asset_data["bytes"],
-            mime_type=asset_data["mimeType"],
-        )
-        if new_file and "id" in new_file:
-            id_map[old_id] = new_file["id"]
-        else:
-            raise ValueError(
-                f"Fallo al subir el archivo {asset_data['name']} al nuevo perfil."
-            )
-
-    UI.info("Parcheando JSON del chat con los nuevos IDs de Drive...")
-    for chunk in chat_data.chunkedPrompt.chunks:
-        if chunk.is_file_reference and chunk.file_id in id_map:
-            chunk.file_id = id_map[chunk.file_id]
-
-    UI.info("Generando nuevo entorno de chat en Google AI Studio...")
-    chat_filename = project_path.name + "_chat.prompt"
-    new_chat_id = new_api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
-
-    if not new_chat_id:
-        raise ValueError("No se pudo crear el archivo de chat en el Perfil B.")
-
-    new_state = ProjectState(
-        path=str(project_path),
-        last_modified=project_path.stat().st_mtime,
-        md5=old_md5,
-        chat_id=new_chat_id,
-        file_id=id_map.get(old_file_id) if old_file_id else None,  # type: ignore
-        context_items=state.context_items,
-    )
-
-    return new_api, new_state
-
-
-def parse_story_file(file_path: Path) -> Dict:
-    """
-    Lee un archivo Markdown, busca las etiquetas <mejora>...</mejora>
-    y determina la intención del usuario basándose en el texto circundante.
-    """
-    if not file_path.exists():
-        raise FileNotFoundError(f"El archivo {file_path.name} no existe.")
-
-    content = file_path.read_text(encoding="utf-8")
-
-    matches = list(
-        re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE)
-    )
-
-    if not matches:
-        raise ValueError(
-            f"No se encontró la etiqueta <mejora>...</mejora> en {file_path.name}."
-        )
-
-    if len(matches) > 1:
-        UI.warn(
-            f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada."
-        )
-
-    match = matches[-1]
-    instruction = match.group(1).strip()
-
-    pre_text = content[: match.start()]
-    post_text = content[match.end() :]
-
-    def clean_md(text: str) -> str:
-        return re.sub(r"(?m)^#+ .*$", "", text).strip()
-
-    clean_pre = clean_md(pre_text)
-    clean_post = clean_md(post_text)
-
-    if not clean_pre and not clean_post:
-        mode = "nuevo"
-        anchor_pre = ""
-        anchor_post = ""
-    elif clean_pre and not clean_post:
-        mode = "continuacion"
-        anchor_pre = clean_pre[-800:].strip()
-        anchor_post = ""
+    if not api.can_access_file(projectcontext.file_id):
+        context_remote = create_context_document(api, filename, context)
+        file_id_final = context_remote.file_id
     else:
-        mode = "edicion"
-        anchor_pre = clean_pre[-800:].strip() if clean_pre else ""
-        anchor_post = clean_post[:800].strip() if clean_post else ""
+        context_remote = update_context_document(api, context, file_id)
+        file_id_final = file_id
 
-    return {
-        "mode": mode,
-        "instruction": instruction,
-        "anchor_pre": anchor_pre.split("\n")[-1],
-        "anchor_post": anchor_post,
-    }
+    # Trabajo con el Archivo de Chat
+    chat_id = projectcontext.chat_id
+    if api.can_access_file(chat_id):
+        chat = api.get_chat(chat_id)
+        for chunk in chat.chunkedPrompt.chunks:
+            if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
+                chunk.tokenCount = None  # type: ignore - Fuerza el recuento de tokens
+                break
+        api.update_chat(chat_id, chat)
+        chat_id_final = chat_id
+        UI.success(f"Proyecto actualizado con Chat ID: [dim]{chat_id}[/]")
+    else:
+        chat_filename = build_filename_chat(projectcontext.project_path)
+        initial_chat = ChunkFactory.build_initial_chat(context_remote)
+        chat_id_final = api.create_chat(
+            folder_id=folder_id, file_name=chat_filename, chat_data=initial_chat
+        )
+        UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
 
-
-def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
-    """
-    Construye el prompt exacto que se enviará a la IA según el modo detectado.
-    """
-    mode = parsed_data["mode"]
-    instruction = parsed_data["instruction"]
-
-    base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
-    base_rule = (
-        "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
-        "Mantén la coherencia con el contexto global y prioriza escribir diálogos.\n\n"
+    return ProjectContext.create_state(
+        chat_id=chat_id_final,
+        file_id=file_id_final,
+        file_md5=context_remote.context.md5sum,
     )
 
-    if mode == "nuevo":
-        return f"Ayúdame a escribir la primera escena del archivo `{file_name}` desde cero, {base_rule}"
 
-    elif mode == "continuacion":
-        return (
-            f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}"
-            + "La mejora empieza exactamente después del siguiente texto:\n"
-            "```text\n"
-            f"{parsed_data['anchor_pre']}\n"
-            "```\n\n"
-        )
+# def _ensure_image_chunk_pair(
+#     api: GoogleDriveManager, img_path: Path, reference_str: str
+# ) -> List:
+#     """
+#     Comprueba si una imagen existe en el directorio de Drive; si no, la sube.
+#     Retorna el par de bloques [Texto Referencia, Imagen Multimodal].
+#     """
+#     drive_name = f"ctx_{img_path.name}"
+#     drive_file = api.find_item_by_name(drive_name, parent_id=api.ai_studio_folder)
 
-    elif mode == "edicion":
-        return (
-            base_prompt
-            + "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
-            "Tienes que desarrollar y mejorar el siguiente borrador, agregando diálogos o descripciones si es necesario, "
-            "y hacer que encaje perfectamente como puente entre el texto anterior y el texto posterior.\n\n"
-            "Instrucciones / Borrador a mejorar:\n"
-            f"{instruction}\n\n"
-            "--- TEXTO ANTERIOR ---\n"
-            "```text\n"
-            f"{parsed_data['anchor_pre']}\n"
-            "```\n\n"
-            "--- TEXTO POSTERIOR ---\n"
-            "```text\n"
-            f"{parsed_data['anchor_post']}\n"
-            "```\n"
-        )
+#     if not drive_file:
+#         UI.info(f"Subiendo nueva imagen a Google Drive: {img_path.name}...")
+#         try:
+#             with open(img_path, "rb") as f:
+#                 content = f.read()
+#             mime = f"image/{img_path.suffix[1:].replace('jpg', 'jpeg')}"
+#             drive_file = api.upload_binary_to_drive(
+#                 api.ai_studio_folder, drive_name, content, mime
+#             )
+#         except Exception as e:
+#             UI.error(f"No se pudo subir la imagen {img_path.name}: {e}")
+#             return []
+#     else:
+#         UI.info(f"Reutilizando imagen existente en Drive: [dim]{drive_name}[/]")
 
-    return ""
+#     if drive_file:
+#         prompt = ChunkFactory.create_text(
+#             f"Archivo visual: {reference_str}", role="user"
+#         )
+#         image = ChunkFactory.create_image(drive_file["id"], role="user")
+#         return [prompt, image]
 
-
-def apply_story_update(
-    api: GoogleDriveManager,
-    projectcontext: ProjectContext,
-    state: ProjectState,
-    media_root_hint: Optional[Path] = None,
-) -> ProjectState:
-    """
-    Actualiza el contexto general, analiza el archivo de historia ancla,
-    resuelve y sincroniza las imágenes de su etiqueta <mejora>,
-    y actualiza de forma atómica la estructura del chat en Google Drive.
-    """
-    from project_context.utils import extract_image_references_from_text
-
-    anchor_rel_path = state.story_anchor
-    if not anchor_rel_path:
-        raise ValueError("No hay un ancla de historia definida en el estado.")
-
-    anchor_file = projectcontext.project_path / anchor_rel_path
-    UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
-
-    try:
-        parsed_data = parse_story_file(anchor_file)
-    except Exception as e:
-        UI.error(str(e))
-        return state
-
-    UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
-    instruction_text = parsed_data["instruction"]
-
-    refs = extract_image_references_from_text(instruction_text)
-    resolved_images = []
-
-    for ref_text, is_wiki in refs:
-        candidate = (anchor_file.parent / ref_text).resolve()
-
-        if not candidate.exists() and is_wiki and media_root_hint:
-            candidate = (media_root_hint / ref_text).resolve()
-
-        if not candidate.exists():
-            candidate = (projectcontext.project_path / ref_text).resolve()
-
-        if candidate.exists() and candidate.is_file():
-            resolved_images.append((candidate, ref_text))
-        else:
-            UI.warn(
-                f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'"
-            )
-
-    image_chunks = []
-    if resolved_images:
-        UI.info(f"Sincronizando {len(resolved_images)} recursos visuales detectados...")
-        image_chunks = sync_story_images(
-            api, projectcontext.project_path, resolved_images
-        )
-
-    anchor_file_path = anchor_file.relative_to(projectcontext.project_path).as_posix()
-    story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
-
-    state = update_context(api, projectcontext, state)
-
-    chat_id = state.chat_id
-    chat_data = api.get_chat_ia_studio(chat_id)
-    if not chat_data:
-        raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
-
-    UI.info("Actualizando bloques de prompt del chat e integrando recursos visuales...")
-
-    base_chunks = chat_data.chunkedPrompt.chunks[:3]
-
-    new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
-    base_chunks.append(new_instruction_chunk)
-
-    if image_chunks:
-        base_chunks.extend(image_chunks)
-
-    chat_data.chunkedPrompt.chunks = base_chunks
-    chat_data.chunkedPrompt.pendingInputs = []
-
-    if api.update_chat_file(chat_id, chat_data):
-        UI.success(
-            "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
-        )
-    else:
-        UI.error("Error al actualizar el chat de historia en Drive.")
-
-    return state
+#     return []
 
 
-def sync_story_images(
-    api: GoogleDriveManager,
-    project_path: Path,
-    resolved_images: List[Tuple[Path, str]],
-) -> list:
-    """
-    Sincroniza un listado de imágenes locales con Drive de forma ligera.
-    """
-    media_chunks = []
-    for img_path, original_ref in resolved_images:
-        chunks = _ensure_image_chunk_pair(api, img_path, original_ref)
-        media_chunks.extend(chunks)
-    return media_chunks
+# def sync_images(
+#     api: GoogleDriveManager,
+#     project_path: Path,
+#     specific_files: Optional[list[Path]] = None,
+# ) -> list:
+#     """Sincroniza imágenes específicas o todo el proyecto."""
+#     if specific_files is None:
+#         valid_images = get_filtered_files(project_path, IMAGE_EXTENSIONS)
+#     else:
+#         valid_images = [f for f in specific_files if f.exists()]
+
+#     media_chunks = []
+#     for img_path in valid_images:
+#         rel_path = img_path.relative_to(project_path)
+#         chunks = _ensure_image_chunk_pair(api, img_path, str(rel_path.as_posix()))
+#         media_chunks.extend(chunks)
+#     return media_chunks
+
+
+# def rebuild_project_context(
+#     api: GoogleDriveManager, projectcontext: ProjectContext, state: ProjectState
+# ) -> ProjectState:
+#     """
+#     Realiza un Reset del chat pero REUTILIZA los IDs de archivos existentes en Drive.
+#     Actualiza el contenido del context.txt y reconstruye la lista de chunks.
+#     """
+#     file_id = state.file_id
+#     chat_id = state.chat_id
+
+#     UI.info(f"Iniciando [bold red]Reset[/] del chat [dim]{chat_id}[/]...")
+
+#     if not file_id or not chat_id:
+#         raise ValueError(
+#             "No se encontraron los IDs necesarios en el estado para reconstruir."
+#         )
+
+#     UI.info("Generando nuevo contexto con Gitingest...")
+
+#     content, expected_tokens = generate_context(projectcontext.project_path)
+#     path_context = projectcontext.save_context(content)
+#     current_md5 = compute_md5(path_context)
+
+#     UI.info("Actualizando archivo de contexto maestro...")
+#     api.update_file_from_memory(file_id, content, "text/plain")
+
+#     new_chunks = _create_base_chat_chunks(
+#         file_id, expected_tokens, projectcontext.project_path
+#     )
+
+#     try:
+#         with api.modify_chat(chat_id) as chat_data:
+#             chat_data.chunkedPrompt.chunks = new_chunks
+#             chat_data.chunkedPrompt.pendingInputs = []
+
+#         UI.success("¡Chat y contexto reconstruido con éxito!")
+#     except Exception as e:
+#         UI.error(f"Error crítico al guardar la reconstrucción del chat: {e}")
+#         raise ValueError("Error al guardar la reconstrucción del chat.")
+
+#     state.last_modified = projectcontext.project_path.stat().st_mtime
+#     state.md5 = current_md5
+
+#     return state
+
+
+# def find_pending_commit_tasks(chat_data: ChatIAStudio):
+#     chunks = chat_data.chunkedPrompt.chunks
+#     tasks_found = []
+
+#     for i, chunk in enumerate(chunks):
+#         if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+#             has_response = False
+#             if i + 1 < len(chunks):
+#                 next_chunk = chunks[i + 1]
+#                 if getattr(next_chunk, "role", None) == "model":
+#                     has_response = True
+
+#             tasks_found.append(
+#                 {"index": i, "has_response": has_response, "chunk": chunk}
+#             )
+#     return tasks_found
+
+
+# def resolve_image_paths(
+#     project_path: Path,
+#     source_file_rel_path: str,
+#     media_root_hint: Optional[Path] = None,
+# ) -> Tuple[List[Path], List[str]]:
+#     """
+#     Dada una ruta de archivo fuente (ej: README.md), extrae referencias a imágenes
+#     e intenta resolver sus rutas absolutas.
+#     """
+#     target_file = project_path / source_file_rel_path
+#     if not target_file.exists():
+#         raise FileNotFoundError(f"El archivo {source_file_rel_path} no existe.")
+
+#     refs = extract_image_references(target_file)
+#     if not refs:
+#         return [], []
+
+#     found_paths = []
+#     missing_refs = []
+
+#     for ref_text, is_wiki in refs:
+#         candidate = (target_file.parent / ref_text).resolve()
+
+#         if not candidate.exists() and is_wiki and media_root_hint:
+#             candidate = (media_root_hint / ref_text).resolve()
+
+#         if candidate.exists() and candidate.is_file():
+#             if candidate not in found_paths:
+#                 found_paths.append(candidate)
+#         else:
+#             missing_refs.append(ref_text)
+
+#     return found_paths, missing_refs
+
+
+# def extract_chat_assets(
+#     api: GoogleDriveManager, chat_id: str
+# ) -> Tuple[ChatIAStudio, Dict]:
+#     """
+#     Descarga el JSON del chat y los contenidos binarios referenciados.
+#     Retorna el chat y un diccionario con los assets en memoria.
+#     """
+#     chat_data = api.get_chat_ia_studio(chat_id)
+#     if not chat_data:
+#         raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
+
+#     assets = {}
+#     for chunk in chat_data.chunkedPrompt.chunks:
+#         file_id = chunk.file_id if chunk.is_file_reference else None
+
+#         if file_id and file_id not in assets:
+#             try:
+#                 metadata = (
+#                     api.service.files()
+#                     .get(fileId=file_id, fields="id, name, mimeType")
+#                     .execute()
+#                 )
+
+#                 content_bytes = api.get_file_content(file_id)
+#                 if content_bytes:
+#                     assets[file_id] = {
+#                         "name": metadata.get("name", f"asset_{file_id}"),
+#                         "mimeType": metadata.get(
+#                             "mimeType", "application/octet-stream"
+#                         ),
+#                         "bytes": content_bytes,
+#                     }
+#                 else:
+#                     UI.warn(f"No se pudo descargar el binario del archivo: {file_id}")
+#             except Exception as e:
+#                 UI.error(f"Error descargando el asset {file_id}: {e}")
+
+#     return chat_data, assets
+
+
+# def transfer_chat_to_profile(
+#     api: GoogleDriveManager,
+#     state: ProjectState,
+#     project_path: Path,
+#     target_profile: str,
+# ) -> Tuple[GoogleDriveManager, ProjectState]:
+#     """
+#     Realiza la migración de cuenta, sube los archivos, parchea el JSON
+#     y establece el nuevo estado seguro.
+#     """
+#     from project_context.history import SnapshotManager
+#     from project_context.profiles import profile_manager
+
+#     UI.info("Extrayendo chat y archivos desde el Perfil Actual (A)...")
+#     chat_data, assets = extract_chat_assets(api, state.chat_id)
+
+#     old_file_id = state.file_id
+#     old_md5 = state.md5
+
+#     UI.info(f"Transicionando al perfil destino: {target_profile} (B)...")
+#     profile_manager.set_active_profile(target_profile)
+
+#     try:
+#         new_api = GoogleDriveManager()
+#     except Exception as e:
+#         raise RuntimeError(f"Fallo en autenticación del perfil '{target_profile}': {e}")
+
+#     target_project = ProjectContext(project_path)
+#     target_state = target_project.load_project_context_state()
+#     if target_state and target_state.chat_id:
+#         UI.warn(
+#             "El perfil destino ya tiene un chat para este proyecto. Creando snapshot de respaldo..."
+#         )
+#         backup_monitor = SnapshotManager(new_api, project_path, target_state)
+#         backup_monitor.create_named_snapshot("Backup previo a migración entrante")
+
+#     UI.info("Subiendo archivos al nuevo Drive y generando mapa de IDs...")
+#     id_map = {}
+#     for old_id, asset_data in assets.items():
+#         new_file = new_api.upload_binary_to_drive(
+#             folder_id=new_api.ai_studio_folder,
+#             file_name=asset_data["name"],
+#             content=asset_data["bytes"],
+#             mime_type=asset_data["mimeType"],
+#         )
+#         if new_file and "id" in new_file:
+#             id_map[old_id] = new_file["id"]
+#         else:
+#             raise ValueError(
+#                 f"Fallo al subir el archivo {asset_data['name']} al nuevo perfil."
+#             )
+
+#     UI.info("Parcheando JSON del chat con los nuevos IDs de Drive...")
+#     for chunk in chat_data.chunkedPrompt.chunks:
+#         if chunk.is_file_reference and chunk.file_id in id_map:
+#             chunk.file_id = id_map[chunk.file_id]
+
+#     UI.info("Generando nuevo entorno de chat en Google AI Studio...")
+#     chat_filename = project_path.name + "_chat.prompt"
+#     new_chat_id = new_api.create_chat_file(file_name=chat_filename, chat_data=chat_data)
+
+#     if not new_chat_id:
+#         raise ValueError("No se pudo crear el archivo de chat en el Perfil B.")
+
+#     new_state = ProjectState(
+#         path=str(project_path),
+#         last_modified=project_path.stat().st_mtime,
+#         md5=old_md5,
+#         chat_id=new_chat_id,
+#         file_id=id_map.get(old_file_id) if old_file_id else None,  # type: ignore
+#         context_items=state.context_items,
+#     )
+
+#     return new_api, new_state
+
+
+# def parse_story_file(file_path: Path) -> Dict:
+#     """
+#     Lee un archivo Markdown, busca las etiquetas <mejora>...</mejora>
+#     y determina la intención del usuario basándose en el texto circundante.
+#     """
+#     if not file_path.exists():
+#         raise FileNotFoundError(f"El archivo {file_path.name} no existe.")
+
+#     content = file_path.read_text(encoding="utf-8")
+
+#     matches = list(
+#         re.finditer(r"<mejora>(.*?)</mejora>", content, re.DOTALL | re.IGNORECASE)
+#     )
+
+#     if not matches:
+#         raise ValueError(
+#             f"No se encontró la etiqueta <mejora>...</mejora> en {file_path.name}."
+#         )
+
+#     if len(matches) > 1:
+#         UI.warn(
+#             f"Se encontraron {len(matches)} etiquetas <mejora>. Se utilizará solo la ÚLTIMA encontrada."
+#         )
+
+#     match = matches[-1]
+#     instruction = match.group(1).strip()
+
+#     pre_text = content[: match.start()]
+#     post_text = content[match.end() :]
+
+#     def clean_md(text: str) -> str:
+#         return re.sub(r"(?m)^#+ .*$", "", text).strip()
+
+#     clean_pre = clean_md(pre_text)
+#     clean_post = clean_md(post_text)
+
+#     if not clean_pre and not clean_post:
+#         mode = "nuevo"
+#         anchor_pre = ""
+#         anchor_post = ""
+#     elif clean_pre and not clean_post:
+#         mode = "continuacion"
+#         anchor_pre = clean_pre[-800:].strip()
+#         anchor_post = ""
+#     else:
+#         mode = "edicion"
+#         anchor_pre = clean_pre[-800:].strip() if clean_pre else ""
+#         anchor_post = clean_post[:800].strip() if clean_post else ""
+
+#     return {
+#         "mode": mode,
+#         "instruction": instruction,
+#         "anchor_pre": anchor_pre.split("\n")[-1],
+#         "anchor_post": anchor_post,
+#     }
+
+
+# def generate_story_prompt(parsed_data: Dict, file_name: str) -> str:
+#     """
+#     Construye el prompt exacto que se enviará a la IA según el modo detectado.
+#     """
+#     mode = parsed_data["mode"]
+#     instruction = parsed_data["instruction"]
+
+#     base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
+#     base_rule = (
+#         "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
+#         "Mantén la coherencia con el contexto global y prioriza escribir diálogos.\n\n"
+#     )
+
+#     if mode == "nuevo":
+#         return f"Ayúdame a escribir la primera escena del archivo `{file_name}` desde cero, {base_rule}"
+
+#     elif mode == "continuacion":
+#         return (
+#             f"Ayúdame a continuar desarrollando la historia del `{file_name}`, {base_rule}"
+#             + "La mejora empieza exactamente después del siguiente texto:\n"
+#             "```text\n"
+#             f"{parsed_data['anchor_pre']}\n"
+#             "```\n\n"
+#         )
+
+#     elif mode == "edicion":
+#         return (
+#             base_prompt
+#             + "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
+#             "Tienes que desarrollar y mejorar el siguiente borrador, agregando diálogos o descripciones si es necesario, "
+#             "y hacer que encaje perfectamente como puente entre el texto anterior y el texto posterior.\n\n"
+#             "Instrucciones / Borrador a mejorar:\n"
+#             f"{instruction}\n\n"
+#             "--- TEXTO ANTERIOR ---\n"
+#             "```text\n"
+#             f"{parsed_data['anchor_pre']}\n"
+#             "```\n\n"
+#             "--- TEXTO POSTERIOR ---\n"
+#             "```text\n"
+#             f"{parsed_data['anchor_post']}\n"
+#             "```\n"
+#         )
+
+#     return ""
+
+
+# def apply_story_update(
+#     api: GoogleDriveManager,
+#     projectcontext: ProjectContext,
+#     state: ProjectState,
+#     media_root_hint: Optional[Path] = None,
+# ) -> ProjectState:
+#     """
+#     Actualiza el contexto general, analiza el archivo de historia ancla,
+#     resuelve y sincroniza las imágenes de su etiqueta <mejora>,
+#     y actualiza de forma atómica la estructura del chat en Google Drive.
+#     """
+#     from project_context.utils import extract_image_references_from_text
+
+#     anchor_rel_path = state.story_anchor
+#     if not anchor_rel_path:
+#         raise ValueError("No hay un ancla de historia definida en el estado.")
+
+#     anchor_file = projectcontext.project_path / anchor_rel_path
+#     UI.info(f"Analizando intención en el archivo ancla: [cyan]{anchor_rel_path}[/]")
+
+#     try:
+#         parsed_data = parse_story_file(anchor_file)
+#     except Exception as e:
+#         UI.error(str(e))
+#         return state
+
+#     UI.info(f"Intención detectada: [bold magenta]{parsed_data['mode'].upper()}[/]")
+#     instruction_text = parsed_data["instruction"]
+
+#     refs = extract_image_references_from_text(instruction_text)
+#     resolved_images = []
+
+#     for ref_text, is_wiki in refs:
+#         candidate = (anchor_file.parent / ref_text).resolve()
+
+#         if not candidate.exists() and is_wiki and media_root_hint:
+#             candidate = (media_root_hint / ref_text).resolve()
+
+#         if not candidate.exists():
+#             candidate = (projectcontext.project_path / ref_text).resolve()
+
+#         if candidate.exists() and candidate.is_file():
+#             resolved_images.append((candidate, ref_text))
+#         else:
+#             UI.warn(
+#                 f"Referencia visual ignorada (no se encontró en el disco): '{ref_text}'"
+#             )
+
+#     image_chunks = []
+#     if resolved_images:
+#         UI.info(f"Sincronizando {len(resolved_images)} recursos visuales detectados...")
+#         image_chunks = sync_story_images(
+#             api, projectcontext.project_path, resolved_images
+#         )
+
+#     anchor_file_path = anchor_file.relative_to(projectcontext.project_path).as_posix()
+#     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
+
+#     state = update_context(api, projectcontext, state)
+
+#     chat_id = state.chat_id
+#     chat_data = api.get_chat_ia_studio(chat_id)
+#     if not chat_data:
+#         raise ValueError(f"No se pudo descargar el chat con ID {chat_id}")
+
+#     UI.info("Actualizando bloques de prompt del chat e integrando recursos visuales...")
+
+#     base_chunks = chat_data.chunkedPrompt.chunks[:3]
+
+#     new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
+#     base_chunks.append(new_instruction_chunk)
+
+#     if image_chunks:
+#         base_chunks.extend(image_chunks)
+
+#     chat_data.chunkedPrompt.chunks = base_chunks
+#     chat_data.chunkedPrompt.pendingInputs = []
+
+#     if api.update_chat_file(chat_id, chat_data):
+#         UI.success(
+#             "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
+#         )
+#     else:
+#         UI.error("Error al actualizar el chat de historia en Drive.")
+
+#     return state
+
+
+# def sync_story_images(
+#     api: GoogleDriveManager,
+#     project_path: Path,
+#     resolved_images: List[Tuple[Path, str]],
+# ) -> list:
+#     """
+#     Sincroniza un listado de imágenes locales con Drive de forma ligera.
+#     """
+#     media_chunks = []
+#     for img_path, original_ref in resolved_images:
+#         chunks = _ensure_image_chunk_pair(api, img_path, original_ref)
+#         media_chunks.extend(chunks)
+#     return media_chunks

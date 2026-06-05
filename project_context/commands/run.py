@@ -5,10 +5,10 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from project_context.api_drive import GoogleDriveManager
-from project_context.auth_service import AuthService
+from project_context.commands.bridge import interactive_session
 from project_context.profiles import ProfileManager
-from project_context.ui.interactive import interactive_session
+from project_context.services.api_drive import GoogleDriveManager
+from project_context.services.auth_service import AuthService
 from project_context.workspace import ProjectContext
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,9 @@
 from pathlib import Path
 from typing import Optional
+
 from git import Repo, exc
-from project_context.ui.ui import UI
+
+from project_context.ui import UI
 
 
 def get_diff_message(project_path: Path) -> Optional[str]:

@@ -4,11 +4,11 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from project_context.api_drive import GoogleDriveManager
-from project_context.auth_service import AuthService
-from project_context.ops import update_context
+from project_context.ops import create_or_update_chat
 from project_context.profiles import ProfileManager
-from project_context.ui.ui import UI
+from project_context.services.api_drive import GoogleDriveManager
+from project_context.services.auth_service import AuthService
+from project_context.ui import UI
 from project_context.workspace import ProjectContext
 
 
@@ -44,6 +44,6 @@ def update_command(
 
         api = GoogleDriveManager(creds)
 
-        update_context(api, workspace)
+        create_or_update_chat(api, workspace)
 
         UI.success("Sincronización de contexto completada.")

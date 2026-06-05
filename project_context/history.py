@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
 
-from project_context.api_drive import GoogleDriveManager
+from project_context.services.api_drive import GoogleDriveManager
 from project_context.utils import compute_md5
 from project_context.workspace import ProjectContext
 

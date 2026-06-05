@@ -6,11 +6,12 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter, PathCompleter, WordCompleter
 from prompt_toolkit.history import InMemoryHistory
 
-from project_context.api_drive import GoogleDriveManager
+from project_context.commands.interactive import bootstrap_interactive_registry
+from project_context.commands.interactive.register import SessionContext
 from project_context.exceptions import ProjectContextError
 from project_context.profiles import ProfileManager
-from project_context.ui.commands import registry
-from project_context.ui.ui import UI
+from project_context.services.api_drive import GoogleDriveManager
+from project_context.ui import UI
 from project_context.workspace import ProjectContext
 
 
@@ -66,8 +67,6 @@ def interactive_session(
     Se adapta a firmas de llamada flexibles para mantener la robustez.
     """
 
-    from project_context.ui.registry import SessionContext
-
     ctx = SessionContext(api=api, workspace=workspace)
     chat_id = workspace.chat_id
 
@@ -76,7 +75,8 @@ def interactive_session(
     UI.info("Escribe [green]help[/] para comandos.")
     UI.info("Escribe [green]update[/] para sincronizar los cambios con Drive.")
 
-    commands_list = list(registry.commands.keys())
+    registry = bootstrap_interactive_registry()
+    commands_list = list(registry._commands.keys())
     completer = create_interactive_completer(workspace.project_path, commands_list)
 
     session = PromptSession(completer=completer, history=InMemoryHistory())
