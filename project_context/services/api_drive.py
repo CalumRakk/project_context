@@ -2,8 +2,7 @@ import io
 import json
 import logging
 import threading
-from contextlib import contextmanager
-from typing import Generator, List, Optional, cast
+from typing import Optional, cast
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -12,7 +11,6 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.schema import (
     ChatIAStudio,
-    Chunk,
     ChunkedPrompt,
     ChunksDocument,
     ChunksImage,
@@ -351,130 +349,130 @@ class GoogleDriveManager:
     #         logger.debug(f"Error actualizando chat: {e}")
     #         return False
 
-    @contextmanager
-    def modify_chat(self, chat_id: str) -> Generator[ChatIAStudio, None, None]:
+    # @contextmanager
+    # def modify_chat(self, chat_id: str) -> Generator[ChatIAStudio, None, None]:
 
-        chat = self.get_chat(chat_id)
-        if not chat:
-            raise FileNotFoundError(f"Chat {chat_id} no encontrado o inaccesible.")
+    #     chat = self.get_chat(chat_id)
+    #     if not chat:
+    #         raise FileNotFoundError(f"Chat {chat_id} no encontrado o inaccesible.")
 
-        try:
-            yield chat
-        except Exception as e:
-            UI.error(f"Error procesando chat (cambios descartados): {e}")
-            raise e
-        else:
-            if not self.update_chat(chat_id, chat):
-                raise IOError("Falló la escritura del chat en Google Drive.")
+    #     try:
+    #         yield chat
+    #     except Exception as e:
+    #         UI.error(f"Error procesando chat (cambios descartados): {e}")
+    #         raise e
+    #     else:
+    #         if not self.update_chat(chat_id, chat):
+    #             raise IOError("Falló la escritura del chat en Google Drive.")
 
-    def clear_chat(self, chat_id: str) -> bool:
-        try:
-            with self.modify_chat(chat_id) as chat:
-                chunks = chat.chunkedPrompt.chunks
-                if not chunks:
-                    logger.debug("El chat ya está vacío.")
-                    return True
+    # def clear_chat(self, chat_id: str) -> bool:
+    #     try:
+    #         with self.modify_chat(chat_id) as chat:
+    #             chunks = chat.chunkedPrompt.chunks
+    #             if not chunks:
+    #                 logger.debug("El chat ya está vacío.")
+    #                 return True
 
-                cut_idx = -1
-                for i, chunk in enumerate(chunks):
-                    if chunk.role == "model":
-                        cut_idx = i
-                        break
+    #             cut_idx = -1
+    #             for i, chunk in enumerate(chunks):
+    #                 if chunk.role == "model":
+    #                     cut_idx = i
+    #                     break
 
-                if cut_idx == -1:
-                    doc_idx = -1
-                    for i, chunk in enumerate(chunks):
-                        if chunk.is_file_reference:
-                            doc_idx = i
+    #             if cut_idx == -1:
+    #                 doc_idx = -1
+    #                 for i, chunk in enumerate(chunks):
+    #                     if chunk.is_file_reference:
+    #                         doc_idx = i
 
-                    if doc_idx != -1:
-                        if len(chunks) > doc_idx + 1 and isinstance(
-                            chunks[doc_idx + 1], ChunksText
-                        ):
-                            cut_idx = doc_idx + 1
-                        else:
-                            cut_idx = doc_idx
-                    else:
-                        logger.debug("Error: Estructura de contexto inválida.")
-                        return False
+    #                 if doc_idx != -1:
+    #                     if len(chunks) > doc_idx + 1 and isinstance(
+    #                         chunks[doc_idx + 1], ChunksText
+    #                     ):
+    #                         cut_idx = doc_idx + 1
+    #                     else:
+    #                         cut_idx = doc_idx
+    #                 else:
+    #                     logger.debug("Error: Estructura de contexto inválida.")
+    #                     return False
 
-                original_count = len(chunks)
-                new_chunks = chunks[: cut_idx + 1]
+    #             original_count = len(chunks)
+    #             new_chunks = chunks[: cut_idx + 1]
 
-                if len(new_chunks) == original_count:
-                    logger.debug("El chat ya está limpio.")
-                    return True
+    #             if len(new_chunks) == original_count:
+    #                 logger.debug("El chat ya está limpio.")
+    #                 return True
 
-                chat.chunkedPrompt.chunks = new_chunks
-                logger.debug(
-                    f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
-                )
-            return True
-        except Exception:
-            return False
+    #             chat.chunkedPrompt.chunks = new_chunks
+    #             logger.debug(
+    #                 f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
+    #             )
+    #         return True
+    #     except Exception:
+    #         return False
 
-    def remove_commit_tasks(self, chat_id: str) -> int:
-        removed_count = 0
-        try:
-            with self.modify_chat(chat_id) as chat:
-                original_chunks = chat.chunkedPrompt.chunks
-                new_chunks = []
-                skip_next = False
+    # def remove_commit_tasks(self, chat_id: str) -> int:
+    #     removed_count = 0
+    #     try:
+    #         with self.modify_chat(chat_id) as chat:
+    #             original_chunks = chat.chunkedPrompt.chunks
+    #             new_chunks = []
+    #             skip_next = False
 
-                for i, chunk in enumerate(original_chunks):
-                    if skip_next:
-                        skip_next = False
-                        removed_count += 1
-                        continue
+    #             for i, chunk in enumerate(original_chunks):
+    #                 if skip_next:
+    #                     skip_next = False
+    #                     removed_count += 1
+    #                     continue
 
-                    if (
-                        isinstance(chunk, ChunksText)
-                        and COMMIT_TASK_MARKER in chunk.text
-                    ):
-                        removed_count += 1
-                        if i + 1 < len(original_chunks):
-                            next_chunk = original_chunks[i + 1]
-                            if getattr(next_chunk, "role", None) == "model":
-                                skip_next = True
-                        continue
+    #                 if (
+    #                     isinstance(chunk, ChunksText)
+    #                     and COMMIT_TASK_MARKER in chunk.text
+    #                 ):
+    #                     removed_count += 1
+    #                     if i + 1 < len(original_chunks):
+    #                         next_chunk = original_chunks[i + 1]
+    #                         if getattr(next_chunk, "role", None) == "model":
+    #                             skip_next = True
+    #                     continue
 
-                    new_chunks.append(chunk)
+    #                 new_chunks.append(chunk)
 
-                if removed_count > 0:
-                    chat.chunkedPrompt.chunks = new_chunks
-            return removed_count
-        except Exception:
-            return 0
+    #             if removed_count > 0:
+    #                 chat.chunkedPrompt.chunks = new_chunks
+    #         return removed_count
+    #     except Exception:
+    #         return 0
 
-    def append_message(self, chat_id: str, text: str, role: Role = "user") -> bool:
-        try:
-            with self.modify_chat(chat_id) as chat:
-                new_chunk = ChunkFactory.create_text(text, role=role)
-                chat.chunkedPrompt.chunks.append(new_chunk)
-            return True
-        except Exception:
-            return False
+    # def append_message(self, chat_id: str, text: str, role: Role = "user") -> bool:
+    #     try:
+    #         with self.modify_chat(chat_id) as chat:
+    #             new_chunk = ChunkFactory.create_text(text, role=role)
+    #             chat.chunkedPrompt.chunks.append(new_chunk)
+    #         return True
+    #     except Exception:
+    #         return False
 
-    def append_chunks(self, chat_id: str, chunks: List[Chunk]) -> bool:
-        try:
-            with self.modify_chat(chat_id) as chat:
-                chat.chunkedPrompt.chunks.extend(chunks)
-            return True
-        except Exception:
-            return False
+    # def append_chunks(self, chat_id: str, chunks: List[Chunk]) -> bool:
+    #     try:
+    #         with self.modify_chat(chat_id) as chat:
+    #             chat.chunkedPrompt.chunks.extend(chunks)
+    #         return True
+    #     except Exception:
+    #         return False
 
-    def repair_chat_structure(self, chat_id: str) -> int:
-        fixed_count = 0
-        try:
-            with self.modify_chat(chat_id) as chat:
-                for chunk in chat.chunkedPrompt.chunks:
-                    if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
-                        if chunk.finishReason != "STOP":
-                            chunk.finishReason = "STOP"
-                            fixed_count += 1
-            return fixed_count
-        except Exception:
-            return 0
+    # def repair_chat_structure(self, chat_id: str) -> int:
+    #     fixed_count = 0
+    #     try:
+    #         with self.modify_chat(chat_id) as chat:
+    #             for chunk in chat.chunkedPrompt.chunks:
+    #                 if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
+    #                     if chunk.finishReason != "STOP":
+    #                         chunk.finishReason = "STOP"
+    #                         fixed_count += 1
+    #         return fixed_count
+    #     except Exception:
+    #         return 0
 
     def has_pending_commit_suggestion(self, chat_id: str) -> bool:
         chat = self.get_chat(chat_id)
@@ -501,3 +499,47 @@ class GoogleDriveManager:
             if e.resp.status == 404:
                 return False
             raise
+
+    def clear_chat(self, chat_id: str):
+        chat = self.get_chat(chat_id)
+
+        chunks = chat.chunkedPrompt.chunks
+        if not chunks:
+            logger.debug("El chat ya está vacío.")
+            return True
+
+        cut_idx = -1
+        for i, chunk in enumerate(chunks):
+            if chunk.role == "model":
+                cut_idx = i
+                break
+
+        if cut_idx == -1:
+            doc_idx = -1
+            for i, chunk in enumerate(chunks):
+                if chunk.is_file_reference:
+                    doc_idx = i
+
+            if doc_idx != -1:
+                if len(chunks) > doc_idx + 1 and isinstance(
+                    chunks[doc_idx + 1], ChunksText
+                ):
+                    cut_idx = doc_idx + 1
+                else:
+                    cut_idx = doc_idx
+            else:
+                logger.debug("Error: Estructura de contexto inválida.")
+                return False
+
+        original_count = len(chunks)
+        new_chunks = chunks[: cut_idx + 1]
+
+        if len(new_chunks) == original_count:
+            logger.debug("El chat ya está limpio.")
+            return True
+
+        chat.chunkedPrompt.chunks = new_chunks
+        logger.debug(
+            f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
+        )
+        return True

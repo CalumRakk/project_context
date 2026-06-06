@@ -7,7 +7,10 @@ from project_context.utils import get_context_tree
 
 def cmd_clear(ctx: SessionContext, args: list[str]):
     """Limpia el historial de la conversación manteniendo el contexto inicial."""
-    if ctx.api.clear_chat(ctx.chat_id):
+
+    restore_chat_backup_if_exists(ctx.api, ctx.workspace)
+
+    if ctx.api.clear_chat(ctx.workspace.chat_id):
         UI.success("Historial de mensajes limpiado en Drive.")
     else:
         raise ChatSessionError(
@@ -32,4 +35,4 @@ def cmd_update(ctx: SessionContext, args: list[str]):
     if "tree" in clean_args_list or has_focus:
         UI.info("Árbol de archivos enviado:")
         tree_str = get_context_tree(ctx.project_path, ctx.workspace.context_items)
-        print(f"\n[dim cyan]{tree_str}[/dim cyan]\n")
+        print(f"\n[dim cyan]{tree_str}[/]\n")
