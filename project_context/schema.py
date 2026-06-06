@@ -71,7 +71,7 @@ class ChunksText(BaseChunk):
 
 class ChunksDocument(BaseChunk):
     driveDocument: DriveDocument
-    tokenCount: int
+    tokenCount: Optional[int] = None
 
     @property
     def is_text(self) -> bool:
@@ -238,6 +238,7 @@ class ProfileConfig(BaseModel):
 
 
 class ProjectState(BaseModel):
+    # Nota: Nunca almacear variables de flujos de estados en esta schema.
     model_config = ConfigDict(extra="allow")
 
     chat_id: str

@@ -29,6 +29,12 @@ def get_diff_message(project_path: Path) -> Optional[str]:
         return None
 
 
+def get_diff_cached(project_path: Path) -> Optional[str]:
+    repo = Repo(project_path, search_parent_directories=True)
+    diff = repo.git.diff("--cached")
+    return diff.strip() or None
+
+
 def has_unstaged_changes(project_path: Path) -> bool:
     """Verifica si hay archivos modificados o untracked que no están en stage."""
     try:

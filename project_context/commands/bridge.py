@@ -58,17 +58,13 @@ def create_interactive_completer(
     return NestedCompleter.from_nested_dict(nested_dict)
 
 
-def interactive_session(
-    api: GoogleDriveManager,
-    workspace: ProjectContext,
-):
-    """
-    Inicia la consola interactiva (shell) sincronizada con Google Drive.
-    Se adapta a firmas de llamada flexibles para mantener la robustez.
-    """
-
+def interactive_session(api: GoogleDriveManager, workspace: ProjectContext):
     ctx = SessionContext(api=api, workspace=workspace)
     chat_id = workspace.chat_id
+
+    from project_context.ops import restore_chat_backup_if_exists
+
+    restore_chat_backup_if_exists(api, workspace)
 
     url = f"https://aistudio.google.com/prompts/{chat_id}"
     UI.success(f"Chat iniciado: {url}")

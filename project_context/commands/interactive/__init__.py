@@ -1,9 +1,7 @@
 from project_context.commands.interactive.base import cmd_exit, cmd_help
 from project_context.commands.interactive.chat import cmd_clear, cmd_update
-from project_context.commands.interactive.context import cmd_context_info
+from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.register import InteractiveRegistry
-
-# TODO: la nomenclatura de comandos deberia ser comandos y subcomandos para los comandos interactivos.
 
 
 def bootstrap_interactive_registry() -> InteractiveRegistry:
@@ -11,7 +9,6 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
     registry = InteractiveRegistry()
 
     # --- COMANDOS BASE ---
-
     registry.register(
         names=["exit", "quit"],
         handler=cmd_exit,
@@ -26,17 +23,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         require_chat=False,
     )
 
-    # --- COMANDOS DE CONTEXTO ---
-
-    registry.register(
-        names=["context", "ctx"],
-        handler=cmd_context_info,
-        description="Muestra los archivos enfocados actualmente y el árbol resultante.",
-        require_chat=True,
-    )
-
     # --- COMANDOS DE CHAT ---
-
     registry.register(
         names=["clear"],
         handler=cmd_clear,
@@ -47,8 +34,16 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
     registry.register(
         names=["update"],
         handler=cmd_update,
-        description="Cierra la sesión interactiva actual de forma segura.",
+        description="Actualiza el contenido del archivo de contexto en Drive.",
         require_chat=False,
+    )
+
+    # --- COMANDOS DE COMMIT ---
+    registry.register(
+        names=["commit", "ci"],
+        handler=cmd_commit,
+        description="Genera una sugerencia de commit temporal con base en el diff de Git actual.",
+        require_chat=True,
     )
 
     return registry

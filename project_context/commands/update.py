@@ -4,7 +4,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from project_context.ops import create_or_update_chat
+from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
 from project_context.profiles import ProfileManager
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
@@ -43,6 +43,8 @@ def update_command(
         creds = auth.authenticate(profile_config.token_path, profile_config.secret_path)
 
         api = GoogleDriveManager(creds)
+
+        restore_chat_backup_if_exists(api, workspace)
 
         create_or_update_chat(api, workspace)
 

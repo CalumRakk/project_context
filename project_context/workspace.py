@@ -345,13 +345,15 @@ class ProjectContext:
         full_context = final_tree + "\n" + final_content
         return Context(text=full_context, token_count=total_tokens)
 
-    @staticmethod
-    def create_state(chat_id: str, file_id: str, file_md5: str) -> "ProjectState":
-        from project_context.schema import ProjectState
-
-        return ProjectState(
-            chat_id=chat_id,
-            file_id=file_id,
-            md5=file_md5,
-            last_modified=time.time(),
-        )
+    def update_state(self, chat_id: str, file_id: str, file_md5: str):
+        """
+        Actualiza los parámetros críticos del estado en memoria y los persiste
+        en un único ciclo de escritura en el disco local.
+        """
+        self._ensure_state_loaded()
+        if self._state:
+            self._state.chat_id = chat_id
+            self._state.file_id = file_id
+            self._state.file_md5 = file_md5
+            self._state.last_modified = time.time()
+            self.save()
