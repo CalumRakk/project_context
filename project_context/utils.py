@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import sys
+import zlib
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
@@ -56,6 +57,16 @@ custom_theme = Theme(
 )
 
 console = Console(theme=custom_theme)
+
+
+def compress_data(data: bytes) -> bytes:
+
+    return zlib.compress(data)
+
+
+def decompress_data(data: bytes) -> bytes:
+
+    return zlib.decompress(data)
 
 
 def get_app_root_dir() -> Path:

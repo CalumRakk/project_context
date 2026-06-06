@@ -543,3 +543,16 @@ class GoogleDriveManager:
             f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
         )
         return True
+
+    def get_file_content(self, file_id: str) -> Optional[bytes]:
+        try:
+            request = self.service.files().get_media(fileId=file_id)
+            file_stream = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_stream, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+            return file_stream.getvalue()
+        except HttpError as error:
+            print(f"Error HTTP al descargar archivo '{file_id}': {error}")
+            return None

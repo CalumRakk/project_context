@@ -5,91 +5,33 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
-
+from project_context.database import Snapshot, SnapshotAsset, db
 from project_context.services.api_drive import GoogleDriveManager
-from project_context.utils import compute_md5
+from project_context.utils import compress_data, compute_md5, decompress_data
 from project_context.workspace import ProjectContext
 
-db = SqliteDatabase(None)
 logger = logging.getLogger(__name__)
-
-
-class BaseModel(Model):
-    class Meta:
-        database = db
-
-
-class Snapshot(BaseModel):
-    """Representa un punto de restauración del chat y el contexto."""
-
-    timestamp = CharField(unique=True, primary_key=True)
-    human_time = CharField()
-    drive_modified_time = CharField()
-    message = CharField(null=True)
-    chat_hash = CharField()
-    context_hash = CharField()
-    category = CharField(default="user")  # 'user', 'stash', 'auto'
-
-
-class SnapshotAsset(BaseModel):
-    """Recursos binarios vinculados a un snapshot."""
-
-    snapshot = ForeignKeyField(Snapshot, backref="assets", on_delete="CASCADE")
-    drive_file_id = CharField()
-    filename = CharField()
-    mime_type = CharField()
-    file_hash = CharField()
-
-
-def compress_data(data: bytes) -> bytes:
-    import zlib
-
-    return zlib.compress(data)
-
-
-def decompress_data(data: bytes) -> bytes:
-    import zlib
-
-    return zlib.decompress(data)
 
 
 class SnapshotManager:
     """
-    Administrador de contexto para la gestión de snapshots.
+    Administrador de la lógica de negocio de snapshots.
     Sigue un modelo CAS (Content Addressable Storage) para almacenar archivos
-    binarios de chat y contexto en el disco local de forma eficiente.
+    binarios en el disco de forma eficiente. No controla la conexión a la base de datos.
     """
 
     def __init__(self, api: GoogleDriveManager, project_context: ProjectContext):
         self.api = api
         self.project_context = project_context
 
-    def __enter__(self):
-        """Inicializa la conexión de la base de datos al ingresar al contexto."""
-        db_path = self.project_context.local_dir / "snapshots.db"
-        db.init(
-            str(db_path),
-            pragmas={
-                "journal_mode": "wal",
-                "cache_size": -1024 * 64,
-                "foreign_keys": 1,
-                "ignore_check_constraints": 0,
-                "synchronous": 1,
-            },
-        )
-        if db.is_closed():
-            db.connect(reuse_if_open=True)
-
-        db.create_tables([Snapshot, SnapshotAsset], safe=True)
+    def initialize_schema(self):
+        """
+        Ejecuta de forma explícita las migraciones de esquema y datos heredados.
+        Debe invocarse dentro de un bloque activo de `DatabaseSession`.
+        """
         self._migrate_schema()
         self._migrate_legacy_snapshots()
         return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Cierra de forma segura la conexión de la base de datos al salir."""
-        if not db.is_closed():
-            db.close()
 
     def _migrate_schema(self):
         """Aplica migraciones ligeras sobre el esquema de la base de datos."""
@@ -342,7 +284,7 @@ class SnapshotManager:
                     mime_type="text/plain",
                 )
                 if new_ctx_file and "id" in new_ctx_file:
-                    file_id = new_ctx_file["id"]
+                    file_id = new_ctx_file
                     self.project_context.file_id = file_id
                 else:
                     logger.debug(
@@ -362,7 +304,7 @@ class SnapshotManager:
                 chat_data = ChatIAStudio(**chat_json)
                 project_path = self.project_context.local_dir
                 chat_filename = Path(project_path).name + "_chat.prompt"
-                new_chat_id = self.api.create_chat_file(
+                new_chat_id = self.api.create_chat(
                     folder_id=file_id, file_name=chat_filename, chat_data=chat_data
                 )
                 if new_chat_id:

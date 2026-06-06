@@ -6,6 +6,8 @@ import typer
 from typing_extensions import Annotated
 
 from project_context.commands.bridge import interactive_session
+from project_context.database import DatabaseSession
+from project_context.history import SnapshotManager
 from project_context.profiles import ProfileManager
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
@@ -46,4 +48,8 @@ def run_command(
 
         api = GoogleDriveManager(creds)
 
-        interactive_session(api, workspace)
+        with DatabaseSession(workspace):
+            snapshot_mgr = SnapshotManager(api, workspace)
+            snapshot_mgr.initialize_schema()
+
+            interactive_session(api, workspace)

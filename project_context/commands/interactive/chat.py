@@ -1,5 +1,4 @@
 from project_context.commands.interactive.register import SessionContext
-from project_context.exceptions import ChatSessionError
 from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
 from project_context.ui import UI
 from project_context.utils import get_context_tree
@@ -8,20 +7,15 @@ from project_context.utils import get_context_tree
 def cmd_clear(ctx: SessionContext, args: list[str]):
     """Limpia el historial de la conversación manteniendo el contexto inicial."""
 
-    restore_chat_backup_if_exists(ctx.api, ctx.workspace)
-
-    if ctx.api.clear_chat(ctx.workspace.chat_id):
-        UI.success("Historial de mensajes limpiado en Drive.")
+    if restore_chat_backup_if_exists(ctx.api, ctx.workspace):
+        UI.info("Restaurado chat original desde el respaldo local.")
     else:
-        raise ChatSessionError(
-            "No se pudo limpiar el historial del chat en Google Drive."
-        )
+        ctx.api.clear_chat(ctx.workspace.chat_id)
+        UI.success("Historial de mensajes limpiado en Drive.")
 
 
 def cmd_update(ctx: SessionContext, args: list[str]):
     """Actualiza el contenido del archivo de contexto en Drive."""
-
-    restore_chat_backup_if_exists(ctx.api, ctx.workspace)
 
     clean_args_list = [
         arg for arg in args if arg not in ["--force", "-f", "force", "--run", "-r"]
