@@ -12,7 +12,7 @@ import pathspec
 from rich.console import Console
 from rich.theme import Theme
 
-from project_context.schema import LocalContextItems
+from project_context.core.schemas import LocalContextItems
 from project_context.ui import UI
 
 logger = logging.getLogger(__name__)

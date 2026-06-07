@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from project_context.core.project_context import ProjectContext
 from project_context.services.api_drive import GoogleDriveManager
-from project_context.workspace import ProjectContext
+from project_context.ui import UI
 
 
 @dataclass
@@ -11,19 +11,7 @@ class SessionContext:
     """Contenedor explícito de dependencias para la sesión interactiva."""
 
     api: GoogleDriveManager
-    workspace: ProjectContext
-
-    @property
-    def project_path(self) -> Path:
-        return self.workspace.project_path
-
-    @property
-    def chat_id(self) -> str:
-        return self.workspace.chat_id
-
-    @property
-    def file_id(self) -> str:
-        return self.workspace.file_id
+    project_context: ProjectContext
 
 
 class CommandMetadata:
@@ -67,8 +55,6 @@ class InteractiveRegistry:
     ) -> Optional[bool]:
         cmd_name = name.lower()
         if cmd_name not in self._commands:
-            from project_context.ui import UI
-
             UI.error(
                 f"Comando desconocido: '{name}'. Escribe 'help' para ver la lista."
             )
@@ -76,9 +62,8 @@ class InteractiveRegistry:
 
         metadata = self._commands[cmd_name]
 
-        if metadata.require_chat and not ctx.chat_id:
-            from project_context.ui import UI
-
+        state = ctx.project_context.load_state()
+        if metadata.require_chat and not state.chat_id:
             UI.error(
                 "No se encontró una sesión de chat activa para ejecutar este comando."
             )

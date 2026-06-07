@@ -12,5 +12,14 @@
             "source.fixAll.ruff": "explicit",
             "source.organizeImports.ruff": "explicit"
         }
-    }
+    },
+    "python.analysis.exclude": [
+        "**/build",
+        "**/__pycache__",
+        "**/.venv",
+        "**/venv",
+        "**/.*",
+        "**/node_modules",
+        "**/docs"
+    ]
 }

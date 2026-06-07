@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-from project_context.schema import (
+from project_context.core.schemas import (
     ChatIAStudio,
     ChunkedPrompt,
     ChunksDocument,
@@ -246,8 +246,6 @@ class GoogleDriveManager:
             file_id=file_id,
             fields="id, name, modifiedTime",
         )
-        if file:
-            UI.success("Archivo actualizado en Drive.")
 
         if not file or "id" not in file:
             raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
@@ -542,6 +540,7 @@ class GoogleDriveManager:
         logger.debug(
             f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
         )
+        self.update_chat(chat_id, chat)
         return True
 
     def get_file_content(self, file_id: str) -> Optional[bytes]:

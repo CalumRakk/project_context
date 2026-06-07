@@ -2,7 +2,7 @@ import logging
 
 from peewee import CharField, ForeignKeyField, Model, SqliteDatabase
 
-from project_context.workspace import ProjectContext
+from project_context.core.project_context import ProjectContext
 
 db = SqliteDatabase(None)
 logger = logging.getLogger(__name__)

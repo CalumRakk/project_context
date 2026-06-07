@@ -8,11 +8,11 @@ from prompt_toolkit.history import InMemoryHistory
 
 from project_context.commands.interactive import bootstrap_interactive_registry
 from project_context.commands.interactive.register import SessionContext
-from project_context.exceptions import ProjectContextError
-from project_context.profiles import ProfileManager
+from project_context.core.exceptions import ProjectContextError
+from project_context.core.profile_mg import ProfileManager
+from project_context.core.project_context import ProjectContext
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.ui import UI
-from project_context.workspace import ProjectContext
 
 
 def create_interactive_completer(
@@ -58,22 +58,22 @@ def create_interactive_completer(
     return NestedCompleter.from_nested_dict(nested_dict)
 
 
-def interactive_session(api: GoogleDriveManager, workspace: ProjectContext):
-    ctx = SessionContext(api=api, workspace=workspace)
-    chat_id = workspace.chat_id
+def interactive_session(api: GoogleDriveManager, project_context: ProjectContext):
 
-    from project_context.ops import restore_chat_backup_if_exists
+    ctx = SessionContext(api=api, project_context=project_context)
 
-    restore_chat_backup_if_exists(api, workspace)
+    state = project_context.load_state()
 
-    url = f"https://aistudio.google.com/prompts/{chat_id}"
-    UI.success(f"Chat iniciado: {url}")
+    url = f"https://aistudio.google.com/prompts/{state.chat_id}"
+    UI.success(f"Chat activo: {url}")
     UI.info("Escribe [green]help[/] para comandos.")
     UI.info("Escribe [green]update[/] para sincronizar los cambios con Drive.")
 
     registry = bootstrap_interactive_registry()
     commands_list = list(registry._commands.keys())
-    completer = create_interactive_completer(workspace.project_path, commands_list)
+    completer = create_interactive_completer(
+        project_context.project_path, commands_list
+    )
 
     session = PromptSession(completer=completer, history=InMemoryHistory())
     consecutive_errors = 0

@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from project_context.profiles import ProfileManager
+from project_context.core.profile_mg import ProfileManager
 from project_context.utils import (
     UI,
     validate_google_secrets_file,

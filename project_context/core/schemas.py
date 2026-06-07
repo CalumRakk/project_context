@@ -221,6 +221,12 @@ class ChatIAStudio(BaseModel):
     systemInstruction: SystemInstruction
     chunkedPrompt: ChunkedPrompt
 
+    def reset_context_document_tokencount(self):
+        for chunk in self.chunkedPrompt.chunks:
+            if isinstance(chunk, ChunksDocument):
+                chunk.tokenCount = None  # type: ignore - Fuerza el recuento de tokens
+                break
+
 
 class LocalContextItems(BaseModel):
     files: List[str] = Field(default_factory=list)
@@ -235,26 +241,6 @@ class ProfileConfig(BaseModel):
 
     token_path: Path
     secret_path: Path
-
-
-class ProjectState(BaseModel):
-    # Nota: Nunca almacear variables de flujos de estados en esta schema.
-    model_config = ConfigDict(extra="allow")
-
-    chat_id: str
-    file_id: str
-    file_md5: str = Field(default_factory=str, alias="md5")
-
-    last_modified: float
-    context_items: LocalContextItems = Field(default_factory=LocalContextItems)
-
-    # path: str
-    # monitor_active: bool = False
-    # story_mode: bool = False
-    # story_anchor: Optional[str] = None
-    # commit_mode: bool = False
-    # # TODO: ELIMINAR commit_mode
-    # vanished: bool = False
 
 
 class Context(BaseModel):
@@ -274,3 +260,35 @@ class Context(BaseModel):
 class ContextRemote(BaseModel):
     context: Context
     file_id: str
+
+
+class ProjectState(BaseModel):
+    # Nota: Nunca almacenar variables de flujos de estados en este schema. Solo valores persistentes.
+    model_config = ConfigDict(extra="allow")
+
+    chat_id: Optional[str] = None
+    file_id: Optional[str] = None
+    state_path: Path = Field(exclude=True)
+
+    # file_md5: str = Field(default_factory=str)
+    # No almacenar el md5sum. La api de drive ya ofrece el md5sum del file_id.
+    # Cuando se genera un contexto, se calcula el md5sum del texto.
+    # asi que tenemos dos fuentes de verdad. Almcenarnos, implica mantener un valor propenso a no actualizarse.
+
+    context_items: LocalContextItems = Field(default_factory=LocalContextItems)
+
+    last_modified: float = Field(default_factory=time.time)
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+
+        if name != "last_modified":
+            super().__setattr__("last_modified", time.time())
+
+    def save(self):
+        """
+        Actualiza los parámetros críticos del estado en memoria y los persiste
+        en un único ciclo de escritura en el disco local.
+        """
+        data = self.model_dump_json(indent=2)
+        self.state_path.write_text(data, encoding="utf-8")

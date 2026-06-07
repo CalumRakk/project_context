@@ -5,10 +5,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from project_context.database import Snapshot, SnapshotAsset, db
+from project_context.core.database import Snapshot, SnapshotAsset, db
+from project_context.core.project_context import ProjectContext
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.utils import compress_data, compute_md5, decompress_data
-from project_context.workspace import ProjectContext
 
 logger = logging.getLogger(__name__)
 
@@ -85,37 +85,34 @@ class SnapshotManager:
         category: str = "auto",
     ) -> Optional[str]:
         """Crea un snapshot atómico y retorna su timestamp asignado."""
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            current_md5 = self.project_context.md5
-            if not current_md5:
-                return None
 
-            current_context_path = self.project_context.local_dir / "last_context.txt"
-            if not current_context_path.exists():
-                return None
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_md5 = self.project_context.md5
+        if not current_md5:
+            return None
 
-            context_content = current_context_path.read_bytes()
-            chat_id = self.project_context.chat_id
-            chat_content = self.api.get_file_content(chat_id)
+        current_context_path = self.project_context.local_dir / "last_context.txt"
+        if not current_context_path.exists():
+            return None
 
-            if chat_content:
-                chat_hash = self._store_object(chat_content)
-                context_hash = self._store_object(context_content)
+        context_content = current_context_path.read_bytes()
+        chat_id = self.project_context.chat_id
+        chat_content = self.api.get_file_content(chat_id)
 
-                Snapshot.create(
-                    timestamp=timestamp,
-                    human_time=datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
-                    drive_modified_time=drive_modified_time,
-                    message=message,
-                    chat_hash=chat_hash,
-                    context_hash=context_hash,
-                    category=category,
-                )
-                return timestamp
-        except Exception as e:
-            logger.debug(f"[Error Snapshot]: {e}")
-        return None
+        if chat_content:
+            chat_hash = self._store_object(chat_content)
+            context_hash = self._store_object(context_content)
+
+            Snapshot.create(
+                timestamp=timestamp,
+                human_time=datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
+                drive_modified_time=drive_modified_time,
+                message=message,
+                chat_hash=chat_hash,
+                context_hash=context_hash,
+                category=category,
+            )
+            return timestamp
 
     def create_named_snapshot(
         self, message: str, category: str = "user"
@@ -299,7 +296,7 @@ class SnapshotManager:
                 logger.debug(
                     "  [Auto-reparación] Recreando archivo de chat en Drive..."
                 )
-                from project_context.schema import ChatIAStudio
+                from project_context.core.schemas import ChatIAStudio
 
                 chat_data = ChatIAStudio(**chat_json)
                 project_path = self.project_context.local_dir

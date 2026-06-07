@@ -1,9 +1,11 @@
+import json
 import logging
 from pathlib import Path
 from typing import Optional
 
-from project_context.schema import (
-    ChunksDocument,
+from project_context.core.project_context import ProjectContext
+from project_context.core.schemas import (
+    ChatIAStudio,
     Context,
     ContextRemote,
 )
@@ -16,7 +18,6 @@ from project_context.utils import (
     COMMIT_TASK_MARKER,
     UI,
 )
-from project_context.workspace import ProjectContext
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 logger = logging.getLogger(__name__)
@@ -80,63 +81,59 @@ def create_or_update_chat(api: GoogleDriveManager, projectcontext: ProjectContex
         )
 
     # Trabajo con el Archivo de Contexto
-    file_id = projectcontext.file_id
+    state = projectcontext.load_state()
     filename = build_filename_chat(projectcontext.project_path)
     context = projectcontext.generate_context()
 
-    if not api.can_access_file(projectcontext.file_id):
+    if state.file_id is None or not api.can_access_file(state.file_id):
         context_remote = create_context_document(api, filename, context)
-        file_id_final = context_remote.file_id
+        state.file_id = context_remote.file_id
+        state.save()
     else:
-        context_remote = update_context_document(api, context, file_id)
-        file_id_final = file_id
+        update_context_document(api, context, state.file_id)
 
     # Trabajo con el Archivo de Chat
-    chat_id = projectcontext.chat_id
-    if api.can_access_file(chat_id):
-        chat = api.get_chat(chat_id)
-        for chunk in chat.chunkedPrompt.chunks:
-            if isinstance(chunk, ChunksDocument) and chunk.file_id == file_id:
-                chunk.tokenCount = None  # type: ignore - Fuerza el recuento de tokens
-                break
-        api.update_chat(chat_id, chat)
-        chat_id_final = chat_id
-        UI.success(f"Proyecto actualizado con Chat ID: [dim]{chat_id}[/]")
-    else:
+    if state.chat_id is None or not api.can_access_file(state.chat_id):
         chat_filename = build_filename_chat(projectcontext.project_path)
         initial_chat = ChunkFactory.build_initial_chat(context_remote)
-        chat_id_final = api.create_chat(
+        state.chat_id = api.create_chat(
             folder_id=folder_id, file_name=chat_filename, chat_data=initial_chat
         )
-        UI.success(f"Proyecto inicializado con Chat ID: [dim]{chat_id}[/]")
-
-    projectcontext.update_state(
-        chat_id=chat_id_final,
-        file_id=file_id_final,
-        file_md5=context_remote.context.md5sum,
-    )
+        state.save()
+        UI.success(f"Se creo nuevo Chat ID: [dim]{state.chat_id}[/]")
+    else:
+        chat = api.get_chat(state.chat_id)
+        chat.reset_context_document_tokencount()
+        api.update_chat(state.chat_id, chat)
+        UI.success("Contexto del Chat actualizado.")
 
 
 def restore_chat_backup_if_exists(
-    api: GoogleDriveManager, workspace: ProjectContext
+    api: GoogleDriveManager, project_context: ProjectContext
 ) -> bool:
     """Restaura el chat original si se detecta un archivo de respaldo local."""
-    backup_path = workspace.local_dir / "chat_backup.prompt"
-    if backup_path.exists():
-        try:
-            import json
 
-            from project_context.schema import ChatIAStudio
+    backup_path = project_context.local_dir / "chat_backup.prompt"
 
-            UI.info(
-                "Detectado respaldo de chat local. Restaurando sesión original en Drive..."
-            )
-            content = backup_path.read_text(encoding="utf-8")
-            chat_data = ChatIAStudio(**json.loads(content))
-            api.update_chat(workspace.chat_id, chat_data)
-            backup_path.unlink()
-            UI.success("Sesión original restaurada en Drive con éxito.")
-            return True
-        except Exception as e:
-            UI.error(f"No se pudo auto-restaurar el chat de respaldo: {e}")
-    return False
+    if not backup_path.exists():
+        return False
+
+    state = project_context.load_state()
+    if state.chat_id is None:
+        # TODO: este mensaje acopla la funcion con la logica del commit. Analizar bien esto.
+        UI.info("No se encontró un chat_id para restaurar el modo commit.")
+        return False
+
+    UI.info(
+        "Se detectó respaldo del chat de un modo commit anterior. Restaurando chat original..."
+    )
+
+    content = backup_path.read_text(encoding="utf-8")
+    chat_data = ChatIAStudio(**json.loads(content))
+    chat_data.reset_context_document_tokencount()
+    api.update_chat(state.chat_id, chat_data)
+
+    backup_path.unlink()
+
+    UI.success("Chat restaurado con éxito.")
+    return True

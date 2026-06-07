@@ -3,9 +3,9 @@ import logging
 from typing import List
 
 from project_context.commands.interactive.register import SessionContext
-from project_context.exceptions import ChatSessionError
+from project_context.core.exceptions import ChatSessionError
+from project_context.core.schemas import ChunksText
 from project_context.ops import generate_commit_prompt_text
-from project_context.schema import ChunksText
 from project_context.services.git_ops import (
     get_diff_cached,
     has_unstaged_changes,
@@ -18,18 +18,24 @@ logger = logging.getLogger(__name__)
 
 def cmd_commit(ctx: SessionContext, args: List[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
-    backup_path = ctx.workspace.local_dir / "chat_backup.prompt"
+
+    backup_path = ctx.project_context.local_dir / "chat_backup.prompt"
+    project_path = ctx.project_context.project_path
+    state = ctx.project_context.load_state()
+
+    if state.chat_id is None:
+        raise ChatSessionError("No se encontró una sesión de chat activa.")
 
     # Comprobar si el usuario quiere restaurar manualmente
-    if args and args[0].lower() in ["--restore", "-r", "restore"]:
+    if args and args[0].lower() in ["--clear", "-r", "restore"]:
         if backup_path.exists():
             UI.info("Restaurando chat original desde el respaldo local...")
             try:
                 content = backup_path.read_text(encoding="utf-8")
-                from project_context.schema import ChatIAStudio
+                from project_context.core.schemas import ChatIAStudio
 
                 chat_data = ChatIAStudio(**json.loads(content))
-                ctx.api.update_chat(ctx.chat_id, chat_data)
+                ctx.api.update_chat(state.chat_id, chat_data)
                 backup_path.unlink()
                 UI.success("Chat original restaurado con éxito.")
             except Exception as e:
@@ -41,11 +47,11 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     is_command_all = args and args[0].lower() in ["-a", "--all", "all"]
 
     if is_command_all:
-        stage_all_changes(ctx.project_path)
+        stage_all_changes(project_path)
 
-    diff = get_diff_cached(ctx.project_path)
+    diff = get_diff_cached(project_path)
     if not diff:
-        if has_unstaged_changes(ctx.project_path):
+        if has_unstaged_changes(project_path):
             UI.warn(
                 "No hay archivos en stage (git add), pero hay modificaciones locales."
             )
@@ -55,8 +61,8 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
                 .lower()
             )
             if confirm == "s":
-                stage_all_changes(ctx.project_path)
-                diff = get_diff_cached(ctx.project_path)
+                stage_all_changes(project_path)
+                diff = get_diff_cached(project_path)
                 if not diff:
                     raise ChatSessionError(
                         "No se pudo generar el diff de Git después del stage."
@@ -69,13 +75,13 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
             return
 
     UI.info("Obteniendo cambios de Git...")
-    prompt_text = generate_commit_prompt_text(ctx.project_path)
+    prompt_text = generate_commit_prompt_text(project_path)
     if not prompt_text:
         raise ChatSessionError("No se pudo generar el prompt de sugerencia de commit.")
 
     # 1. Obtener chat actual
     UI.info("Descargando configuración del chat remoto...")
-    chat_data = ctx.api.get_chat(ctx.chat_id)
+    chat_data = ctx.api.get_chat(state.chat_id)
     if not chat_data:
         raise ChatSessionError("No se pudo descargar el chat de Drive.")
 
@@ -98,7 +104,7 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:
         if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
-            if chunk.file_id == ctx.file_id:
+            if chunk.file_id == state.file_id:
                 context_chunk = chunk
                 break
 
@@ -118,7 +124,7 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     chat_data.chunkedPrompt.pendingInputs = []
 
     # 5. Actualizar el chat remoto
-    ctx.api.update_chat(ctx.chat_id, chat_data)
+    ctx.api.update_chat(state.chat_id, chat_data)
     UI.success("¡Modo commit activado!")
     UI.info("Ve a Google AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")
     UI.info(

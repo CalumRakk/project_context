@@ -4,13 +4,13 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from project_context.exceptions import (
+from project_context.core.exceptions import (
     ProfileActiveNotFoundError,
     ProfileConfigCorruptError,
     ProfileConfigNotFoundError,
     ProfileNotFoundError,
 )
-from project_context.schema import ProfileConfig
+from project_context.core.schemas import ProfileConfig
 from project_context.utils import get_app_root_dir
 
 logger = logging.getLogger(__name__)
