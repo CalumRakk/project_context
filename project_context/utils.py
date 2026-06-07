@@ -59,6 +59,49 @@ custom_theme = Theme(
 console = Console(theme=custom_theme)
 
 
+def setup_windows_terminal():
+    if sys.platform.startswith("win"):
+        os.system("chcp 65001 > nul")
+        if sys.stdout.encoding != "utf-8":
+            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore
+        if sys.stderr.encoding != "utf-8":
+            sys.stderr.reconfigure(encoding="utf-8")  # type: ignore
+
+
+def disable_gitingest_logs():
+    # Silenciar loguru/gitingest
+    try:
+        from loguru import logger
+
+        logger.disable("gitingest")
+    except ImportError:
+        pass
+
+
+def setup_terminal_behavior():
+    """Configura el manejo de advertencias y comportamiento de la consola."""
+    import warnings
+
+    def custom_warning_handler(
+        message, category, filename, lineno, file=None, line=None
+    ):
+        from project_context.utils import UI
+
+        msg_str = str(message)
+
+        if issubclass(category, FutureWarning):
+            if "Google" in msg_str and "Python version" in msg_str:
+                UI.warn(
+                    "Google Cloud dejará de soportar Python 3.10 en Octubre de 2026. Se recomienda actualizar a 3.11+."
+                )
+            else:
+                UI.warn(f"Optimización sugerida: {msg_str}")
+        else:
+            UI.info(f"[dim]{category.__name__}: {msg_str}[/]")
+
+    warnings.showwarning = custom_warning_handler
+
+
 def compress_data(data: bytes) -> bytes:
 
     return zlib.compress(data)
