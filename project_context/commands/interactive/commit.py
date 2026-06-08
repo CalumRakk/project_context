@@ -4,7 +4,7 @@ from typing import List
 
 from project_context.commands.interactive.register import SessionContext
 from project_context.core.exceptions import ChatSessionError
-from project_context.core.schemas import ChunksText
+from project_context.core.schemas import ChunkText
 from project_context.ops import generate_commit_prompt_text
 from project_context.services.git_ops import (
     get_diff_cached,
@@ -79,13 +79,13 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     if not prompt_text:
         raise ChatSessionError("No se pudo generar el prompt de sugerencia de commit.")
 
-    # 1. Obtener chat actual
+    # Obtener chat actual
     UI.info("Descargando configuración del chat remoto...")
     chat_data = ctx.api.get_chat(state.chat_id)
     if not chat_data:
         raise ChatSessionError("No se pudo descargar el chat de Drive.")
 
-    # 2. Respaldar chat original (SÓLO si no existe ya un backup)
+    # Respaldar chat original (SÓLO si no existe ya un backup)
     if not backup_path.exists():
         UI.info("Guardando respaldo del chat original en disco...")
         try:
@@ -100,7 +100,7 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
             "Ya existe un respaldo de chat activo en disco. Actualizando sugerencia sobre la sesión de commit existente."
         )
 
-    # 3. Buscar el chunk del documento de contexto (para mantenerlo)
+    # Buscar el chunk del documento de contexto (para mantenerlo)
     context_chunk = None
     for chunk in chat_data.chunkedPrompt.chunks:
         if getattr(chunk, "role", "") == "user" and hasattr(chunk, "driveDocument"):
@@ -108,13 +108,13 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
                 context_chunk = chunk
                 break
 
-    # 4. Construir chat minimalista para el commit
+    # Construir chat minimalista para el commit
     UI.info("Configurando chat minimalista con modelo rápido...")
     fast_chunks = []
     if context_chunk:
         fast_chunks.append(context_chunk)
 
-    fast_chunks.append(ChunksText(text=prompt_text, role="user"))
+    fast_chunks.append(ChunkText(text=prompt_text, role="user"))
 
     # Cambiamos a un modelo rápido y sanitizamos
     chat_data.runSettings.model = "models/gemini-3.1-flash-lite"
@@ -123,7 +123,7 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     chat_data.chunkedPrompt.chunks = fast_chunks
     chat_data.chunkedPrompt.pendingInputs = []
 
-    # 5. Actualizar el chat remoto
+    # Actualizar el chat remoto
     ctx.api.update_chat(state.chat_id, chat_data)
     UI.success("¡Modo commit activado!")
     UI.info("Ve a Google AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN.")

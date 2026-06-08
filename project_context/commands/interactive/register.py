@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
 from project_context.core.project_context import ProjectContext
+from project_context.core.snapshot_mg import SnapshotManager
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.ui import UI
 
@@ -12,6 +13,17 @@ class SessionContext:
 
     api: GoogleDriveManager
     project_context: ProjectContext
+
+    _snapshot_manager: Optional[SnapshotManager] = None
+
+    @property
+    def snapshot_manager(self):
+        """Inicializa de forma perezosa y con caché el SnapshotManager."""
+        if self._snapshot_manager is None:
+            self._snapshot_manager = SnapshotManager(self.api, self.project_context)
+            self._snapshot_manager.initialize_schema()
+
+        return self._snapshot_manager
 
 
 class CommandMetadata:

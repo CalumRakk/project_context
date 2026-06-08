@@ -35,3 +35,27 @@ def cmd_update(ctx: SessionContext, args: list[str]):
             ctx.project_context.project_path, state.context_items
         )
         print(f"\n[dim cyan]{tree_str}[/]\n")
+
+
+def cmd_save(ctx: SessionContext, args: list[str]):
+    """Crea de forma manual un snapshot de respaldo etiquetado con un mensaje."""
+    if not args:
+        UI.warn(
+            "Debes proveer una descripción para el snapshot: `save mi_cambio_importante`"
+        )
+        return
+
+    message = " ".join(args)
+    UI.info("Iniciando la creación del snapshot...")
+
+    try:
+        timestamp = ctx.snapshot_manager.create_named_snapshot(message, category="user")
+
+        if timestamp:
+            UI.success(f"Snapshot guardado exitosamente. ID: [bold cyan]{timestamp}[/]")
+        else:
+            UI.error(
+                "No se pudo crear el snapshot. Asegúrate de tener una sesión de chat activa."
+            )
+    except Exception as e:
+        UI.error(f"Fallo al guardar el snapshot en la base de datos: {e}")

@@ -40,9 +40,9 @@ def update_command(
     creds = AuthService.authenticate(profile.token_path, profile.secret_path)
     api = GoogleDriveManager(creds)
 
-    with ProjectContext(profile.email, project_path) as workspace:
-        restore_chat_backup_if_exists(api, workspace)
+    with ProjectContext(profile.email, project_path) as projectcontext:
+        restore_chat_backup_if_exists(api, projectcontext)
 
-        create_or_update_chat(api, workspace)
+        create_or_update_chat(api, projectcontext)
 
         UI.success("Sincronización de contexto completada.")

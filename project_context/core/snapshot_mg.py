@@ -1,16 +1,54 @@
+import enum
 import json
 import logging
 import shutil
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
+
+from pydantic import BaseModel, ConfigDict
 
 from project_context.core.database import Snapshot, SnapshotAsset, db
+from project_context.core.exceptions import ChatSessionError
 from project_context.core.project_context import ProjectContext
+from project_context.core.schemas import ChatIAStudio
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.utils import compress_data, compute_md5, decompress_data
 
 logger = logging.getLogger(__name__)
+
+
+class AssetPayload(BaseModel):
+    """Contenedor para los recursos binarios adjuntos al chat (imágenes/documentos)."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # Permite almacenar bytes
+
+    drive_file_id: str
+    filename: str
+    mime_type: str
+    content: bytes  # Payload binario descargado
+
+
+# class SnapshotManifest(BaseModel):
+#     """Representación completa e inmutable del snapshot listo para ser guardado."""
+
+#     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+#     timestamp: datetime
+#     human_time: str
+#     drive_modified_time: str
+#     category: str
+#     message: Optional[str] = None
+
+#     chat_content: bytes
+#     context_content: bytes
+
+#     assets: List[AssetPayload]
+
+
+class SnapCategory(enum.Enum):
+    USER = "user"
+    SYSTEM = "system"
+    COMMIT = "commit"
 
 
 class SnapshotManager:
@@ -78,47 +116,185 @@ class SnapshotManager:
             )
             return None
 
+    def _download_assets(self, chat: ChatIAStudio, file_id: str) -> List[AssetPayload]:
+
+        if file_id is None:
+            raise ChatSessionError("Falta identificador de sesión en el chat.")
+
+        assets_to_download = []
+        for chunk in chat.chunkedPrompt.chunks:
+            doc_id = chunk.file_id
+            if not doc_id:  # raro, pero puede ocurrir.
+                continue
+
+            if chunk.is_document:
+                assets_to_download.append(
+                    {
+                        "id": doc_id,
+                        "mime": "text/plain",
+                        "name": f"doc_{doc_id}.txt",
+                    }
+                )
+            elif chunk.is_image:
+                assets_to_download.append(
+                    {
+                        "id": doc_id,
+                        "mime": "image/jpeg",
+                        "name": f"image_{doc_id}.jpg",
+                    }
+                )
+
+        downloaded_assets = []
+        for asset_info in assets_to_download:
+            if asset_info["id"] == file_id:
+                continue
+
+            asset_bytes = self.api.get_file_content(asset_info["id"])
+            downloaded_assets.append(
+                AssetPayload(
+                    drive_file_id=asset_info["id"],
+                    filename=asset_info["name"],
+                    mime_type=asset_info["mime"],
+                    content=asset_bytes,
+                )
+            )
+
+        return downloaded_assets
+
+    # def _build_manifest(
+    #     self, drive_modified_time: str, category: SnapCategory, message: Optional[str]
+    # ) -> SnapshotManifest:
+    #     """
+    #     Descarga y valida todos los componentes necesarios desde Drive.
+    #     No realiza escrituras locales ni operaciones de base de datos.
+    #     """
+    #     state = self.project_context.load_state()
+
+    #     if not state.chat_id or not state.file_id:
+    #         raise ChatSessionError(
+    #             "Faltan identificadores de sesión en el estado local."
+    #         )
+
+    #     chat_bytes = self.api.get_file_content(state.chat_id)
+    #     chat = ChatIAStudio.model_validate_json(chat_bytes)
+    #     context_bytes = self.api.get_file_content(state.file_id)
+
+    #     downloaded_assets = self._download_assets(chat, state.file_id)
+
+    #     now = datetime.now()
+    #     # return SnapshotManifest(
+    #     #     timestamp=now.strftime("%Y%m%d_%H%M%S"),
+    #     #     human_time=now.strftime("%H:%M:%S - %d/%m/%Y"),
+    #     #     drive_modified_time=drive_modified_time,
+    #     #     category=category.value,
+    #     #     message=message,
+    #     #     chat_content=chat_bytes,
+    #     #     context_content=context_bytes,
+    #     #     assets=downloaded_assets,
+    #     # )
+
+    def _persist_manifest(
+        self, chat_content: bytes, context_content: bytes, assets: List[AssetPayload]
+    ) -> str:
+        """
+        Guarda el manifiesto de forma atómica en el CAS y la base de datos.
+        No realiza llamadas de red.
+        """
+
+        chat_hash = self._store_object(chat_content)
+        context_hash = self._store_object(context_content)
+
+        assets_with_hashes = []
+        for asset in assets:
+            asset_hash = self._store_object(asset.content)
+            assets_with_hashes.append((asset, asset_hash))
+
+        with db.atomic():
+            snapshot = Snapshot.create(
+                timestamp=manifest.timestamp,
+                human_time=manifest.human_time,
+                drive_modified_time=manifest.drive_modified_time,
+                message=manifest.message,
+                chat_hash=chat_hash,
+                context_hash=context_hash,
+                category=manifest.category,
+            )
+
+            for asset, asset_hash in assets_with_hashes:
+                SnapshotAsset.create(
+                    snapshot=snapshot,
+                    drive_file_id=asset.drive_file_id,
+                    filename=asset.filename,
+                    mime_type=asset.mime_type,
+                    file_hash=asset_hash,
+                )
+
+        return manifest.timestamp
+
     def create_snapshot(
         self,
         drive_modified_time: str,
-        message: Optional[str] = None,
-        category: str = "auto",
+        category: Union[SnapCategory, str],
+        message: str,
     ) -> Optional[str]:
-        """Crea un snapshot atómico y retorna su timestamp asignado."""
+        """Crea un snapshot de forma garantizada y atómica."""
+        try:
+            state = self.project_context.load_state()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_md5 = self.project_context.md5
-        if not current_md5:
-            return None
+            if not state.chat_id or not state.file_id:
+                raise ChatSessionError(
+                    "Faltan identificadores de sesión en el estado local."
+                )
 
-        current_context_path = self.project_context.local_dir / "last_context.txt"
-        if not current_context_path.exists():
-            return None
+            # Descarga de datos desde Drive
+            chat_bytes = self.api.get_file_content(state.chat_id)
+            chat = ChatIAStudio.model_validate_json(chat_bytes)
+            context_bytes = self.api.get_file_content(state.file_id)
 
-        context_content = current_context_path.read_bytes()
-        chat_id = self.project_context.chat_id
-        chat_content = self.api.get_file_content(chat_id)
+            # Descarga de recursos asociados
+            downloaded_assets = self._download_assets(chat, state.file_id)
 
-        if chat_content:
-            chat_hash = self._store_object(chat_content)
-            context_hash = self._store_object(context_content)
+            # Tiempos de registro local
+            now = datetime.now()
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            human_time = now.strftime("%H:%M:%S - %d/%m/%Y")
 
-            Snapshot.create(
-                timestamp=timestamp,
-                human_time=datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
-                drive_modified_time=drive_modified_time,
-                message=message,
-                chat_hash=chat_hash,
-                context_hash=context_hash,
-                category=category,
+            # Normalizar categoría a string
+            category_str = (
+                category.value if isinstance(category, SnapCategory) else str(category)
             )
-            return timestamp
+
+            # Persistencia de los datos procesados
+            persisted_timestamp = self._persist_snapshot_data(
+                timestamp=timestamp,
+                human_time=human_time,
+                drive_modified_time=drive_modified_time,
+                category=category_str,
+                message=message,
+                chat_content=chat_bytes,
+                context_content=context_bytes,
+                assets=downloaded_assets,
+            )
+
+            return persisted_timestamp
+
+        except ChatSessionError as e:
+            logger.error(
+                f"Fallo al preparar el snapshot debido a problemas de red o datos: {e}"
+            )
+            return None
+        except Exception as e:
+            logger.exception(
+                f"Error inesperado persistiendo el snapshot localmente: {e}"
+            )
+            return None
 
     def create_named_snapshot(
-        self, message: str, category: str = "user"
+        self, message: str, category: Union[SnapCategory, str] = SnapCategory.USER
     ) -> Optional[str]:
         """Genera un snapshot etiquetado resolviendo metadatos remotos."""
-        chat_id = self.project_context.chat_id
+        state = self.project_context.load_state()
+        chat_id = state.chat_id
         if not chat_id:
             return None
 
@@ -127,30 +303,10 @@ class SnapshotManager:
             metadata.get("modifiedTime", "Manual Save") if metadata else "Unknown"
         )
         return self.create_snapshot(
-            drive_modified_time=mod_time, message=message, category=category
+            drive_modified_time=mod_time,
+            message=message,
+            category=SnapCategory(category),
         )
-
-    def get_latest_snapshot_by_category(self, category: str) -> Optional[dict]:
-        """Recupera el último snapshot correspondiente a una categoría."""
-        try:
-            snap = (
-                Snapshot.select()
-                .where(Snapshot.category == category)
-                .order_by(Snapshot.timestamp.desc())
-                .first()
-            )
-            if snap:
-                return {
-                    "timestamp": snap.timestamp,
-                    "human_time": snap.human_time,
-                    "drive_modified_time": snap.drive_modified_time,
-                    "context_md5": snap.context_hash,
-                    "message": snap.message,
-                    "category": getattr(snap, "category", "user"),
-                }
-        except Exception as e:
-            logger.debug(f"[Error] Fallo al buscar snapshot por categoría: {e}")
-        return None
 
     def restore_snapshot(self, timestamp: str) -> bool:
         """Restaura la información del snapshot en el entorno de Drive y disco local."""
@@ -258,12 +414,14 @@ class SnapshotManager:
 
             context_content = context_bytes.decode("utf-8")
 
-            file_id = self.project_context.file_id
-            chat_id = self.project_context.chat_id
+            # Cargamos el archivo de estado para usarlo como única fuente de verdad local
+            state = self.project_context.load_state()
+            file_id = state.file_id
+            chat_id = state.chat_id
 
             if not file_id or not chat_id:
                 logger.debug(
-                    "Error: No hay identificadores de chat en la sesión actual."
+                    "Error: No hay identificadores de chat o contexto válidos en el estado."
                 )
                 return False
 
@@ -282,7 +440,8 @@ class SnapshotManager:
                 )
                 if new_ctx_file and "id" in new_ctx_file:
                     file_id = new_ctx_file
-                    self.project_context.file_id = file_id
+                    state.file_id = file_id
+                    state.save()
                 else:
                     logger.debug(
                         "  Error crítico: No se pudo recrear el archivo de contexto."
@@ -306,7 +465,8 @@ class SnapshotManager:
                 )
                 if new_chat_id:
                     chat_id = new_chat_id
-                    self.project_context.chat_id = chat_id
+                    state.chat_id = chat_id
+                    state.save()
                 else:
                     logger.debug("  Error crítico: No se pudo recrear el chat.")
                     return False
@@ -322,7 +482,9 @@ class SnapshotManager:
             last_context.write_text(context_content, encoding="utf-8")
             shutil.copy2(last_context, current_local_context)
 
-            self.project_context.md5 = snap.context_hash
+            # Nota: Hemos eliminado la asignación "self.project_context.md5 = snap.context_hash"
+            # para mantener la coherencia con el cambio estructural de evitar MD5s volátiles.
+
             logger.debug("Restauración completada con éxito.")
             return True
 

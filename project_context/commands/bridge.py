@@ -58,7 +58,10 @@ def create_interactive_completer(
     return NestedCompleter.from_nested_dict(nested_dict)
 
 
-def interactive_session(api: GoogleDriveManager, project_context: ProjectContext):
+def interactive_session(
+    api: GoogleDriveManager,
+    project_context: ProjectContext,
+):
 
     ctx = SessionContext(api=api, project_context=project_context)
 

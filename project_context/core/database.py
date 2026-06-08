@@ -19,7 +19,9 @@ class Snapshot(BaseModel):
     timestamp = CharField(unique=True, primary_key=True)
     human_time = CharField()
     drive_modified_time = CharField()
+
     message = CharField(null=True)
+
     chat_hash = CharField()
     context_hash = CharField()
     category = CharField(default="user")  # 'user', 'stash', 'auto'

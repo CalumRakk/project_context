@@ -29,12 +29,20 @@ class BaseChunk(BaseModel):
     @property
     def file_id(self) -> Optional[str]:
         """Retorna el ID del archivo de Google Drive asociado si aplica."""
-        return None
+        if self.is_text or self.is_inline_file:
+            return None
+
+        for attr_name in self.__dict__.keys():
+            if attr_name.startswith("drive"):
+                return getattr(self, attr_name).id
 
     @file_id.setter
     def file_id(self, val: str):
         """Permite modificar el ID de Drive de forma transparente."""
-        pass
+        for attr_name in self.__dict__.keys():
+            if attr_name.startswith("drive"):
+                setattr(self, attr_name, DriveDocument(id=val))
+                break
 
     @property
     def is_file_reference(self) -> bool:
@@ -42,9 +50,25 @@ class BaseChunk(BaseModel):
         return False
 
     @property
+    def type(self) -> str:
+        return self.__class__.__name__
+
+    @property
+    def is_image(self) -> bool:
+        return isinstance(self, ChunkImage)
+
+    @property
     def is_text(self) -> bool:
-        """Determina si este bloque representa un bloque de texto."""
-        return False
+        return isinstance(self, ChunkText)
+
+    @property
+    def is_document(self) -> bool:
+        return isinstance(self, ChunkDocument)
+
+    @property
+    def is_inline_file(self) -> bool:
+        """Es un recurso binario insertado en el chat, no vive en Drive."""
+        return isinstance(self, ChunkInlineFile)
 
 
 class DriveDocument(BaseModel):
@@ -56,7 +80,7 @@ class PendingInputs(BaseModel):
     role: Role = "user"
 
 
-class ChunksText(BaseChunk):
+class ChunkText(BaseChunk):
     text: str
     tokenCount: Optional[int] = None
     finishReason: Optional[str] = None
@@ -64,54 +88,29 @@ class ChunksText(BaseChunk):
     thinkingBudget: Optional[int] = -1
     parts: Optional[list[Parts]] = None
 
-    @property
-    def is_text(self) -> bool:
-        return True
 
-
-class ChunksDocument(BaseChunk):
+class ChunkDocument(BaseChunk):
     driveDocument: DriveDocument
     tokenCount: Optional[int] = None
 
-    @property
-    def is_text(self) -> bool:
-        return False
 
-    @property
-    def file_id(self) -> Optional[str]:
-        return self.driveDocument.id
-
-    @file_id.setter
-    def file_id(self, val: str):
-        self.driveDocument.id = val
-
-    @property
-    def is_file_reference(self) -> bool:
-        return True
-
-
-class ChunksImage(BaseChunk):
+class ChunkImage(BaseChunk):
     driveImage: DriveDocument
     tokenCount: Optional[int] = None
 
-    @property
-    def is_text(self) -> bool:
-        return False
 
-    @property
-    def file_id(self) -> Optional[str]:
-        return self.driveImage.id
-
-    @file_id.setter
-    def file_id(self, val: str):
-        self.driveImage.id = val
-
-    @property
-    def is_file_reference(self) -> bool:
-        return True
+class InlineFile(BaseModel):
+    mimeType: str
+    data: str
 
 
-Chunk = Union[ChunksText, ChunksDocument, ChunksImage]
+class ChunkInlineFile(BaseChunk):
+    tokenCount: Optional[int] = None
+    inlineFile: InlineFile
+    createTime: str
+
+
+Chunk = Union[ChunkText, ChunkDocument, ChunkImage, ChunkInlineFile]
 
 
 class ChunkedPrompt(BaseModel):
@@ -223,7 +222,7 @@ class ChatIAStudio(BaseModel):
 
     def reset_context_document_tokencount(self):
         for chunk in self.chunkedPrompt.chunks:
-            if isinstance(chunk, ChunksDocument):
+            if isinstance(chunk, ChunkDocument):
                 chunk.tokenCount = None  # type: ignore - Fuerza el recuento de tokens
                 break
 
@@ -273,7 +272,7 @@ class ProjectState(BaseModel):
     # file_md5: str = Field(default_factory=str)
     # No almacenar el md5sum. La api de drive ya ofrece el md5sum del file_id.
     # Cuando se genera un contexto, se calcula el md5sum del texto.
-    # asi que tenemos dos fuentes de verdad. Almcenarnos, implica mantener un valor propenso a no actualizarse.
+    # asi que tenemos dos fuentes de verdad. Almacenarlo, implica mantener un valor propenso a no actualizarse.
 
     context_items: LocalContextItems = Field(default_factory=LocalContextItems)
 

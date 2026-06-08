@@ -11,10 +11,10 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from project_context.core.schemas import (
     ChatIAStudio,
+    ChunkDocument,
     ChunkedPrompt,
-    ChunksDocument,
-    ChunksImage,
-    ChunksText,
+    ChunkImage,
+    ChunkText,
     ContextRemote,
     DriveDocument,
     Role,
@@ -35,20 +35,20 @@ class ChunkFactory:
     """Centraliza la creación de bloques de mensaje para el Chat."""
 
     @staticmethod
-    def create_text(text: str, role: Role = "user") -> ChunksText:
-        return ChunksText(text=text, role=role)
+    def create_text(text: str, role: Role = "user") -> ChunkText:
+        return ChunkText(text=text, role=role)
 
     @staticmethod
     def create_file(
         file_id: str, role: Role = "user", tokens: int = 0
-    ) -> ChunksDocument:
-        return ChunksDocument(
+    ) -> ChunkDocument:
+        return ChunkDocument(
             driveDocument=DriveDocument(id=file_id), role=role, tokenCount=tokens
         )
 
     @staticmethod
-    def create_image(file_id: str, role: Role = "user") -> ChunksImage:
-        return ChunksImage(driveImage=DriveDocument(id=file_id), role=role)
+    def create_image(file_id: str, role: Role = "user") -> ChunkImage:
+        return ChunkImage(driveImage=DriveDocument(id=file_id), role=role)
 
     @classmethod
     def create_default_run_settings(cls) -> RunSettings:
@@ -309,8 +309,8 @@ class GoogleDriveManager:
             )
             raise
 
-        chat_content = json.loads(content_bytes.decode("utf-8"))
-        return ChatIAStudio(**chat_content)
+        data = json.loads(content_bytes.decode("utf-8"))
+        return ChatIAStudio(**data)
 
     def create_chat(
         self, folder_id: str, file_name: str, chat_data: ChatIAStudio
@@ -332,146 +332,6 @@ class GoogleDriveManager:
             mime_type=self.MIME_PROMPT,
         )
 
-    # def update_chat(self, chat_id: str, chat_data: ChatIAStudio) -> bool:
-    #     try:
-    #         content_json = chat_data.model_dump_json(
-    #             exclude_none=True, exclude_unset=True
-    #         )
-    #         result = self.update_file_from_memory(
-    #             file_id=chat_id,
-    #             content=content_json,
-    #             mime_type=self.MIME_PROMPT,
-    #         )
-    #         return bool(result)
-    #     except Exception as e:
-    #         logger.debug(f"Error actualizando chat: {e}")
-    #         return False
-
-    # @contextmanager
-    # def modify_chat(self, chat_id: str) -> Generator[ChatIAStudio, None, None]:
-
-    #     chat = self.get_chat(chat_id)
-    #     if not chat:
-    #         raise FileNotFoundError(f"Chat {chat_id} no encontrado o inaccesible.")
-
-    #     try:
-    #         yield chat
-    #     except Exception as e:
-    #         UI.error(f"Error procesando chat (cambios descartados): {e}")
-    #         raise e
-    #     else:
-    #         if not self.update_chat(chat_id, chat):
-    #             raise IOError("Falló la escritura del chat en Google Drive.")
-
-    # def clear_chat(self, chat_id: str) -> bool:
-    #     try:
-    #         with self.modify_chat(chat_id) as chat:
-    #             chunks = chat.chunkedPrompt.chunks
-    #             if not chunks:
-    #                 logger.debug("El chat ya está vacío.")
-    #                 return True
-
-    #             cut_idx = -1
-    #             for i, chunk in enumerate(chunks):
-    #                 if chunk.role == "model":
-    #                     cut_idx = i
-    #                     break
-
-    #             if cut_idx == -1:
-    #                 doc_idx = -1
-    #                 for i, chunk in enumerate(chunks):
-    #                     if chunk.is_file_reference:
-    #                         doc_idx = i
-
-    #                 if doc_idx != -1:
-    #                     if len(chunks) > doc_idx + 1 and isinstance(
-    #                         chunks[doc_idx + 1], ChunksText
-    #                     ):
-    #                         cut_idx = doc_idx + 1
-    #                     else:
-    #                         cut_idx = doc_idx
-    #                 else:
-    #                     logger.debug("Error: Estructura de contexto inválida.")
-    #                     return False
-
-    #             original_count = len(chunks)
-    #             new_chunks = chunks[: cut_idx + 1]
-
-    #             if len(new_chunks) == original_count:
-    #                 logger.debug("El chat ya está limpio.")
-    #                 return True
-
-    #             chat.chunkedPrompt.chunks = new_chunks
-    #             logger.debug(
-    #                 f"Limpieza completada. Eliminados: {original_count - len(new_chunks)}"
-    #             )
-    #         return True
-    #     except Exception:
-    #         return False
-
-    # def remove_commit_tasks(self, chat_id: str) -> int:
-    #     removed_count = 0
-    #     try:
-    #         with self.modify_chat(chat_id) as chat:
-    #             original_chunks = chat.chunkedPrompt.chunks
-    #             new_chunks = []
-    #             skip_next = False
-
-    #             for i, chunk in enumerate(original_chunks):
-    #                 if skip_next:
-    #                     skip_next = False
-    #                     removed_count += 1
-    #                     continue
-
-    #                 if (
-    #                     isinstance(chunk, ChunksText)
-    #                     and COMMIT_TASK_MARKER in chunk.text
-    #                 ):
-    #                     removed_count += 1
-    #                     if i + 1 < len(original_chunks):
-    #                         next_chunk = original_chunks[i + 1]
-    #                         if getattr(next_chunk, "role", None) == "model":
-    #                             skip_next = True
-    #                     continue
-
-    #                 new_chunks.append(chunk)
-
-    #             if removed_count > 0:
-    #                 chat.chunkedPrompt.chunks = new_chunks
-    #         return removed_count
-    #     except Exception:
-    #         return 0
-
-    # def append_message(self, chat_id: str, text: str, role: Role = "user") -> bool:
-    #     try:
-    #         with self.modify_chat(chat_id) as chat:
-    #             new_chunk = ChunkFactory.create_text(text, role=role)
-    #             chat.chunkedPrompt.chunks.append(new_chunk)
-    #         return True
-    #     except Exception:
-    #         return False
-
-    # def append_chunks(self, chat_id: str, chunks: List[Chunk]) -> bool:
-    #     try:
-    #         with self.modify_chat(chat_id) as chat:
-    #             chat.chunkedPrompt.chunks.extend(chunks)
-    #         return True
-    #     except Exception:
-    #         return False
-
-    # def repair_chat_structure(self, chat_id: str) -> int:
-    #     fixed_count = 0
-    #     try:
-    #         with self.modify_chat(chat_id) as chat:
-    #             for chunk in chat.chunkedPrompt.chunks:
-    #                 if isinstance(chunk, ChunksText) and hasattr(chunk, "finishReason"):
-    #                     if chunk.finishReason != "STOP":
-    #                         chunk.finishReason = "STOP"
-    #                         fixed_count += 1
-    #         return fixed_count
-    #     except Exception:
-    #         return 0
-
     def has_pending_commit_suggestion(self, chat_id: str) -> bool:
         chat = self.get_chat(chat_id)
         if not chat:
@@ -480,7 +340,7 @@ class GoogleDriveManager:
         chunks = chat.chunkedPrompt.chunks
         for i in range(len(chunks) - 1, -1, -1):
             chunk = chunks[i]
-            if isinstance(chunk, ChunksText) and COMMIT_TASK_MARKER in chunk.text:
+            if isinstance(chunk, ChunkText) and COMMIT_TASK_MARKER in chunk.text:
                 if i + 1 < len(chunks):
                     next_chunk = chunks[i + 1]
                     if getattr(next_chunk, "role", "") == "model":
@@ -499,6 +359,7 @@ class GoogleDriveManager:
             raise
 
     def clear_chat(self, chat_id: str):
+        # TODO: REFACTOR ESTE MÉTODO. QUÉ DOLOR ANALIZARLO!
         chat = self.get_chat(chat_id)
 
         chunks = chat.chunkedPrompt.chunks
@@ -520,7 +381,7 @@ class GoogleDriveManager:
 
             if doc_idx != -1:
                 if len(chunks) > doc_idx + 1 and isinstance(
-                    chunks[doc_idx + 1], ChunksText
+                    chunks[doc_idx + 1], ChunkText
                 ):
                     cut_idx = doc_idx + 1
                 else:
@@ -543,15 +404,12 @@ class GoogleDriveManager:
         self.update_chat(chat_id, chat)
         return True
 
-    def get_file_content(self, file_id: str) -> Optional[bytes]:
-        try:
-            request = self.service.files().get_media(fileId=file_id)
-            file_stream = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_stream, request)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-            return file_stream.getvalue()
-        except HttpError as error:
-            print(f"Error HTTP al descargar archivo '{file_id}': {error}")
-            return None
+    def get_file_content(self, file_id: str) -> bytes:
+
+        request = self.service.files().get_media(fileId=file_id)
+        file_stream = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_stream, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        return file_stream.getvalue()
