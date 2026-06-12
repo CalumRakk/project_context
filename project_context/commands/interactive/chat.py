@@ -60,6 +60,27 @@ def cmd_save(ctx: SessionContext, args: list[str]):
         )
 
 
+def cmd_restore(ctx: SessionContext, args: list[str]):
+    """Restaura un snapshot guardado a partir de su ID."""
+    if not args:
+        UI.warn("Debes proveer el ID del snapshot a restaurar: `restore <id>`")
+        return
+
+    snapshot_id = args[0]
+    UI.info(f"Iniciando la restauración del snapshot {snapshot_id}...")
+
+    success = ctx.snapshot_manager.restore_snapshot(snapshot_id)
+    if success:
+        UI.success(f"Snapshot {snapshot_id} restaurado con éxito.")
+        UI.info(
+            "Por favor, actualiza la interfaz de Google AI Studio (F5) si tienes el chat abierto."
+        )
+    else:
+        UI.error(
+            f"No se pudo restaurar el snapshot con ID '{snapshot_id}'. Verifica si el ID es correcto."
+        )
+
+
 def cmd_history(ctx: SessionContext, args: list[str]):
     """Muestra el historial de snapshots guardados en la base de datos de forma paginada."""
 

@@ -105,12 +105,20 @@ class SnapshotManager:
         Garantiza que el usuario activo tenga todos los activos del snapshot en su Drive,
         resolviendo enlaces rotos y evitando subidas duplicadas de archivos que ya coincidan
         con el hash del CAS. Devuelve el mapa de traducción de IDs.
+
+        Si el usuario tiene un chat o un documento de contexto activo en su estado local,
+        se reutilizan esos mismos archivos sobreescribiendo su contenido para no alterar la URL activa.
         """
         active_email = self.project_context.email
         creator_assets = snapshot.get_assets_from_creator()
 
         if not creator_assets:
             raise ValueError("No se encontraron activos asociados a este snapshot.")
+
+        # Cargar el estado actual para verificar si podemos reutilizar los archivos activos
+        state = self.project_context.load_state()
+        current_chat_id = state.chat_id
+        current_file_id = state.file_id
 
         id_map = {}
 
@@ -131,7 +139,18 @@ class SnapshotManager:
             target_file_id = None
             needs_upload = True
 
-            if existing_asset:
+            # Si es el documento de contexto y tenemos un archivo activo en el estado, lo reutilizamos
+            if (
+                asset.role == "context"
+                and current_file_id
+                and self.api.can_access_file(current_file_id)
+            ):
+                target_file_id = current_file_id
+                needs_upload = True  # Forzamos la actualización para escribir el contenido del snapshot
+                logger.debug(
+                    f"Reutilizando el archivo de contexto activo actual para restauración: {current_file_id}"
+                )
+            elif existing_asset:
                 # Verificamos si sigue existiendo físicamente en Drive
                 meta = self.api.get_metadata(existing_asset.file_id)
                 if meta:
@@ -159,7 +178,7 @@ class SnapshotManager:
                     )
 
                 if target_file_id:
-                    # Actualización del archivo existente
+                    # Actualización del archivo existente (o el activo reutilizado)
                     updated_file = self.api.update_file(
                         target_file_id, content, asset.mime_type
                     )
@@ -231,12 +250,16 @@ class SnapshotManager:
             target_chat_id = None
             needs_chat_upload = True
 
-            if existing_chat_asset:
+            # Si tenemos un chat activo en el estado, lo reutilizamos para preservar la URL
+            if current_chat_id and self.api.can_access_file(current_chat_id):
+                target_chat_id = current_chat_id
+                logger.debug(
+                    f"Reutilizando el chat activo actual para restauración: {current_chat_id}"
+                )
+            elif existing_chat_asset:
                 meta = self.api.get_metadata(existing_chat_asset.file_id)
                 if meta:
                     target_chat_id = existing_chat_asset.file_id
-                    # Dado que el chat contiene referencias dinámicas, se sobreescribe para asegurar
-                    # que se conserven los mapeos de traducción correctos en la sesión activa.
                 else:
                     logger.debug(
                         f"Enlace roto del chat detectado para el ID: {existing_chat_asset.file_id}. Se creará uno nuevo."

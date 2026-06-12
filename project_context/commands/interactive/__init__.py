@@ -1,5 +1,11 @@
 from project_context.commands.interactive.base import cmd_exit, cmd_help
-from project_context.commands.interactive.chat import cmd_clear, cmd_history, cmd_update
+from project_context.commands.interactive.chat import (
+    cmd_clear,
+    cmd_history,
+    cmd_restore,
+    cmd_save,
+    cmd_update,
+)
 from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.register import InteractiveRegistry
 
@@ -36,6 +42,20 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         handler=cmd_update,
         description="Actualiza el contenido del archivo de contexto en Drive.",
         require_chat=False,
+    )
+
+    registry.register(
+        names=["save"],
+        handler=cmd_save,
+        description="Crea de forma manual un snapshot de respaldo etiquetado con un mensaje.",
+        require_chat=True,
+    )
+
+    registry.register(
+        names=["restore"],
+        handler=cmd_restore,
+        description="Restaura el entorno de Drive y la sesión de chat usando un ID de snapshot.",
+        require_chat=True,
     )
 
     registry.register(
