@@ -1,6 +1,8 @@
+from rich.table import Table
+
 from project_context.commands.interactive.register import SessionContext
 from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
-from project_context.ui import UI
+from project_context.ui import UI, console
 from project_context.utils import get_context_tree
 
 
@@ -48,14 +50,96 @@ def cmd_save(ctx: SessionContext, args: list[str]):
     message = " ".join(args)
     UI.info("Iniciando la creación del snapshot...")
 
-    try:
-        timestamp = ctx.snapshot_manager.create_named_snapshot(message, category="user")
+    timestamp = ctx.snapshot_manager.create_named_snapshot(message, category="user")
 
-        if timestamp:
-            UI.success(f"Snapshot guardado exitosamente. ID: [bold cyan]{timestamp}[/]")
+    if timestamp:
+        UI.success(f"Snapshot guardado exitosamente. ID: [bold cyan]{timestamp}[/]")
+    else:
+        UI.error(
+            "No se pudo crear el snapshot. Asegúrate de tener una sesión de chat activa."
+        )
+
+
+def cmd_history(ctx: SessionContext, args: list[str]):
+    """Muestra el historial de snapshots guardados en la base de datos de forma paginada."""
+
+    snapshots = ctx.snapshot_manager.list_snapshots()
+
+    if not snapshots:
+        UI.info("No se encontraron snapshots registrados en este proyecto.")
+        return
+
+    PAGE_SIZE = 5
+    total_snaps = len(snapshots)
+    total_pages = (total_snaps + PAGE_SIZE - 1) // PAGE_SIZE
+
+    page = 1
+    show_all = False
+
+    # Procesar argumentos del comando
+    if args:
+        arg = args[0].lower()
+        if arg in ("--all", "-a", "all"):
+            show_all = True
+        elif arg.isdigit():
+            page = int(arg)
+            if page < 1 or page > total_pages:
+                UI.warn(f"Página fuera de rango. Rango disponible: 1 a {total_pages}.")
+                return
         else:
-            UI.error(
-                "No se pudo crear el snapshot. Asegúrate de tener una sesión de chat activa."
+            UI.warn(
+                "Uso sugerido: [dim]history [número_página][/] o [dim]history --all[/]"
             )
-    except Exception as e:
-        UI.error(f"Fallo al guardar el snapshot en la base de datos: {e}")
+            return
+
+    # Segmentar la lista de snapshots a mostrar
+    if show_all:
+        items_to_show = snapshots
+        title_suffix = " (Todos)"
+    else:
+        start_idx = (page - 1) * PAGE_SIZE
+        end_idx = start_idx + PAGE_SIZE
+        items_to_show = snapshots[start_idx:end_idx]
+        title_suffix = f" (Página {page}/{total_pages})"
+
+    # Construir tabla visual
+    table = Table(
+        title=f"[bold cyan]Historial de Snapshots{title_suffix}[/]",
+        show_header=True,
+        header_style="bold magenta",
+        box=None,
+    )
+    table.add_column("ID", style="bold green", justify="right")
+    table.add_column("Fecha/Hora", style="dim white")
+    table.add_column("Categoría", style="cyan")
+    table.add_column("Creador", style="blue")
+    table.add_column("Mensaje/Descripción", style="white")
+
+    for snap in items_to_show:
+        category = snap.get("category", "user")
+
+        # Color diferenciador por tipo de snapshot
+        category_color = "cyan"
+        if category == "system":
+            category_color = "orange1"
+        elif category == "commit":
+            category_color = "green"
+
+        table.add_row(
+            snap.get("timestamp", "N/A"),
+            snap.get("human_time", "N/A"),
+            f"[{category_color}]{category}[/]",
+            snap.get("creator_email", "N/A"),
+            snap.get("message", "Sin descripción"),
+        )
+
+    console.print("")
+    console.print(table)
+    console.print("")
+
+    # Mostrar sugerencias de navegación si quedan más registros
+    if not show_all and page < total_pages:
+        UI.tip(
+            f"Hay {total_snaps - (page * PAGE_SIZE)} snapshots adicionales ocultos.",
+            commands=[f"history {page + 1}", "history --all"],
+        )

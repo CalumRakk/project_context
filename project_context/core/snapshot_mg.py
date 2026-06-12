@@ -395,54 +395,49 @@ class SnapshotManager:
 
     def list_snapshots(self) -> List[dict]:
         """Devuelve la lista total de snapshots registrados con formato de UI dinámico."""
-        try:
-            query = Snapshot.select().order_by(Snapshot.id.desc())
-            results = []
-            active_email = self.project_context.email
-            for snap in query:
-                human_time = datetime.fromtimestamp(snap.created_at).strftime(
-                    "%H:%M:%S - %d/%m/%Y"
-                )
 
+        query = Snapshot.select().order_by(Snapshot.id.desc())
+        results = []
+        active_email = self.project_context.email
+        for snap in query:
+            human_time = snap.created_at.strftime("%H:%M:%S - %d/%m/%Y")
+
+            context_asset = SnapshotAsset.get_or_none(
+                SnapshotAsset.snapshot == snap,
+                SnapshotAsset.email == active_email,
+                SnapshotAsset.role == "context",
+            )
+            if not context_asset:
                 context_asset = SnapshotAsset.get_or_none(
                     SnapshotAsset.snapshot == snap,
-                    SnapshotAsset.email == active_email,
+                    SnapshotAsset.email == snap.creator_email,
                     SnapshotAsset.role == "context",
                 )
-                if not context_asset:
-                    context_asset = SnapshotAsset.get_or_none(
-                        SnapshotAsset.snapshot == snap,
-                        SnapshotAsset.email == snap.creator_email,
-                        SnapshotAsset.role == "context",
-                    )
-                context_hash = context_asset.md5sum if context_asset else ""
+            context_hash = context_asset.md5sum if context_asset else ""
 
-                drive_mod = (
-                    snap.drive_modified_time
-                    if hasattr(snap, "drive_modified_time")
-                    else snap.updated_at
-                )
-                drive_mod_str = (
-                    drive_mod.isoformat()
-                    if isinstance(drive_mod, datetime)
-                    else str(drive_mod)
-                )
+            drive_mod = (
+                snap.drive_modified_time
+                if hasattr(snap, "drive_modified_time")
+                else snap.updated_at
+            )
+            drive_mod_str = (
+                drive_mod.isoformat()
+                if isinstance(drive_mod, datetime)
+                else str(drive_mod)
+            )
 
-                results.append(
-                    {
-                        "timestamp": str(snap.id),
-                        "human_time": human_time,
-                        "drive_modified_time": drive_mod_str,
-                        "context_md5": context_hash,
-                        "message": snap.message,
-                        "category": getattr(snap, "category", "user"),
-                        "creator_email": snap.creator_email,
-                    }
-                )
-            return results
-        except Exception as e:
-            logger.debug(f"[Error] Fallo al listar el historial: {e}")
-            return []
+            results.append(
+                {
+                    "timestamp": str(snap.id),
+                    "human_time": human_time,
+                    "drive_modified_time": drive_mod_str,
+                    "context_md5": context_hash,
+                    "message": snap.message,
+                    "category": getattr(snap, "category", "user"),
+                    "creator_email": snap.creator_email,
+                }
+            )
+        return results
 
     def delete_snapshot(self, timestamp: str) -> bool:
         """Elimina el registro de la base de datos y purga los objetos obsoletos del CAS."""

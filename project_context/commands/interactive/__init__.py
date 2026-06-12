@@ -1,5 +1,5 @@
 from project_context.commands.interactive.base import cmd_exit, cmd_help
-from project_context.commands.interactive.chat import cmd_clear, cmd_update
+from project_context.commands.interactive.chat import cmd_clear, cmd_history, cmd_update
 from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.register import InteractiveRegistry
 
@@ -36,6 +36,13 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         handler=cmd_update,
         description="Actualiza el contenido del archivo de contexto en Drive.",
         require_chat=False,
+    )
+
+    registry.register(
+        names=["history", "hist"],
+        handler=cmd_history,
+        description="Muestra el historial de snapshots guardados de forma paginada.",
+        require_chat=False,  # No requiere un chat remoto activo para consultar la DB local
     )
 
     # --- COMANDOS DE COMMIT ---
