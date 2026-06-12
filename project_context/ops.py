@@ -57,19 +57,19 @@ def create_context_document(
     """Crea el documento de contexto en google Drive y devuelve objeto."""
 
     mimetype = "text/plain"
-    file_id = api.create_file_from_memory(
+    file = api.create_file(
         folder_id=api.ai_studio_folder,
         file_name=filename,
         content=context.text,
         mime_type=mimetype,
     )
-    return ContextRemote(context=context, file_id=file_id)
+    return ContextRemote(context=context, file_id=file.id)
 
 
 def update_context_document(api: GoogleDriveManager, context: Context, file_id: str):
     mimetype = "text/plain"
-    file_id = api.update_file_from_memory(file_id, context.text, mimetype)
-    return ContextRemote(context=context, file_id=file_id)
+    file = api.update_file(file_id, context.text, mimetype)
+    return ContextRemote(context=context, file_id=file.id)
 
 
 def create_or_update_chat(api: GoogleDriveManager, projectcontext: ProjectContext):
@@ -96,9 +96,10 @@ def create_or_update_chat(api: GoogleDriveManager, projectcontext: ProjectContex
     if state.chat_id is None or not api.can_access_file(state.chat_id):
         chat_filename = build_filename_chat(projectcontext.project_path)
         initial_chat = ChunkFactory.build_initial_chat(context_remote)
-        state.chat_id = api.create_chat(
+        file = api.create_chat(
             folder_id=folder_id, file_name=chat_filename, chat_data=initial_chat
         )
+        state.chat_id = file.id
         state.save()
         UI.success(f"Se creo nuevo Chat ID: [dim]{state.chat_id}[/]")
     else:

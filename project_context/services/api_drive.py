@@ -2,12 +2,14 @@ import io
 import json
 import logging
 import threading
-from typing import Optional, cast
+from pathlib import Path
+from typing import Optional, Union
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from pydantic import BaseModel, ConfigDict
 
 from project_context.core.schemas import (
     ChatIAStudio,
@@ -29,6 +31,34 @@ from project_context.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class FileDriver(BaseModel):
+    id: str
+    name: str
+    mimeType: str
+    md5Checksum: str
+    size: int
+    modifiedTime: str
+
+    model_config = ConfigDict(extra="allow")
+
+    # Propiedades de google Driver traducidas a la semantica del proyecto.
+    @property
+    def mimetype(self):
+        return self.mimeType
+
+    @property
+    def md5sum(self):
+        return self.md5Checksum
+
+    @property
+    def filename(self):
+        return self.name
+
+    @property
+    def file_id(self):
+        return self.id
 
 
 class ChunkFactory:
@@ -141,84 +171,72 @@ class GoogleDriveManager:
         mime_type: str,
         metadata: Optional[dict] = None,
         file_id: Optional[str] = None,
-        fields: str = "id, name",
-    ) -> Optional[dict]:
-        try:
-            content_stream = io.BytesIO(content)
-            media = MediaIoBaseUpload(
-                content_stream, mimetype=mime_type, resumable=True
-            )
-            with self._lock:
-                if file_id:
-                    return (
-                        self.service.files()
-                        .update(fileId=file_id, media_body=media, fields=fields)
-                        .execute()
-                    )
-                else:
-                    return (
-                        self.service.files()
-                        .create(body=metadata, media_body=media, fields=fields)
-                        .execute()
-                    )
-        except HttpError as error:
-            UI.error(f"Error en operación de subida/actualización de Drive: {error}")
-            return None
+    ) -> dict:
+        """Sube o actualiza un archivo en Drive. Si file_id es proporcionado, se actualiza el archivo existente, en caso contrario, se crea un nuevo archivo.
 
-    def _get_metadata(
-        self, file_id: str, fields: str = "id, name, modifiedTime, md5Checksum"
-    ) -> Optional[dict]:
-        try:
-            return self.service.files().get(fileId=file_id, fields=fields).execute()
-        except HttpError as error:
-            if error.resp.status == 404:
-                logger.debug(
-                    f"El archivo con ID '{file_id}' no existe en Google Drive (404 esperado)."
-                )
-            else:
-                logger.error(f"Error al obtener metadata de '{file_id}': {error}")
-            return None
+        Args:
+            content: Contenido del archivo en bytes.
+            mime_type: Tipo MIME del archivo.
+            metadata: Metadatos adicionales del archivo. Defaults to None.
+            file_id: ID del archivo existente a actualizar. Defaults to None.
+            fields: Campos a incluir en la respuesta. Defaults to "id, name".
 
-    def _list_files_by_query(
-        self, query: str, fields: str = "files(id, name, mimeType)"
-    ) -> list[dict]:
-        try:
-            response = (
+        """
+
+        content_stream = io.BytesIO(content)
+        media = MediaIoBaseUpload(content_stream, mimetype=mime_type, resumable=True)
+        fields = " ,".join(FileDriver.model_fields.keys())
+        if file_id:
+            return (
                 self.service.files()
-                .list(q=query, spaces="drive", fields=fields)
+                .update(fileId=file_id, media_body=media, fields=fields)
                 .execute()
             )
-            return response.get("files", [])
-        except HttpError as error:
-            logger.debug(f"Error al buscar archivos por consulta '{query}': {error}")
-            return []
 
-    def list_files(self, folder_id: str = "root") -> list[dict]:
-        items = []
-        page_token = None
+        return (
+            self.service.files()
+            .create(body=metadata, media_body=media, fields=fields)
+            .execute()
+        )
+
+    def _resolver_content(self, content: Union[str, Path, bytes]):
+        if isinstance(content, Path):
+            return content.read_bytes()
+        elif isinstance(content, str):
+            return content.encode("utf-8")
+        elif isinstance(content, bytes):
+            return content
+        else:
+            raise ValueError("content debe ser una cadena, un Path o un bytes")
+
+    def get_metadata(self, file_id: str) -> Optional[FileDriver]:
+        # Google Drive API v3 permite controlar qué propiedades del recurso File
+        # se devuelven mediante el parámetro `fields`.
+        #
+        # - Si se omite, la API devuelve solo un conjunto reducido de campos por defecto.
+        # - Para solicitar todos los campos disponibles se puede usar `fields="*"`.
+        # - Al ejecutar métodos sobre un único recurso (`get`, `create`, `update`),
+        #   se especifica una lista simple de propiedades:
+        #       fields="id,name,mimeType"
+        # - En métodos que devuelven colecciones (`list`), se utiliza una sintaxis
+        #   anidada para indicar los campos de cada elemento:
+        #       fields="nextPageToken,files(id,name)"
+        #
+        # Referencia:
+        # https://developers.google.com/workspace/drive/api/reference/rest/v3/files
+
+        fields = ", ".join(FileDriver.model_fields.keys())
+
         try:
-            while True:
-                with self._lock:
-                    response = (
-                        self.service.files()
-                        .list(
-                            q=f"'{folder_id}' in parents and trashed = false",
-                            spaces="drive",
-                            fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
-                            pageToken=page_token,
-                        )
-                        .execute()
-                    )
-                items.extend(response.get("files", []))
-                page_token = response.get("nextPageToken")
-                if not page_token:
-                    break
-            return items
-        except HttpError as error:
-            logger.error(
-                f"Error al listar archivos en la carpeta '{folder_id}': {error}"
-            )
-            return []
+            data = self.service.files().get(fileId=file_id, fields=fields).execute()
+
+            return FileDriver(**data)
+
+        except HttpError:
+            # La API devuelve HttpError tanto cuando el archivo no existe
+            # como cuando existe pero el usuario no tiene permisos para acceder.
+            logger.debug(f"El archivo {file_id} no existe o no se tiene acceso.")
+            return None
 
     def find_item_by_name(self, name: str, parent_id: str = "root") -> Optional[dict]:
         try:
@@ -237,51 +255,30 @@ class GoogleDriveManager:
             logger.error(f"Error al buscar el item '{name}': {error}")
             return None
 
-    def update_file_from_memory(
-        self, file_id: str, content: str, mime_type: str
-    ) -> str:
-        file = self._upload_bytes(
-            content.encode("utf-8"),
-            mime_type,
-            file_id=file_id,
-            fields="id, name, modifiedTime",
-        )
+    def update_file(
+        self, file_id: str, content: Union[str, Path, bytes], mime_type: str
+    ) -> FileDriver:
+        """Actualiza un archivo en Drive con el contenido proporcionado."""
+        bytes = self._resolver_content(content)
+        data = self._upload_bytes(bytes, mime_type, file_id=file_id)
+        return FileDriver(**data)
 
-        if not file or "id" not in file:
-            raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
-
-        return cast(str, file["id"])
-
-    def create_file_from_memory(
-        self, folder_id: str, file_name: str, content: str, mime_type: str
-    ) -> str:
+    def create_file(
+        self,
+        folder_id: str,
+        file_name: str,
+        content: Union[str, Path, bytes],
+        mime_type: str,
+    ) -> FileDriver:
         """Crea un archivo en Drive con el contenido proporcionado."""
         file_metadata = {
             "name": file_name,
             "parents": [folder_id],
             "mimeType": mime_type,
         }
-        file = self._upload_bytes(
-            content.encode("utf-8"), mime_type, metadata=file_metadata
-        )
-        if file:
-            logger.debug(
-                f'Archivo creado: "{file.get("name")}" (ID: "{file.get("id")}")'
-            )
-        if not file or "id" not in file:
-            raise ValueError("No se pudo crear el archivo de contexto en Google Drive.")
-
-        return cast(str, file["id"])
-
-    def get_file_metadata(
-        self, file_id: str, fields: str = "id, name, modifiedTime, md5Checksum"
-    ) -> Optional[dict]:
-        return self._get_metadata(file_id, fields)
-
-    def find_files_by_query(
-        self, query: str, fields: str = "files(id, name, mimeType)"
-    ) -> list[dict]:
-        return self._list_files_by_query(query, fields)
+        bytes = self._resolver_content(content)
+        file = self._upload_bytes(bytes, mime_type, metadata=file_metadata)
+        return FileDriver(**file)
 
     def delete_file(self, file_id: str) -> bool:
         try:
@@ -290,16 +287,6 @@ class GoogleDriveManager:
         except HttpError as error:
             logger.error(f"Error al eliminar archivo '{file_id}': {error}")
             return False
-
-    def upload_binary_to_drive(
-        self, folder_id: str, file_name: str, content: bytes, mime_type: str
-    ) -> Optional[dict]:
-        file_metadata = {
-            "name": file_name,
-            "parents": [folder_id],
-            "mimeType": mime_type,
-        }
-        return self._upload_bytes(content, mime_type, metadata=file_metadata)
 
     def get_chat(self, chat_id: str) -> ChatIAStudio:
         content_bytes = self._download_bytes(chat_id)
@@ -312,11 +299,9 @@ class GoogleDriveManager:
         data = json.loads(content_bytes.decode("utf-8"))
         return ChatIAStudio(**data)
 
-    def create_chat(
-        self, folder_id: str, file_name: str, chat_data: ChatIAStudio
-    ) -> str:
+    def create_chat(self, folder_id: str, file_name: str, chat_data: ChatIAStudio):
         content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
-        return self.create_file_from_memory(
+        return self.create_file(
             folder_id=folder_id,
             file_name=file_name,
             content=content_json,
@@ -326,7 +311,7 @@ class GoogleDriveManager:
     def update_chat(self, chat_id: str, chat_data: ChatIAStudio):
         """Actualiza el chat en Drive."""
         content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
-        self.update_file_from_memory(
+        self.update_file(
             file_id=chat_id,
             content=content_json,
             mime_type=self.MIME_PROMPT,
@@ -413,3 +398,54 @@ class GoogleDriveManager:
         while not done:
             status, done = downloader.next_chunk()
         return file_stream.getvalue()
+
+    # def _list_files_by_query(
+    #     self, query: str, fields: str = "files(id, name, mimeType)"
+    # ) -> list[dict]:
+
+    #     response = (
+    #         self.service.files().list(q=query, spaces="drive", fields=fields).execute()
+    #     )
+    #     return response.get("files", [])
+
+    # def list_files(self, folder_id: str = "root") -> list[dict]:
+    #     items = []
+    #     page_token = None
+    #     try:
+    #         while True:
+    #             with self._lock:
+    #                 response = (
+    #                     self.service.files()
+    #                     .list(
+    #                         q=f"'{folder_id}' in parents and trashed = false",
+    #                         spaces="drive",
+    #                         fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+    #                         pageToken=page_token,
+    #                     )
+    #                     .execute()
+    #                 )
+    #             items.extend(response.get("files", []))
+    #             page_token = response.get("nextPageToken")
+    #             if not page_token:
+    #                 break
+    #         return items
+    #     except HttpError as error:
+    #         logger.error(
+    #             f"Error al listar archivos en la carpeta '{folder_id}': {error}"
+    #         )
+    #         return []
+
+    # def find_files_by_query(
+    #     self, query: str, fields: str = "files(id, name, mimeType)"
+    # ) -> list[dict]:
+    #     return self._list_files_by_query(query, fields)
+
+    # def upload_binary_to_drive(
+    #     self, folder_id: str, file_name: str, content: bytes, mime_type: str
+    # ) -> Optional[dict]:
+    #     file_metadata = {
+    #         "name": file_name,
+    #         "parents": [folder_id],
+    #         "mimeType": mime_type,
+    #     }
+    #     return self._upload_bytes(content, mime_type, metadata=file_metadata)

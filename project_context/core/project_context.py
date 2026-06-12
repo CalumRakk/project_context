@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class ProjectContext:
     def __init__(self, email: str, project_path: Optional[Path] = None):
+        self.email = email
         self.project_path = project_path or Path.cwd()
 
         self.local_dir = self.project_path / ".project_context"

@@ -8,12 +8,12 @@ if TYPE_CHECKING:
     pass
 
 
-class FileDrive(BaseModel):
-    id: str
-    name: str
-    mimeType: str
-    modifiedTime: str
-    is_folder: bool
+# class FileDrive(BaseModel):
+#     id: str
+#     name: str
+#     mimeType: str
+#     modifiedTime: str
+#     is_folder: bool
 
 
 class Parts(BaseModel):

@@ -2,47 +2,17 @@ import enum
 import json
 import logging
 import shutil
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
-
-from pydantic import BaseModel, ConfigDict
+from typing import List, Optional, cast
 
 from project_context.core.database import Snapshot, SnapshotAsset, db
-from project_context.core.exceptions import ChatSessionError
 from project_context.core.project_context import ProjectContext
 from project_context.core.schemas import ChatIAStudio
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.utils import compress_data, compute_md5, decompress_data
 
 logger = logging.getLogger(__name__)
-
-
-class AssetPayload(BaseModel):
-    """Contenedor para los recursos binarios adjuntos al chat (imágenes/documentos)."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)  # Permite almacenar bytes
-
-    drive_file_id: str
-    filename: str
-    mime_type: str
-    content: bytes  # Payload binario descargado
-
-
-# class SnapshotManifest(BaseModel):
-#     """Representación completa e inmutable del snapshot listo para ser guardado."""
-
-#     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-#     timestamp: datetime
-#     human_time: str
-#     drive_modified_time: str
-#     category: str
-#     message: Optional[str] = None
-
-#     chat_content: bytes
-#     context_content: bytes
-
-#     assets: List[AssetPayload]
 
 
 class SnapCategory(enum.Enum):
@@ -55,7 +25,7 @@ class SnapshotManager:
     """
     Administrador de la lógica de negocio de snapshots.
     Sigue un modelo CAS (Content Addressable Storage) para almacenar archivos
-    binarios en el disco de forma eficiente. No controla la conexión a la base de datos.
+    binarios en el disco de forma eficiente y soporta accesos multiusuario transparentes.
     """
 
     def __init__(self, api: GoogleDriveManager, project_context: ProjectContext):
@@ -72,39 +42,53 @@ class SnapshotManager:
         return self
 
     def _migrate_schema(self):
-        """Aplica migraciones ligeras sobre el esquema de la base de datos."""
+        """Inspecciona la base de datos para detectar esquemas antiguos de versiones anteriores."""
         with db.connection_context():
             try:
-                db.execute_sql("SELECT category FROM snapshot LIMIT 1")
-            except Exception:
-                try:
-                    db.execute_sql(
-                        "ALTER TABLE snapshot ADD COLUMN category VARCHAR(255) DEFAULT 'user'"
-                    )
-                    logger.debug(
-                        "[Schema Migration] Columna 'category' añadida con éxito."
-                    )
-                except Exception as e:
-                    logger.debug(
-                        f"[Schema Migration Error] No se pudo añadir la columna: {e}"
-                    )
+                # Si la tabla no existe aún, es una instalación limpia; no hay nada que migrar
+                if not db.table_exists("snapshot"):
+                    return
 
-    def _get_object_path(self, file_hash: str) -> Path:
-        prefix = file_hash[:2]
-        suffix = file_hash[2:]
+                columns = [c.name for c in db.get_columns("snapshot")]
+
+                # DETECCIÓN DE ESQUEMA ANTIGUO (Existencia de 'timestamp' o ausencia de 'creator_email')
+                if columns and (
+                    "timestamp" in columns or "creator_email" not in columns
+                ):
+                    import sys
+
+                    from project_context.ui import UI
+
+                    UI.error(
+                        "Se ha detectado una base de datos de snapshots antigua e incompatible.\n"
+                        "Para conservar tu historial de snapshots, debes migrar la base de datos.\n"
+                        "Por favor, ejecuta el script de migración ejecutando el siguiente comando:\n"
+                        "  [bold yellow]python -m project_context.scripts.migrate_db[/]",
+                        spacing="block",
+                    )
+                    sys.exit(1)
+
+            except Exception as e:
+                logger.debug(f"Error al verificar o migrar el esquema: {e}")
+
+    def _get_object_path(self, md5sum: str) -> Path:
+        prefix = md5sum[:2]
+        suffix = md5sum[2:]
         return self.project_context.objects_dir / prefix / f"{suffix}.z"
 
     def _store_object(self, data: bytes) -> str:
-        file_hash = compute_md5(data)
-        obj_path = self._get_object_path(file_hash)
+        """Guarda un objeto en CAS local."""
+        md5 = compute_md5(data)
+        obj_path = self._get_object_path(md5)
         if not obj_path.exists():
             obj_path.parent.mkdir(parents=True, exist_ok=True)
             compressed = compress_data(data)
             obj_path.write_bytes(compressed)
-        return file_hash
+        return md5
 
-    def _retrieve_object(self, file_hash: str) -> Optional[bytes]:
-        obj_path = self._get_object_path(file_hash)
+    def _retrieve_object(self, md5sum: str) -> Optional[bytes]:
+        """Recupera un objeto almacenado en CAS local."""
+        obj_path = self._get_object_path(md5sum)
         if not obj_path.exists():
             return None
         try:
@@ -112,437 +96,362 @@ class SnapshotManager:
             return decompress_data(compressed)
         except Exception as e:
             logger.debug(
-                f"[CAS Error] No se pudo leer o decompress el objeto {file_hash}: {e}"
+                f"[CAS Error] No se pudo leer o descomprimir el objeto {md5sum}: {e}"
             )
             return None
 
-    def _download_assets(self, chat: ChatIAStudio, file_id: str) -> List[AssetPayload]:
-
-        if file_id is None:
-            raise ChatSessionError("Falta identificador de sesión en el chat.")
-
-        assets_to_download = []
-        for chunk in chat.chunkedPrompt.chunks:
-            doc_id = chunk.file_id
-            if not doc_id:  # raro, pero puede ocurrir.
-                continue
-
-            if chunk.is_document:
-                assets_to_download.append(
-                    {
-                        "id": doc_id,
-                        "mime": "text/plain",
-                        "name": f"doc_{doc_id}.txt",
-                    }
-                )
-            elif chunk.is_image:
-                assets_to_download.append(
-                    {
-                        "id": doc_id,
-                        "mime": "image/jpeg",
-                        "name": f"image_{doc_id}.jpg",
-                    }
-                )
-
-        downloaded_assets = []
-        for asset_info in assets_to_download:
-            if asset_info["id"] == file_id:
-                continue
-
-            asset_bytes = self.api.get_file_content(asset_info["id"])
-            downloaded_assets.append(
-                AssetPayload(
-                    drive_file_id=asset_info["id"],
-                    filename=asset_info["name"],
-                    mime_type=asset_info["mime"],
-                    content=asset_bytes,
-                )
-            )
-
-        return downloaded_assets
-
-    # def _build_manifest(
-    #     self, drive_modified_time: str, category: SnapCategory, message: Optional[str]
-    # ) -> SnapshotManifest:
-    #     """
-    #     Descarga y valida todos los componentes necesarios desde Drive.
-    #     No realiza escrituras locales ni operaciones de base de datos.
-    #     """
-    #     state = self.project_context.load_state()
-
-    #     if not state.chat_id or not state.file_id:
-    #         raise ChatSessionError(
-    #             "Faltan identificadores de sesión en el estado local."
-    #         )
-
-    #     chat_bytes = self.api.get_file_content(state.chat_id)
-    #     chat = ChatIAStudio.model_validate_json(chat_bytes)
-    #     context_bytes = self.api.get_file_content(state.file_id)
-
-    #     downloaded_assets = self._download_assets(chat, state.file_id)
-
-    #     now = datetime.now()
-    #     # return SnapshotManifest(
-    #     #     timestamp=now.strftime("%Y%m%d_%H%M%S"),
-    #     #     human_time=now.strftime("%H:%M:%S - %d/%m/%Y"),
-    #     #     drive_modified_time=drive_modified_time,
-    #     #     category=category.value,
-    #     #     message=message,
-    #     #     chat_content=chat_bytes,
-    #     #     context_content=context_bytes,
-    #     #     assets=downloaded_assets,
-    #     # )
-
-    def _persist_manifest(
-        self, chat_content: bytes, context_content: bytes, assets: List[AssetPayload]
-    ) -> str:
+    def replicate_snapshot_assets(self, snapshot: Snapshot) -> dict[str, str]:
         """
-        Guarda el manifiesto de forma atómica en el CAS y la base de datos.
-        No realiza llamadas de red.
+        Garantiza que el usuario activo tenga todos los activos del snapshot en su Drive,
+        resolviendo enlaces rotos y evitando subidas duplicadas de archivos que ya coincidan
+        con el hash del CAS. Devuelve el mapa de traducción de IDs.
         """
+        active_email = self.project_context.email
+        creator_assets = snapshot.get_assets_from_creator()
 
-        chat_hash = self._store_object(chat_content)
-        context_hash = self._store_object(context_content)
+        if not creator_assets:
+            raise ValueError("No se encontraron activos asociados a este snapshot.")
 
-        assets_with_hashes = []
-        for asset in assets:
-            asset_hash = self._store_object(asset.content)
-            assets_with_hashes.append((asset, asset_hash))
+        id_map = {}
 
-        with db.atomic():
-            snapshot = Snapshot.create(
-                timestamp=manifest.timestamp,
-                human_time=manifest.human_time,
-                drive_modified_time=manifest.drive_modified_time,
-                message=manifest.message,
-                chat_hash=chat_hash,
-                context_hash=context_hash,
-                category=manifest.category,
+        # Separamos los activos de tipo 'chat' de los de soporte (contexto y adjuntos)
+        # para procesar primero los documentos que el chat referenciará internamente.
+        non_chat_assets = [a for a in creator_assets if a.role != "chat"]
+        chat_assets = [a for a in creator_assets if a.role == "chat"]
+
+        # Sincronizar activos de soporte (Contexto, Adjuntos)
+        for asset in non_chat_assets:
+            existing_asset = SnapshotAsset.get_or_none(
+                SnapshotAsset.snapshot == snapshot,
+                SnapshotAsset.email == active_email,
+                SnapshotAsset.role == asset.role,
+                SnapshotAsset.filename == asset.filename,
             )
 
-            for asset, asset_hash in assets_with_hashes:
-                SnapshotAsset.create(
-                    snapshot=snapshot,
-                    drive_file_id=asset.drive_file_id,
-                    filename=asset.filename,
-                    mime_type=asset.mime_type,
-                    file_hash=asset_hash,
-                )
+            target_file_id = None
+            needs_upload = True
 
-        return manifest.timestamp
-
-    def create_snapshot(
-        self,
-        drive_modified_time: str,
-        category: Union[SnapCategory, str],
-        message: str,
-    ) -> Optional[str]:
-        """Crea un snapshot de forma garantizada y atómica."""
-        try:
-            state = self.project_context.load_state()
-
-            if not state.chat_id or not state.file_id:
-                raise ChatSessionError(
-                    "Faltan identificadores de sesión en el estado local."
-                )
-
-            # Descarga de datos desde Drive
-            chat_bytes = self.api.get_file_content(state.chat_id)
-            chat = ChatIAStudio.model_validate_json(chat_bytes)
-            context_bytes = self.api.get_file_content(state.file_id)
-
-            # Descarga de recursos asociados
-            downloaded_assets = self._download_assets(chat, state.file_id)
-
-            # Tiempos de registro local
-            now = datetime.now()
-            timestamp = now.strftime("%Y%m%d_%H%M%S")
-            human_time = now.strftime("%H:%M:%S - %d/%m/%Y")
-
-            # Normalizar categoría a string
-            category_str = (
-                category.value if isinstance(category, SnapCategory) else str(category)
-            )
-
-            # Persistencia de los datos procesados
-            persisted_timestamp = self._persist_snapshot_data(
-                timestamp=timestamp,
-                human_time=human_time,
-                drive_modified_time=drive_modified_time,
-                category=category_str,
-                message=message,
-                chat_content=chat_bytes,
-                context_content=context_bytes,
-                assets=downloaded_assets,
-            )
-
-            return persisted_timestamp
-
-        except ChatSessionError as e:
-            logger.error(
-                f"Fallo al preparar el snapshot debido a problemas de red o datos: {e}"
-            )
-            return None
-        except Exception as e:
-            logger.exception(
-                f"Error inesperado persistiendo el snapshot localmente: {e}"
-            )
-            return None
-
-    def create_named_snapshot(
-        self, message: str, category: Union[SnapCategory, str] = SnapCategory.USER
-    ) -> Optional[str]:
-        """Genera un snapshot etiquetado resolviendo metadatos remotos."""
-        state = self.project_context.load_state()
-        chat_id = state.chat_id
-        if not chat_id:
-            return None
-
-        metadata = self.api.get_file_metadata(chat_id)
-        mod_time = (
-            metadata.get("modifiedTime", "Manual Save") if metadata else "Unknown"
-        )
-        return self.create_snapshot(
-            drive_modified_time=mod_time,
-            message=message,
-            category=SnapCategory(category),
-        )
-
-    def restore_snapshot(self, timestamp: str) -> bool:
-        """Restaura la información del snapshot en el entorno de Drive y disco local."""
-        try:
-            snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
-            if not snap:
-                logger.debug("Snapshot no encontrado en la base de datos.")
-                return False
-
-            logger.debug(f"Restaurando snapshot {timestamp}...")
-
-            chat_bytes = self._retrieve_object(snap.chat_hash)
-            if not chat_bytes:
-                logger.debug(f"Error: Chat {snap.chat_hash} no disponible localmente.")
-                return False
-
-            try:
-                chat_json = json.loads(chat_bytes.decode("utf-8"))
-            except Exception as e:
-                logger.debug(f"Error al decodificar chat JSON: {e}")
-                return False
-
-            assets_to_repair = list(
-                SnapshotAsset.select().where(SnapshotAsset.snapshot == snap)
-            )
-            id_map = {}
-
-            for asset in assets_to_repair:
-                logger.debug(f"Verificando recurso en la nube: {asset.filename}...")
-                metadata = self.api.get_file_metadata(asset.drive_file_id)
-                if metadata:
-                    continue
-
-                logger.debug(
-                    f"  Recurso no encontrado. Buscando por hash (MD5: {asset.file_hash})..."
-                )
-                files = self.api.find_files_by_query(
-                    f"md5Checksum = '{asset.file_hash}' and trashed = false",
-                    fields="files(id, name, mimeType)",
-                )
-
-                if files:
-                    repaired_id = files[0]["id"]
-                    logger.debug(
-                        f"  ¡Recurso recuperado de Drive! Vinculando ID: {repaired_id}"
-                    )
-                    id_map[asset.drive_file_id] = repaired_id
-                    asset.drive_file_id = repaired_id
-                    asset.save()
-                else:
-                    logger.debug(
-                        "  Recurso no encontrado en Drive. Recuperando de objects/..."
-                    )
-                    asset_bytes = self._retrieve_object(asset.file_hash)
-                    if not asset_bytes:
+            if existing_asset:
+                # Verificamos si sigue existiendo físicamente en Drive
+                meta = self.api.get_metadata(existing_asset.file_id)
+                if meta:
+                    target_file_id = existing_asset.file_id
+                    # Comparamos hashes MD5 para evitar subidas innecesarias
+                    if meta.md5sum == asset.md5sum:
+                        needs_upload = False
                         logger.debug(
-                            f"  [Error] No hay respaldo físico para {asset.filename}."
+                            f"El activo '{asset.filename}' ya existe y está sincronizado (hashes coinciden)."
                         )
-                        continue
-
-                    logger.debug("  Subiendo recurso restaurado a Drive...")
-                    try:
-                        new_file = self.api.upload_binary_to_drive(
-                            folder_id=self.api.ai_studio_folder,
-                            file_name=asset.filename,
-                            content=asset_bytes,
-                            mime_type=asset.mime_type,
+                    else:
+                        logger.debug(
+                            f"El activo '{asset.filename}' difiere en contenido en Drive. Se programará actualización."
                         )
-                        if new_file and "id" in new_file:
-                            repaired_id = new_file["id"]
-                            logger.debug(f"  Recurso restaurado con ID: {repaired_id}")
-                            id_map[asset.drive_file_id] = repaired_id
-                            asset.drive_file_id = repaired_id
-                            asset.save()
-                    except Exception as e:
-                        logger.debug(f"  [Error] No se pudo restaurar el archivo: {e}")
-
-            if id_map:
-                logger.debug(
-                    "Aplicando mapeo de identificadores reparados en el chat..."
-                )
-                chunks = chat_json.get("chunkedPrompt", {}).get("chunks", [])
-                for chunk in chunks:
-                    if (
-                        "driveDocument" in chunk
-                        and chunk["driveDocument"].get("id") in id_map
-                    ):
-                        chunk["driveDocument"]["id"] = id_map[
-                            chunk["driveDocument"]["id"]
-                        ]
-                    if (
-                        "driveImage" in chunk
-                        and chunk["driveImage"].get("id") in id_map
-                    ):
-                        chunk["driveImage"]["id"] = id_map[chunk["driveImage"]["id"]]
-
-            repaired_chat_content = json.dumps(chat_json, ensure_ascii=False)
-
-            context_bytes = self._retrieve_object(snap.context_hash)
-            if context_bytes is None:
-                logger.debug(
-                    f"Error: Contexto {snap.context_hash} no disponible localmente."
-                )
-                return False
-
-            context_content = context_bytes.decode("utf-8")
-
-            # Cargamos el archivo de estado para usarlo como única fuente de verdad local
-            state = self.project_context.load_state()
-            file_id = state.file_id
-            chat_id = state.chat_id
-
-            if not file_id or not chat_id:
-                logger.debug(
-                    "Error: No hay identificadores de chat o contexto válidos en el estado."
-                )
-                return False
-
-            meta_ctx = self.api.get_file_metadata(file_id)
-            if not meta_ctx:
-                logger.debug(
-                    "  [Auto-reparación] Recreando archivo de contexto maestro en Drive..."
-                )
-                project_path = self.project_context.local_dir
-                filename = Path(project_path).name + "_context.txt"
-                new_ctx_file = self.api.create_file_from_memory(
-                    folder_id=self.api.ai_studio_folder,
-                    file_name=filename,
-                    content=context_content,
-                    mime_type="text/plain",
-                )
-                if new_ctx_file and "id" in new_ctx_file:
-                    file_id = new_ctx_file
-                    state.file_id = file_id
-                    state.save()
                 else:
                     logger.debug(
-                        "  Error crítico: No se pudo recrear el archivo de contexto."
+                        f"Se detectó un enlace roto en Drive para '{asset.filename}' (ID: {existing_asset.file_id}). Se re-creará."
                     )
-                    return False
-            else:
-                self.api.update_file_from_memory(file_id, context_content, "text/plain")
 
-            meta_chat = self.api.get_file_metadata(chat_id)
-            if not meta_chat:
-                logger.debug(
-                    "  [Auto-reparación] Recreando archivo de chat en Drive..."
-                )
-                from project_context.core.schemas import ChatIAStudio
+            if needs_upload:
+                content = self._retrieve_object(asset.md5sum)
+                if not content:
+                    raise ValueError(
+                        f"No se pudo recuperar el contenido del CAS local para el MD5: {asset.md5sum}"
+                    )
 
-                chat_data = ChatIAStudio(**chat_json)
-                project_path = self.project_context.local_dir
-                chat_filename = Path(project_path).name + "_chat.prompt"
-                new_chat_id = self.api.create_chat(
-                    folder_id=file_id, file_name=chat_filename, chat_data=chat_data
-                )
-                if new_chat_id:
-                    chat_id = new_chat_id
-                    state.chat_id = chat_id
-                    state.save()
+                if target_file_id:
+                    # Actualización del archivo existente
+                    updated_file = self.api.update_file(
+                        target_file_id, content, asset.mime_type
+                    )
+                    target_file_id = updated_file.id
                 else:
-                    logger.debug("  Error crítico: No se pudo recrear el chat.")
-                    return False
-            else:
-                self.api.update_file_from_memory(
-                    chat_id, repaired_chat_content, self.api.MIME_PROMPT
+                    # Subida de un archivo nuevo o restauración de un enlace roto
+                    cloned_file = self.api.create_file(
+                        folder_id=self.api.ai_studio_folder,
+                        file_name=asset.filename,
+                        content=content,
+                        mime_type=asset.mime_type,
+                    )
+                    target_file_id = cloned_file.id
+
+                # Persistencia atómica de la referencia local
+                if existing_asset:
+                    existing_asset.file_id = target_file_id
+                    existing_asset.md5sum = asset.md5sum
+                    existing_asset.modified_at = datetime.now()
+                    existing_asset.save()
+                else:
+                    SnapshotAsset.create(
+                        snapshot=snapshot,
+                        file_id=target_file_id,
+                        filename=asset.filename,
+                        mime_type=asset.mime_type,
+                        md5sum=asset.md5sum,
+                        email=active_email,
+                        role=asset.role,
+                        modified_at=datetime.now(),
+                    )
+
+            id_map[asset.file_id] = target_file_id
+
+        # Sincronizar el Chat traduciendo sus referencias internas
+        for chat_asset in chat_assets:
+            existing_chat_asset = SnapshotAsset.get_or_none(
+                SnapshotAsset.snapshot == snapshot,
+                SnapshotAsset.email == active_email,
+                SnapshotAsset.role == "chat",
+            )
+
+            # Recuperamos el JSON histórico del chat desde el CAS local
+            chat_bytes = self._retrieve_object(chat_asset.md5sum)
+            if not chat_bytes:
+                raise ValueError(
+                    f"No se pudo recuperar el chat desde el CAS para el MD5: {chat_asset.md5sum}"
                 )
 
-            current_local_context = (
-                self.project_context.local_dir / "project_context.txt"
+            # Deserialización y re-mapeo dinámico de IDs internos
+            chat_data = json.loads(chat_bytes.decode("utf-8"))
+            chat_model = ChatIAStudio(**chat_data)
+
+            for chunk in chat_model.chunkedPrompt.chunks:
+                if chunk.file_id is not None:
+                    translated_id = id_map.get(chunk.file_id)
+                    if translated_id:
+                        chunk.file_id = translated_id
+                    else:
+                        logger.warning(
+                            f"Advertencia: No se encontró traducción en 'id_map' para el file_id: {chunk.file_id}"
+                        )
+
+            # Serializamos el modelo con los IDs actualizados para el usuario activo
+            translated_content = chat_model.model_dump_json(
+                exclude_none=True, exclude_unset=True
+            ).encode("utf-8")
+
+            target_chat_id = None
+            needs_chat_upload = True
+
+            if existing_chat_asset:
+                meta = self.api.get_metadata(existing_chat_asset.file_id)
+                if meta:
+                    target_chat_id = existing_chat_asset.file_id
+                    # Dado que el chat contiene referencias dinámicas, se sobreescribe para asegurar
+                    # que se conserven los mapeos de traducción correctos en la sesión activa.
+                else:
+                    logger.debug(
+                        f"Enlace roto del chat detectado para el ID: {existing_chat_asset.file_id}. Se creará uno nuevo."
+                    )
+
+            if needs_chat_upload:
+                if target_chat_id:
+                    self.api.update_file(
+                        target_chat_id, translated_content, chat_asset.mime_type
+                    )
+                else:
+                    cloned_chat = self.api.create_file(
+                        folder_id=self.api.ai_studio_folder,
+                        file_name=chat_asset.filename,
+                        content=translated_content,
+                        mime_type=chat_asset.mime_type,
+                    )
+                    target_chat_id = cloned_chat.id
+
+                # Actualización de la referencia del chat en la base de datos
+                if existing_chat_asset:
+                    existing_chat_asset.file_id = target_chat_id
+                    existing_chat_asset.md5sum = compute_md5(translated_content)
+                    existing_chat_asset.modified_at = datetime.now()
+                    existing_chat_asset.save()
+                else:
+                    SnapshotAsset.create(
+                        snapshot=snapshot,
+                        file_id=target_chat_id,
+                        filename=chat_asset.filename,
+                        mime_type=chat_asset.mime_type,
+                        md5sum=compute_md5(translated_content),
+                        email=active_email,
+                        role="chat",
+                        modified_at=datetime.now(),
+                    )
+
+            id_map[chat_asset.file_id] = target_chat_id
+
+        return id_map
+
+    def restore_snapshot(self, snapshot_id: str | int) -> bool:
+        """
+        Restaura el entorno de Drive y los archivos locales usando el snapshot id de forma multiusuario.
+        """
+        try:
+            snap = cast(Snapshot, Snapshot.get_or_none(Snapshot.id == int(snapshot_id)))
+            if not snap:
+                logger.error(
+                    f"No se encontró el snapshot con ID {snapshot_id} en la base de datos."
+                )
+                return False
+
+            active_email = self.project_context.email
+
+            # Ejecutar la sincronización idempotente de activos
+            # (re-crea enlaces rotos, evita subidas redundantes de archivos inalterados)
+            logger.info(
+                f"Sincronizando recursos del snapshot {snapshot_id} para {active_email}..."
             )
-            last_context = self.project_context.local_dir / "last_context.txt"
-            last_context.write_text(context_content, encoding="utf-8")
-            shutil.copy2(last_context, current_local_context)
+            self.replicate_snapshot_assets(snap)
 
-            # Nota: Hemos eliminado la asignación "self.project_context.md5 = snap.context_hash"
-            # para mantener la coherencia con el cambio estructural de evitar MD5s volátiles.
+            # Recuperar las referencias de activos definitivas para el usuario activo
+            chat_asset = SnapshotAsset.get_or_none(
+                SnapshotAsset.snapshot == snap,
+                SnapshotAsset.email == active_email,
+                SnapshotAsset.role == "chat",
+            )
+            context_asset = SnapshotAsset.get_or_none(
+                SnapshotAsset.snapshot == snap,
+                SnapshotAsset.email == active_email,
+                SnapshotAsset.role == "context",
+            )
 
-            logger.debug("Restauración completada con éxito.")
+            if not chat_asset or not context_asset:
+                logger.error(
+                    "Error crítico: No se pudieron resolver las referencias de chat o contexto para el usuario activo."
+                )
+                return False
+
+            # Guardar el estado persistente en el archivo local de configuración del proyecto
+            state = self.project_context.load_state()
+            state.chat_id = chat_asset.file_id
+            state.file_id = context_asset.file_id
+            state.save()
+
+            logger.info("Entorno restaurado exitosamente.")
             return True
 
         except Exception as e:
-            logger.debug(f"[Error] No se pudo restaurar el snapshot: {e}")
+            logger.exception(
+                f"Fallo inesperado durante la restauración del snapshot: {e}"
+            )
             return False
 
     def get_all_snapshot_ids(self) -> List[str]:
-        """Obtiene solo los timestamps ordenados descendentemente."""
+        """Obtiene los identificadores numéricos de snapshot en orden inverso."""
         try:
-            query = Snapshot.select(Snapshot.timestamp).order_by(
-                Snapshot.timestamp.desc()
-            )
-            return [snap.timestamp for snap in query]
+            query = Snapshot.select(Snapshot.id).order_by(Snapshot.id.desc())
+            return [str(snap.id) for snap in query]
         except Exception as e:
-            logger.debug(f"[Error] Fallo al consultar los timestamps: {e}")
+            logger.debug(f"[Error] Fallo al consultar identificadores: {e}")
             return []
 
     def get_snapshot_info(self, timestamp: str) -> Optional[dict]:
-        """Carga el registro de un snapshot específico."""
+        """Carga el registro con los metadatos dinámicos del snapshot."""
         try:
-            snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
+            if timestamp.isdigit():
+                snap = Snapshot.get_or_none(Snapshot.id == int(timestamp))
+            else:
+                snap = Snapshot.get_or_none(Snapshot.id == timestamp)
+
             if snap:
+                human_time = datetime.fromtimestamp(snap.created_at).strftime(
+                    "%H:%M:%S - %d/%m/%Y"
+                )
+
+                # Intentamos recuperar el MD5 del contexto de este snapshot.
+                active_email = self.project_context.email
+                context_asset = SnapshotAsset.get_or_none(
+                    SnapshotAsset.snapshot == snap,
+                    SnapshotAsset.email == active_email,
+                    SnapshotAsset.role == "context",
+                )
+                if not context_asset:
+                    context_asset = SnapshotAsset.get_or_none(
+                        SnapshotAsset.snapshot == snap,
+                        SnapshotAsset.email == snap.creator_email,
+                        SnapshotAsset.role == "context",
+                    )
+                context_hash = context_asset.md5sum if context_asset else ""
+
+                drive_mod = (
+                    snap.drive_modified_time
+                    if hasattr(snap, "drive_modified_time")
+                    else snap.updated_at
+                )
+                drive_mod_str = (
+                    drive_mod.isoformat()
+                    if isinstance(drive_mod, datetime)
+                    else str(drive_mod)
+                )
+
                 return {
-                    "timestamp": snap.timestamp,
-                    "human_time": snap.human_time,
-                    "drive_modified_time": snap.drive_modified_time,
-                    "context_md5": snap.context_hash,
+                    "timestamp": str(snap.id),
+                    "human_time": human_time,
+                    "drive_modified_time": drive_mod_str,
+                    "context_md5": context_hash,
                     "message": snap.message,
                     "category": getattr(snap, "category", "user"),
+                    "creator_email": snap.creator_email,
                 }
         except Exception as e:
             logger.debug(f"[Error] Fallo al consultar el snapshot: {e}")
         return None
 
     def list_snapshots(self) -> List[dict]:
-        """Devuelve una lista de todos los snapshots registrados."""
+        """Devuelve la lista total de snapshots registrados con formato de UI dinámico."""
         try:
-            query = Snapshot.select().order_by(Snapshot.timestamp.desc())
-            return [
-                {
-                    "timestamp": snap.timestamp,
-                    "human_time": snap.human_time,
-                    "drive_modified_time": snap.drive_modified_time,
-                    "context_md5": snap.context_hash,
-                    "message": snap.message,
-                    "category": getattr(snap, "category", "user"),
-                }
-                for snap in query
-            ]
+            query = Snapshot.select().order_by(Snapshot.id.desc())
+            results = []
+            active_email = self.project_context.email
+            for snap in query:
+                human_time = datetime.fromtimestamp(snap.created_at).strftime(
+                    "%H:%M:%S - %d/%m/%Y"
+                )
+
+                context_asset = SnapshotAsset.get_or_none(
+                    SnapshotAsset.snapshot == snap,
+                    SnapshotAsset.email == active_email,
+                    SnapshotAsset.role == "context",
+                )
+                if not context_asset:
+                    context_asset = SnapshotAsset.get_or_none(
+                        SnapshotAsset.snapshot == snap,
+                        SnapshotAsset.email == snap.creator_email,
+                        SnapshotAsset.role == "context",
+                    )
+                context_hash = context_asset.md5sum if context_asset else ""
+
+                drive_mod = (
+                    snap.drive_modified_time
+                    if hasattr(snap, "drive_modified_time")
+                    else snap.updated_at
+                )
+                drive_mod_str = (
+                    drive_mod.isoformat()
+                    if isinstance(drive_mod, datetime)
+                    else str(drive_mod)
+                )
+
+                results.append(
+                    {
+                        "timestamp": str(snap.id),
+                        "human_time": human_time,
+                        "drive_modified_time": drive_mod_str,
+                        "context_md5": context_hash,
+                        "message": snap.message,
+                        "category": getattr(snap, "category", "user"),
+                        "creator_email": snap.creator_email,
+                    }
+                )
+            return results
         except Exception as e:
-            logger.debug(f"[Error] Fallo al listar historial: {e}")
+            logger.debug(f"[Error] Fallo al listar el historial: {e}")
             return []
 
     def delete_snapshot(self, timestamp: str) -> bool:
-        """Elimina un snapshot y realiza limpieza en cascada de binarios sin referencias."""
+        """Elimina el registro de la base de datos y purga los objetos obsoletos del CAS."""
         try:
-            snap = Snapshot.get_or_none(Snapshot.timestamp == timestamp)
+            if timestamp.isdigit():
+                snap = Snapshot.get_or_none(Snapshot.id == int(timestamp))
+            else:
+                snap = Snapshot.get_or_none(Snapshot.id == timestamp)
+
             if snap:
                 snap.delete_instance(recursive=True)
                 self.prune_objects()
@@ -552,11 +461,16 @@ class SnapshotManager:
         return False
 
     def rename_snapshot(self, timestamp: str, new_message: str) -> bool:
-        """Modifica la descripción de un snapshot existente."""
+        """Modifica la descripción de un snapshot."""
         try:
-            q = Snapshot.update({Snapshot.message: new_message}).where(
-                Snapshot.timestamp == timestamp
-            )
+            if timestamp.isdigit():
+                q = Snapshot.update({Snapshot.message: new_message}).where(
+                    Snapshot.id == int(timestamp)
+                )
+            else:
+                q = Snapshot.update({Snapshot.message: new_message}).where(
+                    Snapshot.id == timestamp
+                )
             q.execute()
             return True
         except Exception as e:
@@ -564,14 +478,11 @@ class SnapshotManager:
         return False
 
     def prune_objects(self) -> int:
-        """Elimina físicamente del disco los archivos .z en CAS que no tengan referencias en base de datos."""
+        """Elimina físicamente del CAS local todos los archivos no referenciados."""
         referenced_hashes = set()
         try:
-            for snap in Snapshot.select(Snapshot.chat_hash, Snapshot.context_hash):
-                referenced_hashes.add(snap.chat_hash)
-                referenced_hashes.add(snap.context_hash)
-            for asset in SnapshotAsset.select(SnapshotAsset.file_hash):
-                referenced_hashes.add(asset.file_hash)
+            for asset in SnapshotAsset.select(SnapshotAsset.md5sum):
+                referenced_hashes.add(asset.md5sum)
         except Exception as e:
             logger.debug(f"[Error] No se pudieron leer las referencias activas: {e}")
             return 0
@@ -598,113 +509,149 @@ class SnapshotManager:
         return deleted_count
 
     def _migrate_legacy_snapshots(self):
-        """Migra de forma transparente los snapshots antiguos."""
+        """Limpia los directorios obsoletos para evitar redundancia de espacio local."""
         if not self.project_context.snapshots_dir.exists():
             return
 
-        legacy_folders = []
         for d in self.project_context.snapshots_dir.iterdir():
-            if (
-                d.is_dir()
-                and d.name not in ("objects", "context_store")
-                and (d / "info.json").exists()
-            ):
-                legacy_folders.append(d)
-
-        if not legacy_folders:
-            return
-
-        logger.debug(
-            f"\n[Migration] Se detectaron {len(legacy_folders)} snapshots antiguos. Migrando..."
-        )
-
-        for folder in legacy_folders:
-            try:
-                info_path = folder / "info.json"
-                chat_path = folder / "chat.prompt"
-
-                info = json.loads(info_path.read_text(encoding="utf-8"))
-                chat_bytes = chat_path.read_bytes()
-
-                timestamp = info.get("timestamp")
-                human_time = info.get("human_time")
-                drive_modified_time = info.get("drive_modified_time", "Unknown")
-                message = info.get("message")
-                context_md5 = info.get("context_md5")
-
-                chat_hash = self._store_object(chat_bytes)
-
-                context_bytes = b""
-                stored_context = (
-                    self.project_context.context_store_dir / f"{context_md5}.txt"
-                )
-                if stored_context.exists():
-                    context_bytes = stored_context.read_bytes()
-                else:
-                    current_ctx_file = (
-                        self.project_context.local_dir / "last_context.txt"
-                    )
-                    if current_ctx_file.exists():
-                        context_bytes = current_ctx_file.read_bytes()
-
-                context_hash = self._store_object(context_bytes)
-
-                snap_record, created = Snapshot.get_or_create(
-                    timestamp=timestamp,
-                    defaults={
-                        "human_time": human_time,
-                        "drive_modified_time": drive_modified_time,
-                        "message": message,
-                        "chat_hash": chat_hash,
-                        "context_hash": context_hash,
-                    },
-                )
-
+            if d.is_dir() and d.name not in ("objects", "context_store"):
                 try:
-                    chat_json = json.loads(chat_bytes.decode("utf-8"))
-                    chunks = chat_json.get("chunkedPrompt", {}).get("chunks", [])
-                    for chunk in chunks:
-                        file_id = None
-                        mtype = "application/octet-stream"
-                        fname = "unnamed"
-                        if "driveDocument" in chunk:
-                            file_id = chunk["driveDocument"].get("id")
-                            fname = "context_document.txt"
-                        elif "driveImage" in chunk:
-                            file_id = chunk["driveImage"].get("id")
-                            mtype = "image/jpeg"
-                            fname = f"image_{file_id}.jpg"
-
-                        if file_id:
-                            try:
-                                asset_bytes = self.api.get_file_content(file_id)
-                                if asset_bytes:
-                                    asset_hash = self._store_object(asset_bytes)
-                                    SnapshotAsset.get_or_create(
-                                        snapshot=snap_record,
-                                        drive_file_id=file_id,
-                                        defaults={
-                                            "filename": fname,
-                                            "mime_type": mtype,
-                                            "file_hash": asset_hash,
-                                        },
-                                    )
-                            except Exception:
-                                pass
+                    shutil.rmtree(d)
                 except Exception:
                     pass
 
-                shutil.rmtree(folder)
+    def _snapshot_and_store_asset(
+        self, snapshot: Snapshot, file_id: str, role: str
+    ) -> Optional[SnapshotAsset]:
+        """
+        Descarga un recurso desde Google Drive, lo comprime y lo almacena en el CAS local,
+        creando finalmente el registro correspondiente en la base de datos.
+        """
+        # Obtener los metadatos necesarios (nombre de archivo, tipo mime)
+        meta = self.api.get_metadata(file_id)
+        if not meta:
+            logger.warning(
+                f"No se pudieron recuperar los metadatos para el recurso de Drive: {file_id}"
+            )
+            return None
 
-            except Exception as e:
-                logger.debug(
-                    f"[Migration Warning] No se pudo migrar la carpeta legacy {folder.name}: {e}"
+        # Descargar el contenido físico del archivo
+        try:
+            content_bytes = self.api.get_file_content(file_id)
+        except Exception as e:
+            logger.error(
+                f"Fallo al descargar el contenido del recurso '{meta.filename}' (ID: {file_id}): {e}"
+            )
+            return None
+
+        # Almacenar el archivo de forma inmutable en el CAS local (devuelve el hash md5)
+        md5 = self._store_object(content_bytes)
+
+        # Registrar el activo en la base de datos para el usuario activo
+        asset = SnapshotAsset.create(
+            snapshot=snapshot,
+            email=self.project_context.email,
+            file_id=file_id,
+            filename=meta.filename,
+            mime_type=meta.mimetype,
+            md5sum=md5,
+            role=role,
+            modified_at=datetime.now(),
+        )
+        return asset
+
+    def create_named_snapshot(
+        self, message: str, category: str = "user"
+    ) -> Optional[str]:
+        """
+        Crea un punto de restauración atómico de la sesión de trabajo. Descarga el chat,
+        el contexto y todos los archivos adjuntos vinculados para almacenarlos localmente.
+        """
+        state = self.project_context.load_state()
+        if not state.chat_id or not state.file_id:
+            logger.error(
+                "No se puede crear un snapshot sin una sesión de chat y un archivo de contexto activos."
+            )
+            return None
+
+        active_email = self.project_context.email
+
+        try:
+            # Crear el registro lógico principal (atómico)
+            with db.atomic():
+                snap = Snapshot.create(
+                    message=message, category=category, creator_email=active_email
                 )
 
-        if self.project_context.context_store_dir.exists():
-            try:
-                shutil.rmtree(self.project_context.context_store_dir)
-            except Exception:
-                pass
+            # Descargar y almacenar el archivo de contexto maestro en el CAS
+            logger.info(
+                "Respaldando archivo de contexto maestro en el almacenamiento local..."
+            )
+            context_asset = self._snapshot_and_store_asset(
+                snap, state.file_id, role="context"
+            )
+            if not context_asset:
+                raise ValueError(
+                    "No se pudo completar el respaldo del archivo de contexto maestro."
+                )
 
-        logger.debug("[Migration] Proceso de migración finalizado.")
+            # Descargar el Chat actual para analizar adjuntos y dependencias
+            logger.info("Descargando estructura del chat activo para análisis...")
+            chat_data = self.api.get_chat(state.chat_id)
+            if not chat_data:
+                raise ValueError("No se pudo obtener el archivo de chat remoto.")
+
+            # Identificar y descargar recursos adicionales vinculados (Imágenes, documentos adjuntos)
+            # Usamos un set para evitar descargar duplicados si un recurso aparece varias veces en el chat
+            referenced_file_ids = set()
+            for chunk in chat_data.chunkedPrompt.chunks:
+                f_id = chunk.file_id
+                # El id del contexto maestro se excluye porque se maneja por separado
+                if f_id and f_id != state.file_id:
+                    referenced_file_ids.add(f_id)
+
+            for attachment_id in referenced_file_ids:
+                logger.info(
+                    f"Respaldando archivo adjunto detectado (ID: {attachment_id})..."
+                )
+                self._snapshot_and_store_asset(snap, attachment_id, role="attachment")
+
+            # Guardar la conversación del chat en el CAS local
+            # Serializamos la sesión actual para asegurar que el JSON histórico contenga todos los mensajes actuales
+            chat_bytes = chat_data.model_dump_json(
+                exclude_none=True, exclude_unset=True
+            ).encode("utf-8")
+            chat_md5 = self._store_object(chat_bytes)
+
+            chat_meta = self.api.get_metadata(state.chat_id)
+            chat_filename = (
+                chat_meta.filename
+                if chat_meta
+                else f"{self.project_context.project_path.name}_chat.prompt"
+            )
+            chat_mime = (
+                chat_meta.mimetype
+                if chat_meta
+                else "application/vnd.google-makersuite.prompt"
+            )
+
+            with db.atomic():
+                SnapshotAsset.create(
+                    snapshot=snap,
+                    email=active_email,
+                    file_id=state.chat_id,
+                    filename=chat_filename,
+                    mime_type=chat_mime,
+                    md5sum=chat_md5,
+                    role="chat",
+                    modified_at=datetime.now(),
+                )
+
+            logger.info(f"Snapshot registrado de forma exitosa. ID: {snap.id}")
+            return str(snap.id)
+
+        except Exception as e:
+            logger.exception(f"Fallo crítico durante la generación del snapshot: {e}")
+            # Si ocurre un error, peewee revertirá de forma automática las operaciones
+            # contenidas dentro de bloques 'with db.atomic()' evitando registros huérfanos.
+            return None
