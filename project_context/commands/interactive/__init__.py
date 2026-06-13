@@ -8,6 +8,7 @@ from project_context.commands.interactive.chat import (
 )
 from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.register import InteractiveRegistry
+from project_context.commands.interactive.story import cmd_story
 
 
 def bootstrap_interactive_registry() -> InteractiveRegistry:
@@ -70,6 +71,14 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         names=["commit", "ci"],
         handler=cmd_commit,
         description="Genera una sugerencia de commit temporal con base en el diff de Git actual.",
+        require_chat=True,
+    )
+
+    # --- COMANDO DE HISTORIA ---
+    registry.register(
+        names=["story"],
+        handler=cmd_story,
+        description="Configura o procesa las intenciones del modo historia interactivo.",
         require_chat=True,
     )
 

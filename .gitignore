@@ -22,3 +22,4 @@ tests/
 .project_context*
 *.zip
 notas.md
+project_context/project_context/scripts

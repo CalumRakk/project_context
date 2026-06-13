@@ -43,6 +43,16 @@ def update_command(
     with ProjectContext(profile.email, project_path) as projectcontext:
         restore_chat_backup_if_exists(api, projectcontext)
 
-        create_or_update_chat(api, projectcontext)
+        anchor_file_path = projectcontext.local_dir / "story_anchor.txt"
+        if anchor_file_path.exists():
+            story_anchor_rel = anchor_file_path.read_text(encoding="utf-8").strip()
+            UI.info(
+                "Modo historia activo detectado en el proyecto. Reconstruyendo prompt del chat..."
+            )
+            from project_context.core.story_ops import apply_story_update
+
+            apply_story_update(api, projectcontext, story_anchor_rel)
+        else:
+            create_or_update_chat(api, projectcontext)
 
         UI.success("Sincronización de contexto completada.")

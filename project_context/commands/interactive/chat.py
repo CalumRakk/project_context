@@ -22,9 +22,17 @@ def cmd_clear(ctx: SessionContext, args: list[str]):
 
 
 def cmd_update(ctx: SessionContext, args: list[str]):
-    """Actualiza el contenido del archivo de contexto en Drive."""
+    """Actualiza el contexto general y reconstruye el chat."""
+    anchor_file_path = ctx.project_context.local_dir / "story_anchor.txt"
 
-    create_or_update_chat(ctx.api, ctx.project_context)
+    if anchor_file_path.exists():
+        story_anchor_rel = anchor_file_path.read_text(encoding="utf-8").strip()
+        UI.info("Modo historia detectado activo. Reconstruyendo prompt del chat...")
+        from project_context.core.story_ops import apply_story_update
+
+        apply_story_update(ctx.api, ctx.project_context, story_anchor_rel)
+    else:
+        create_or_update_chat(ctx.api, ctx.project_context)
 
     state = ctx.project_context.load_state()
     clean_args_list = [

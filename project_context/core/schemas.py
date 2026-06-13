@@ -1,19 +1,8 @@
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-if TYPE_CHECKING:
-    pass
-
-
-# class FileDrive(BaseModel):
-#     id: str
-#     name: str
-#     mimeType: str
-#     modifiedTime: str
-#     is_folder: bool
 
 
 class Parts(BaseModel):
