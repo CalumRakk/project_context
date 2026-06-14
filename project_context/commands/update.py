@@ -6,9 +6,9 @@ from typing_extensions import Annotated
 
 from project_context.core.profile_mg import ProfileManager
 from project_context.core.project_context import ProjectContext
-from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
+from project_context.services.context_service import ContextService
 from project_context.ui import UI
 
 
@@ -41,7 +41,8 @@ def update_command(
     api = GoogleDriveManager(creds)
 
     with ProjectContext(profile.email, project_path) as projectcontext:
-        restore_chat_backup_if_exists(api, projectcontext)
+        context_service = ContextService(api, projectcontext)
+        context_service.restore_backup_if_exists()
 
         anchor_file_path = projectcontext.local_dir / "story_anchor.txt"
         if anchor_file_path.exists():
@@ -53,6 +54,6 @@ def update_command(
 
             apply_story_update(api, projectcontext, story_anchor_rel)
         else:
-            create_or_update_chat(api, projectcontext)
+            context_service.create_or_update_chat()
 
         UI.success("Sincronización de contexto completada.")

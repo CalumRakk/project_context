@@ -5,6 +5,7 @@ from project_context.core.project_context import ProjectContext
 from project_context.core.snapshot_mg import SnapshotManager
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.commit_service import CommitService
+from project_context.services.context_service import ContextService
 from project_context.services.git_service import GitService
 from project_context.ui import UI
 
@@ -19,6 +20,7 @@ class SessionContext:
     _snapshot_manager: Optional[SnapshotManager] = None
     _git: Optional[GitService] = None
     _commit_service: Optional[CommitService] = None
+    _context_service: Optional[ContextService] = None
 
     @property
     def snapshot_manager(self):
@@ -42,6 +44,13 @@ class SessionContext:
         if self._commit_service is None:
             self._commit_service = CommitService(self.git)
         return self._commit_service
+
+    @property
+    def context_service(self) -> ContextService:
+        """Inicializa de forma perezosa y con caché el ContextService."""
+        if self._context_service is None:
+            self._context_service = ContextService(self.api, self.project_context)
+        return self._context_service
 
 
 class CommandMetadata:

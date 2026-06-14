@@ -9,9 +9,9 @@ from project_context.commands.bridge import interactive_session
 from project_context.core.database import DatabaseSession
 from project_context.core.profile_mg import ProfileManager
 from project_context.core.project_context import ProjectContext
-from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
+from project_context.services.context_service import ContextService
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,8 @@ def run_command(
 
     with ProjectContext(profile.email, project_path) as projectcontext:
         with DatabaseSession(projectcontext):
-            restore_chat_backup_if_exists(api, projectcontext)
-
-            create_or_update_chat(api, projectcontext)
+            context_service = ContextService(api, projectcontext)
+            context_service.restore_backup_if_exists()
+            context_service.create_or_update_chat()
 
             interactive_session(api, projectcontext)

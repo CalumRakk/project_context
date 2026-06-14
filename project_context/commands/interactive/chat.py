@@ -1,20 +1,18 @@
 from rich.table import Table
 
 from project_context.commands.interactive.register import SessionContext
-from project_context.ops import create_or_update_chat, restore_chat_backup_if_exists
 from project_context.ui import UI, console
 from project_context.utils import get_context_tree
 
 
 def cmd_clear(ctx: SessionContext, args: list[str]):
     """Limpia el historial de la conversación manteniendo el contexto inicial."""
-
     state = ctx.project_context.load_state()
     if state.chat_id is None:
         UI.error("No se encontró una sesión de chat activa para limpiar el historial.")
         return
 
-    if restore_chat_backup_if_exists(ctx.api, ctx.project_context):
+    if ctx.context_service.restore_backup_if_exists():
         UI.info("Restaurado chat original desde el respaldo local.")
     else:
         ctx.api.clear_chat(state.chat_id)
@@ -32,7 +30,7 @@ def cmd_update(ctx: SessionContext, args: list[str]):
 
         apply_story_update(ctx.api, ctx.project_context, story_anchor_rel)
     else:
-        create_or_update_chat(ctx.api, ctx.project_context)
+        ctx.context_service.create_or_update_chat()
 
     state = ctx.project_context.load_state()
     clean_args_list = [
