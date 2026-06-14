@@ -7,7 +7,10 @@ from prompt_toolkit.completion import NestedCompleter, PathCompleter, WordComple
 from prompt_toolkit.history import InMemoryHistory
 
 from project_context.commands.interactive import bootstrap_interactive_registry
-from project_context.commands.interactive.register import SessionContext
+from project_context.commands.interactive.register import (
+    InteractiveRegistry,
+    SessionContext,
+)
 from project_context.core.exceptions import ProjectContextError
 from project_context.core.profile_mg import ProfileManager
 from project_context.core.project_context import ProjectContext
@@ -16,44 +19,68 @@ from project_context.ui import UI
 
 
 def create_interactive_completer(
-    project_path: Path, commands: list[str]
+    project_path: Path, registry: InteractiveRegistry
 ) -> NestedCompleter:
-    """
-    Construye un completador jerárquico dinámico a partir de las claves del registro.
+    """Construye un completador jerárquico dinámico a partir de las opciones
+
+    y argumentos declarados en el registro interactivo.
     """
     profile_manager = ProfileManager()
     profiles = profile_manager.list_profiles()
+
     project_path_completer = PathCompleter(
         expanduser=True, get_paths=lambda: [str(project_path)]
     )
+    profile_completer = WordCompleter(profiles)
 
     nested_dict = {}
 
-    # Agrupar subcomandos definidos por namespace (separados por ':')
-    for cmd_name in commands:
-        if ":" in cmd_name:
-            parent, sub = cmd_name.split(":", 1)
-            if parent not in nested_dict or not isinstance(nested_dict[parent], dict):
-                nested_dict[parent] = {}
+    for primary_name, meta in registry.get_commands_map().items():
+        cmd_branch = {}
 
-            if parent in ["context", "story", "images"] and sub in [
-                "add",
-                "rm",
-                "remove",
-            ]:
-                nested_dict[parent][sub] = project_path_completer
+        # Mapear opciones y flags fijas del comando
+        for opt in meta.options:
+            for name in opt.names:
+                cmd_branch[name] = None
+
+        # Resolver y asociar completadores posicionales dinámicos
+        positional_completer = None
+        for arg in meta.arguments:
+            if arg.completer_type == "path":
+                positional_completer = project_path_completer
+            elif arg.completer_type == "profile":
+                positional_completer = profile_completer
+            elif arg.completer_type == "snapshot":
+                # Recupera de forma preventiva los identificadores de snapshots existentes
+                try:
+                    from project_context.core.database import DatabaseSession, Snapshot
+
+                    active_email = profile_manager.get_active_profile_name()
+                    if active_email:
+                        profile_data = profile_manager.load_profile_data(active_email)
+                        proj_ctx = ProjectContext(profile_data.email, project_path)
+                        with DatabaseSession(proj_ctx):
+                            snaps = [
+                                str(s.id)
+                                for s in Snapshot.select(Snapshot.id).order_by(
+                                    Snapshot.id.desc()
+                                )
+                            ]
+                        positional_completer = WordCompleter(snaps)
+                except Exception:
+                    pass
+
+        if positional_completer:
+            if not cmd_branch:
+                # Si el comando solo recibe un argumento libre, el completador toma el nodo principal
+                nested_dict[primary_name] = positional_completer
             else:
-                nested_dict[parent][sub] = None
-
-    for cmd_name in commands:
-        if ":" not in cmd_name:
-            if cmd_name not in nested_dict:
-                if cmd_name in ["story", "images"]:
-                    nested_dict[cmd_name] = project_path_completer
-                elif cmd_name == "transfer":
-                    nested_dict[cmd_name] = WordCompleter(profiles)
-                else:
-                    nested_dict[cmd_name] = None
+                # Si acepta opciones y argumentos dinámicos, el completador fluye en cascada
+                for key in list(cmd_branch.keys()):
+                    cmd_branch[key] = positional_completer
+                nested_dict[primary_name] = cmd_branch
+        else:
+            nested_dict[primary_name] = cmd_branch if cmd_branch else None
 
     return NestedCompleter.from_nested_dict(nested_dict)
 
@@ -73,10 +100,7 @@ def interactive_session(
     UI.info("Escribe [green]update[/] para sincronizar los cambios con Drive.")
 
     registry = bootstrap_interactive_registry()
-    commands_list = list(registry._commands.keys())
-    completer = create_interactive_completer(
-        project_context.project_path, commands_list
-    )
+    completer = create_interactive_completer(project_context.project_path, registry)
 
     session = PromptSession(completer=completer, history=InMemoryHistory())
     consecutive_errors = 0

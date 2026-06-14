@@ -60,7 +60,7 @@ class ContextService:
         filename = self.build_filename_chat()
         context = self.project_context.generate_context()
 
-        # 1. Gestionar documento de contexto maestro
+        # Gestionar documento de contexto maestro
         if state.file_id is None or not self.api.can_access_file(state.file_id):
             context_remote = self.create_context_document(filename, context)
             state.file_id = context_remote.file_id
@@ -68,7 +68,7 @@ class ContextService:
         else:
             context_remote = self.update_context_document(context, state.file_id)
 
-        # 2. Gestionar sesión de chat de AI Studio
+        # Gestionar sesión de chat de AI Studio
         if state.chat_id is None or not self.api.can_access_file(state.chat_id):
             chat_filename = self.build_filename_chat()
             initial_chat = ChunkFactory.build_initial_chat(context_remote)
