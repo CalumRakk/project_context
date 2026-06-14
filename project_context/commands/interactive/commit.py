@@ -5,12 +5,6 @@ from typing import List
 from project_context.commands.interactive.register import SessionContext
 from project_context.core.exceptions import ChatSessionError
 from project_context.core.schemas import ChunkText
-from project_context.ops import generate_commit_prompt_text
-from project_context.services.git_ops import (
-    get_diff_cached,
-    has_unstaged_changes,
-    stage_all_changes,
-)
 from project_context.ui import UI
 
 logger = logging.getLogger(__name__)
@@ -20,7 +14,6 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     """Genera una sugerencia de commit con base en el diff de Git actual."""
 
     backup_path = ctx.project_context.local_dir / "chat_backup.prompt"
-    project_path = ctx.project_context.project_path
     state = ctx.project_context.load_state()
 
     if state.chat_id is None:
@@ -47,11 +40,11 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
     is_command_all = args and args[0].lower() in ["-a", "--all", "all"]
 
     if is_command_all:
-        stage_all_changes(project_path)
+        ctx.git.stage_all_changes()
 
-    diff = get_diff_cached(project_path)
+    diff = ctx.git.get_diff_cached()
     if not diff:
-        if has_unstaged_changes(project_path):
+        if ctx.git.has_unstaged_changes():
             UI.warn(
                 "No hay archivos en stage (git add), pero hay modificaciones locales."
             )
@@ -61,8 +54,8 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
                 .lower()
             )
             if confirm == "s":
-                stage_all_changes(project_path)
-                diff = get_diff_cached(project_path)
+                ctx.git.stage_all_changes()
+                diff = ctx.git.get_diff_cached()
                 if not diff:
                     raise ChatSessionError(
                         "No se pudo generar el diff de Git después del stage."
@@ -75,7 +68,9 @@ def cmd_commit(ctx: SessionContext, args: List[str]):
             return
 
     UI.info("Obteniendo cambios de Git...")
-    prompt_text = generate_commit_prompt_text(project_path)
+
+    # Consumimos la lógica delegada en el nuevo servicio
+    prompt_text = ctx.commit_service.generate_prompt()
     if not prompt_text:
         raise ChatSessionError("No se pudo generar el prompt de sugerencia de commit.")
 

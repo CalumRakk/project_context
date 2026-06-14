@@ -1,7 +1,6 @@
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from project_context.core.project_context import ProjectContext
 from project_context.core.schemas import (
@@ -13,37 +12,12 @@ from project_context.services.api_drive import (
     ChunkFactory,
     GoogleDriveManager,
 )
-from project_context.services.git_ops import get_diff_message
 from project_context.utils import (
-    COMMIT_TASK_MARKER,
     UI,
 )
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 logger = logging.getLogger(__name__)
-
-
-def generate_commit_prompt_text(project_path: Path) -> Optional[str]:
-    """Genera el prompt completo para la tarea de commit."""
-    diff_content = get_diff_message(project_path)
-
-    if not diff_content:
-        return None
-
-    # Prependemos el marcador estándar de commit
-    prompt_text = (
-        f"{COMMIT_TASK_MARKER}\n\n"
-        "Actúa como un desarrollador senior con amplia experiencia en la redacción de mensajes de commit siguiendo las mejores prácticas Conventional Commits. "
-        "Tienes adjunto a este chat el contexto del proyecto para que entiendas la arquitectura general.\n\n"
-        "He realizado los siguientes cambios (git diff --cached):\n\n"
-        "```diff\n"
-        f"{diff_content}\n"
-        "```\n\n"
-        "Con base en esos cambios, sugiéreme un único mensaje de commit conciso, en español, que resuma de forma clara y profesional los puntos más relevantes. "
-        "No me des explicaciones, solo devuélveme el mensaje final listo para copiar y pegar. \n"
-        "Formato deseado: <tipo>(<alcance>): <descripción>"
-    )
-    return prompt_text
 
 
 def build_filename_chat(project_path: Path) -> str:

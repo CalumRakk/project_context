@@ -4,6 +4,8 @@ from typing import Callable, Dict, List, Optional
 from project_context.core.project_context import ProjectContext
 from project_context.core.snapshot_mg import SnapshotManager
 from project_context.services.api_drive import GoogleDriveManager
+from project_context.services.commit_service import CommitService
+from project_context.services.git_service import GitService
 from project_context.ui import UI
 
 
@@ -15,6 +17,8 @@ class SessionContext:
     project_context: ProjectContext
 
     _snapshot_manager: Optional[SnapshotManager] = None
+    _git: Optional[GitService] = None
+    _commit_service: Optional[CommitService] = None
 
     @property
     def snapshot_manager(self):
@@ -24,6 +28,20 @@ class SessionContext:
             self._snapshot_manager.initialize_schema()
 
         return self._snapshot_manager
+
+    @property
+    def git(self) -> GitService:
+        """Inicializa de forma perezosa y con caché el GitService."""
+        if self._git is None:
+            self._git = GitService(self.project_context.project_path)
+        return self._git
+
+    @property
+    def commit_service(self) -> CommitService:
+        """Inicializa de forma perezosa y con caché el CommitService."""
+        if self._commit_service is None:
+            self._commit_service = CommitService(self.git)
+        return self._commit_service
 
 
 class CommandMetadata:
@@ -54,7 +72,6 @@ class InteractiveRegistry:
         require_chat: bool = True,
     ):
         """Asocia explícitamente uno o más alias a un manejador de comandos."""
-        # TODO: reutilizar los docstring especifica en los subcomandos.
         metadata = CommandMetadata(handler, description, require_chat)
         for name in names:
             self._commands[name.lower()] = metadata
