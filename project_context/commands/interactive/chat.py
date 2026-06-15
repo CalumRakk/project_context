@@ -27,7 +27,7 @@ def cmd_update(ctx: SessionContext, args: ParsedArgs):
         UI.info("Modo historia detectado activo. Reconstruyendo prompt del chat...")
         from project_context.core.story_ops import apply_story_update
 
-        apply_story_update(ctx.api, ctx.project_context, story_anchor_rel)
+        apply_story_update(ctx.api, ctx.project_context, story_anchor_rel, ctx)
     else:
         ctx.context_service.create_or_update_chat()
 

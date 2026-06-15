@@ -34,20 +34,7 @@ def cmd_story(ctx: SessionContext, args: ParsedArgs):
 
     rel_path = str(target_file.relative_to(ctx.project_context.project_path).as_posix())
 
-    state = ctx.project_context.load_state()
-    context_items = state.context_items
-    has_specific_focus = bool(context_items.files or context_items.folders)
-
-    if has_specific_focus:
-        if rel_path not in context_items.files:
-            context_items.files.append(rel_path)
-            state.context_items = context_items
-            state.save()
-            UI.info(
-                f"El archivo [cyan]{rel_path}[/] fue añadido al contexto específico."
-            )
-
     UI.info("Iniciando Modo Historia...")
     anchor_file_path.write_text(rel_path, encoding="utf-8")
 
-    apply_story_update(ctx.api, ctx.project_context, rel_path)
+    apply_story_update(ctx.api, ctx.project_context, rel_path, ctx)

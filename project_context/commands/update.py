@@ -6,6 +6,7 @@ from typing_extensions import Annotated
 
 from project_context.core.profile_mg import ProfileManager
 from project_context.core.project_context import ProjectContext
+from project_context.core.story_ops import apply_story_update
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
 from project_context.services.context_service import ContextService
@@ -50,7 +51,6 @@ def update_command(
             UI.info(
                 "Modo historia activo detectado en el proyecto. Reconstruyendo prompt del chat..."
             )
-            from project_context.core.story_ops import apply_story_update
 
             apply_story_update(api, projectcontext, story_anchor_rel)
         else:

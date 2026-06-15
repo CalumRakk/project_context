@@ -1,8 +1,9 @@
 import logging
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+from project_context.commands.interactive.register import SessionContext
 from project_context.core.project_context import ProjectContext
 from project_context.services.api_drive import ChunkFactory, GoogleDriveManager
 from project_context.utils import (
@@ -167,12 +168,12 @@ def apply_story_update(
     api: GoogleDriveManager,
     project_context: ProjectContext,
     story_anchor_rel: str,
+    ctx: Optional[SessionContext] = None,  # TODO: solucion magica a mejorar.
 ):
     """
     Actualiza el contexto, analiza la historia ancla,
     sincroniza recursos visuales y actualiza el chat en Drive.
     """
-    from project_context.ops import create_or_update_chat
 
     anchor_file = project_context.project_path / story_anchor_rel
     UI.info(f"Analizando intención en el archivo ancla: [cyan]{story_anchor_rel}[/]")
@@ -219,7 +220,8 @@ def apply_story_update(
     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
 
     # Actualizamos el contexto maestro y el archivo del chat
-    create_or_update_chat(api, project_context)
+    assert ctx is not None
+    ctx.context_service.create_or_update_chat()
 
     state = project_context.load_state()
     chat_id = state.chat_id
