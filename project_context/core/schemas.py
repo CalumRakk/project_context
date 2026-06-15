@@ -90,7 +90,7 @@ class ChunkImage(BaseChunk):
 
 class InlineFile(BaseModel):
     mimeType: str
-    data: str
+    data: str  # base64
 
 
 class ChunkInlineFile(BaseChunk):

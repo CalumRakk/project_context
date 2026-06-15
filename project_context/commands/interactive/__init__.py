@@ -8,6 +8,7 @@ from project_context.commands.interactive.chat import (
 )
 from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.context import cmd_context
+from project_context.commands.interactive.inline import cmd_inline
 from project_context.commands.interactive.register import (
     CommandArgument,
     CommandOption,
@@ -150,4 +151,20 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         description="Configura de forma dinámica las inclusiones y exclusiones del código del proyecto.",
         require_chat=False,
     )
+
+    # --- COMANDO INLINE ---
+    registry.register(
+        names=["inline"],
+        handler=cmd_inline,
+        description="Inserta un texto o pregunta codificada en base64 (InlineFile) en la sesión del chat.",
+        require_chat=True,
+        arguments=[
+            CommandArgument(
+                "texto",
+                "El texto o pregunta que deseas incrustar como InlineFile.",
+                required=True,
+            )
+        ],
+    )
+
     return registry

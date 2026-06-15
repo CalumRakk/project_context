@@ -1,7 +1,9 @@
+import base64
 import io
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
@@ -16,9 +18,11 @@ from project_context.core.schemas import (
     ChunkDocument,
     ChunkedPrompt,
     ChunkImage,
+    ChunkInlineFile,
     ChunkText,
     ContextRemote,
     DriveDocument,
+    InlineFile,
     Role,
     RunSettings,
     SystemInstruction,
@@ -399,53 +403,21 @@ class GoogleDriveManager:
             status, done = downloader.next_chunk()
         return file_stream.getvalue()
 
-    # def _list_files_by_query(
-    #     self, query: str, fields: str = "files(id, name, mimeType)"
-    # ) -> list[dict]:
+    @staticmethod
+    def create_inline_file(
+        data_bytes: bytes, mime_type: str, role: Role = "user"
+    ) -> ChunkInlineFile:
+        """Construye un bloque ChunkInlineFile codificando el contenido en Base64."""
 
-    #     response = (
-    #         self.service.files().list(q=query, spaces="drive", fields=fields).execute()
-    #     )
-    #     return response.get("files", [])
+        encoded_data = base64.b64encode(data_bytes).decode("utf-8")
 
-    # def list_files(self, folder_id: str = "root") -> list[dict]:
-    #     items = []
-    #     page_token = None
-    #     try:
-    #         while True:
-    #             with self._lock:
-    #                 response = (
-    #                     self.service.files()
-    #                     .list(
-    #                         q=f"'{folder_id}' in parents and trashed = false",
-    #                         spaces="drive",
-    #                         fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
-    #                         pageToken=page_token,
-    #                     )
-    #                     .execute()
-    #                 )
-    #             items.extend(response.get("files", []))
-    #             page_token = response.get("nextPageToken")
-    #             if not page_token:
-    #                 break
-    #         return items
-    #     except HttpError as error:
-    #         logger.error(
-    #             f"Error al listar archivos en la carpeta '{folder_id}': {error}"
-    #         )
-    #         return []
+        # Formato ISO 8601 estandarizado compatible con milisegundos y terminación Z
+        create_time = (
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        )
 
-    # def find_files_by_query(
-    #     self, query: str, fields: str = "files(id, name, mimeType)"
-    # ) -> list[dict]:
-    #     return self._list_files_by_query(query, fields)
-
-    # def upload_binary_to_drive(
-    #     self, folder_id: str, file_name: str, content: bytes, mime_type: str
-    # ) -> Optional[dict]:
-    #     file_metadata = {
-    #         "name": file_name,
-    #         "parents": [folder_id],
-    #         "mimeType": mime_type,
-    #     }
-    #     return self._upload_bytes(content, mime_type, metadata=file_metadata)
+        return ChunkInlineFile(
+            role=role,
+            inlineFile=InlineFile(mimeType=mime_type, data=encoded_data),
+            createTime=create_time,
+        )
