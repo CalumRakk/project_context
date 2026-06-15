@@ -1,6 +1,6 @@
 import time
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -216,6 +216,7 @@ class ContextConfig(BaseModel):
     files: List[str] = Field(default_factory=list)
     folders: List[str] = Field(default_factory=lambda: ["."])
     exclusions: List[str] = Field(default_factory=list)
+    external_folders: Dict[str, str] = Field(default_factory=dict)
 
 
 class ProfileConfig(BaseModel):

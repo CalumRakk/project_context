@@ -147,12 +147,66 @@ class ProjectContext:
         except Exception as e:
             UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
 
+    def validate_external_folder(self, alias: str, target_path: Path) -> None:
+        """
+        Valida que una ruta externa cumpla con las reglas de negocio antes de registrarse:
+        1. No puede estar dentro de la estructura local del proyecto.
+        2. El alias no colisiona con archivos/carpetas en la raíz del proyecto.
+        3. El alias no colisiona con otros alias ya registrados.
+        4. No puede solaparse ni anidarse con otras rutas externas ya registradas.
+        """
+        config = self.load_context_config()
+        abs_target = target_path.resolve()
+        abs_project = self.project_path.resolve()
+
+        # Regla 1: No puede estar dentro de la estructura local del proyecto
+        if abs_target == abs_project or abs_project in abs_target.parents:
+            raise ValueError(
+                "La ruta especificada ya se encuentra dentro de tu proyecto local.\n"
+                "Por favor, utiliza 'context add' para enfocar carpetas o archivos locales."
+            )
+
+        # Regla 2: El alias no colisiona con archivos/carpetas en la raíz local
+        local_root_items = {
+            item.name.lower()
+            for item in self.project_path.iterdir()
+            if item.name != ".project_context"
+        }
+        if alias.lower() in local_root_items:
+            raise ValueError(
+                f"El alias '{alias}' colisiona con un archivo o carpeta existente en la raíz local de tu proyecto.\n"
+                "Elige un nombre alternativo para este paquete externo."
+            )
+
+        # Regla 2b: Colisión con alias ya registrados
+        external_folders = getattr(config, "external_folders", {})
+        if alias in external_folders:
+            raise ValueError(
+                f"El alias '{alias}' ya está registrado en tus paquetes externos."
+            )
+
+        # Regla 3: No puede solaparse ni anidarse con otras rutas externas
+        for ext_alias, ext_path_str in external_folders.items():
+            abs_ext = Path(ext_path_str).resolve()
+            if abs_target == abs_ext:
+                raise ValueError(
+                    f"Esta ruta ya está registrada como un paquete externo bajo el alias '{ext_alias}'."
+                )
+            if abs_ext in abs_target.parents:
+                raise ValueError(
+                    f"La ruta se solapa por estar contenida dentro del paquete externo '{ext_alias}' ({ext_path_str})."
+                )
+            if abs_target in abs_ext.parents:
+                raise ValueError(
+                    f"La ruta se solapa al contener el paquete externo ya registrado '{ext_alias}' ({ext_path_str})."
+                )
+
     def generate_context(self) -> Context:
         """
         Genera el prompt de contexto unificado.
 
-        "El contexto siempre es el resultado de procesar una lista de elementos incluidos,
-        aplicando sobre ellos la lista de exclusiones."
+        El contexto incluye la estructura e ingesta tanto de focos locales (archivos/carpetas)
+        como de paquetes externos mapeados bajo alias virtuales en la raíz.
         """
         config = self.load_context_config()
 
@@ -162,75 +216,109 @@ class ProjectContext:
         gitignore_ignores = get_ignore_patterns(self.project_path, ".gitignore")
         all_ignores = set(custom_ignores + gitignore_ignores)
 
+        final_tree = ""
+        final_content = ""
+        total_tokens = 0
+
         # Caso 1: Enfoque Global (Análisis del proyecto completo)
         if config.folders == ["."]:
             summary, tree, content = gitingest.ingest(
                 self.project_path.as_posix(), exclude_patterns=all_ignores
             )
             estimated_tokens = human_to_int(summary.split()[-1])
-            text = tree + "\n\n" + content
-            return Context(text=text, token_count=estimated_tokens)
+            final_tree = "Directory structure (Local Project):\n" + tree + "\n"
+            final_content = content + "\n"
+            total_tokens += estimated_tokens
+        else:
+            # Caso 2: Enfoque Específico (Archivos y subcarpetas enfocados)
+            final_tree = "Directory structure (Focus):\n"
 
-        # Caso 2: Enfoque Específico (Archivos y subcarpetas enfocados)
-        final_tree = "Directory structure (Focus):\n"
-        final_content = ""
-        total_tokens = 0
+            # Procesamiento de archivos específicos
+            files = config.files
+            if files:
+                final_tree += "└── [Archivos Específicos Añadidos]\n"
+                for idx, f_path in enumerate(files):
+                    real_path = self.project_path / f_path
 
-        # Procesamiento de archivos específicos
-        files = config.files
-        if files:
-            final_tree += "└── [Archivos Específicos Añadidos]\n"
-            for idx, f_path in enumerate(files):
-                real_path = self.project_path / f_path
+                    # Omitir si coincide con alguna regla de exclusión
+                    from fnmatch import fnmatch
 
-                # Omitir si coincide con alguna regla de exclusión
-                from fnmatch import fnmatch
+                    if any(
+                        fnmatch(str(f_path), pattern)
+                        or fnmatch(real_path.name, pattern)
+                        for pattern in all_ignores
+                    ):
+                        continue
 
-                if any(
-                    fnmatch(str(f_path), pattern) or fnmatch(real_path.name, pattern)
-                    for pattern in all_ignores
-                ):
-                    continue
+                    prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+                    final_tree += f"{prefix}{f_path}\n"
 
-                prefix = "    └── " if idx == len(files) - 1 else "    ├── "
-                final_tree += f"{prefix}{f_path}\n"
+                    if real_path.exists() and real_path.is_file():
+                        try:
+                            text = real_path.read_text(encoding="utf-8")
+                            final_content += (
+                                f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n{text}\n\n"
+                            )
+                            total_tokens += len(text) // 4
+                        except Exception as e:
+                            final_content += f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n[Error leyendo archivo: {e}]\n\n"
 
-                if real_path.exists() and real_path.is_file():
-                    try:
-                        text = real_path.read_text(encoding="utf-8")
-                        final_content += (
-                            f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n{text}\n\n"
+            # Procesamiento de carpetas específicas
+            folders = config.folders
+            if folders:
+                final_tree += "└── [Carpetas Específicas Añadidas]\n"
+                for folder in folders:
+                    real_folder = self.project_path / folder
+                    if real_folder.exists() and real_folder.is_dir():
+                        summary, tree, content = gitingest.ingest(
+                            str(real_folder), exclude_patterns=all_ignores
                         )
-                        total_tokens += len(text) // 4
-                    except Exception as e:
-                        final_content += f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n[Error leyendo archivo: {e}]\n\n"
 
-        # Procesamiento de carpetas específicas
-        folders = config.folders
-        if folders:
-            final_tree += "└── [Carpetas Específicas Añadidas]\n"
-            for folder in folders:
-                real_folder = self.project_path / folder
+                        indented_tree = "\n".join(
+                            f"    {line}" for line in tree.splitlines()
+                        )
+                        final_tree += f"{indented_tree}\n"
+
+                        # Post-procesado para asegurar que los marcadores de ruta de archivo
+                        # sigan siendo relativos a la raíz del repositorio.
+                        pattern = r"================================================\s*FILE:\s*([^\n]+)\s*================================================"
+
+                        def replace_path(match):
+                            rel_file_path = match.group(1)
+                            full_rel_path = (Path(folder) / rel_file_path).as_posix()
+                            return f"================================================\nFILE: {full_rel_path}\n================================================"
+
+                        fixed_content = re.sub(pattern, replace_path, content)
+                        final_content += f"{fixed_content}\n"
+                        total_tokens += human_to_int(summary.split()[-1])
+
+        # Procesamiento de paquetes externos mapeados
+        external_folders = getattr(config, "external_folders", {})
+        if external_folders:
+            final_tree += "└── [Paquetes Externos Mapeados]\n"
+            for alias, ext_path_str in external_folders.items():
+                real_folder = Path(ext_path_str)
                 if real_folder.exists() and real_folder.is_dir():
                     summary, tree, content = gitingest.ingest(
                         str(real_folder), exclude_patterns=all_ignores
                     )
 
+                    # Estructura del árbol virtual del paquete externo
+                    final_tree += f"    └── {alias}/ (Mapeado de {ext_path_str})\n"
                     indented_tree = "\n".join(
-                        f"    {line}" for line in tree.splitlines()
+                        f"        {line}" for line in tree.splitlines()
                     )
                     final_tree += f"{indented_tree}\n"
 
-                    # Post-procesado para asegurar que los marcadores de ruta de archivo
-                    # devueltos por Gitingest sigan siendo relativos a la raíz del repositorio.
+                    # Reescribimos el encabezado para mapearlo como si viviera en el nivel de raíz virtual
                     pattern = r"================================================\s*FILE:\s*([^\n]+)\s*================================================"
 
-                    def replace_path(match):
+                    def replace_path_ext(match):
                         rel_file_path = match.group(1)
-                        full_rel_path = (Path(folder) / rel_file_path).as_posix()
+                        full_rel_path = (Path(alias) / rel_file_path).as_posix()
                         return f"================================================\nFILE: {full_rel_path}\n================================================"
 
-                    fixed_content = re.sub(pattern, replace_path, content)
+                    fixed_content = re.sub(pattern, replace_path_ext, content)
                     final_content += f"{fixed_content}\n"
                     total_tokens += human_to_int(summary.split()[-1])
 

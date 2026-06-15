@@ -52,16 +52,24 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             header_style="bold magenta",
             box=None,
         )
-        table.add_column("Categoría", style="bold green", width=22)
-        table.add_column("Ruta / Patrón", style="white")
+        table.add_column("Categoría", style="bold green", width=25)
+        table.add_column("Ruta / Patrón / Destino", style="white")
 
         if config.folders == ["."]:
-            table.add_row("Inclusión Global", "[dim cyan]. (Proyecto Completo)[/]")
+            table.add_row(
+                "Inclusión Local Global", "[dim cyan]. (Proyecto Completo)[/]"
+            )
         else:
             for folder in config.folders:
-                table.add_row("Carpeta Enfocada", folder)
+                table.add_row("Carpeta Enfocada (Local)", folder)
             for file in config.files:
-                table.add_row("Archivo Enfocado", file)
+                table.add_row("Archivo Enfocado (Local)", file)
+
+        # Listar paquetes externos mapeados
+        external_folders = getattr(config, "external_folders", {})
+        if external_folders:
+            for alias, ext_path in external_folders.items():
+                table.add_row(f"Paquete Externo ({alias})", ext_path)
 
         if not config.exclusions:
             table.add_row("Exclusiones", "[dim]Ninguna (solo aplica .gitignore)[/]")
@@ -121,35 +129,52 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
     elif action == "remove":
         target_raw = args.get_arg(1)
         if not target_raw:
-            UI.error("Uso: context remove <ruta>")
-            return
-
-        rel_str = _get_relative_path(target_raw, project_path)
-        if not rel_str:
+            UI.error("Uso: context remove <ruta_local_o_alias_externo_o_exclusion>")
             return
 
         removed = False
-        if rel_str in config.folders:
-            config.folders.remove(rel_str)
+        external_folders = getattr(config, "external_folders", {})
+
+        # 1. Comprobar si coincide con el alias de un paquete externo
+        if target_raw in external_folders:
+            del external_folders[target_raw]
             removed = True
-            UI.success(f"Carpeta '{rel_str}' removida.")
-        elif rel_str in config.files:
-            config.files.remove(rel_str)
+            UI.success(f"Paquete externo con alias '{target_raw}' removido.")
+        # 2. Comprobar si coincide con un patrón de exclusión
+        elif target_raw in config.exclusions:
+            config.exclusions.remove(target_raw)
             removed = True
-            UI.success(f"Archivo '{rel_str}' removido.")
+            UI.success(f"Patrón de exclusión '{target_raw}' removido.")
+        # 3. Comprobar si coincide con un elemento del foco local
+        else:
+            rel_str = _get_relative_path(target_raw, project_path)
+            if rel_str:
+                if rel_str in config.folders:
+                    config.folders.remove(rel_str)
+                    removed = True
+                    UI.success(f"Carpeta local '{rel_str}' removida.")
+                elif rel_str in config.files:
+                    config.files.remove(rel_str)
+                    removed = True
+                    UI.success(f"Archivo local '{rel_str}' removido.")
 
         if not removed:
-            UI.warn(f"La ruta '{rel_str}' no se encuentra registrada como inclusión.")
+            UI.warn(
+                f"No se encontró ningún elemento local, paquete externo o exclusión que coincida con '{target_raw}'."
+            )
             return
 
-        # Aplicar Regla de Transición: restablecer '.' si queda vacío
+        # Aplicar Regla de Transición: restablecer '.' en focos locales si queda vacío
         if not config.folders and not config.files:
             config.folders = ["."]
             UI.info(
-                "No quedan inclusiones activas. Reestablecido al proyecto completo (raíz '.')."
+                "No quedan inclusiones locales activas. Reestablecido al proyecto completo (raíz '.')."
             )
 
         project_context.save_context_config(config)
+        UI.info(
+            "Escribe [bold yellow]update[/] para sincronizar los cambios en Google Drive."
+        )
 
     elif action == "exclude":
         pattern = args.get_arg(1)
@@ -161,28 +186,71 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             config.exclusions.append(pattern)
             UI.success(f"Patrón de exclusión '{pattern}' añadido.")
             project_context.save_context_config(config)
+            UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
         else:
             UI.info(f"El patrón '{pattern}' ya se encuentra excluido.")
 
-    elif action == "include":
+    elif action == "unexclude":
         pattern = args.get_arg(1)
         if not pattern:
-            UI.error("Uso: context include <patrón_glob>")
+            UI.error("Uso: context unexclude <patrón_glob>")
             return
 
         if pattern in config.exclusions:
             config.exclusions.remove(pattern)
             UI.success(f"Patrón de exclusión '{pattern}' removido.")
             project_context.save_context_config(config)
+            UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
         else:
             UI.warn(
                 f"El patrón '{pattern}' no se encuentra registrado en las exclusiones."
             )
 
-    elif action == "clear":
-        config = ContextConfig(folders=["."], files=[], exclusions=[])
+    elif action == "include":
+        alias = args.get_arg(1)
+        target_raw = args.get_arg(2)
+
+        if not alias or not target_raw:
+            UI.error("Uso: context include <alias> <ruta_carpeta_externa>")
+            return
+
+        # Resolver la ruta absoluta física de la carpeta externa
+        target_path = Path(target_raw)
+        if not target_path.is_absolute():
+            target_path = (Path.cwd() / target_path).resolve()
+
+        if not target_path.exists() or not target_path.is_dir():
+            UI.error(f"La ruta '{target_raw}' no existe o no es un directorio válido.")
+            return
+
+        try:
+            # Ejecutar el conjunto de validaciones lógicas
+            project_context.validate_external_folder(alias, target_path)
+        except ValueError as e:
+            UI.error(str(e))
+            return
+
+        # Registrar el paquete externo en el diccionario
+        if not hasattr(config, "external_folders"):
+            config.external_folders = {}
+        config.external_folders[alias] = target_path.as_posix()
+
         project_context.save_context_config(config)
-        UI.success("Configuración de contexto restablecida por completo (raíz '.').")
+        UI.success(
+            f"Paquete externo '{alias}' mapeado con éxito desde '{target_path.as_posix()}'."
+        )
+        UI.info(
+            "Escribe [bold yellow]update[/] para sincronizar este paquete externo con Google Drive."
+        )
+
+    elif action == "clear":
+        config = ContextConfig(
+            folders=["."], files=[], exclusions=[], external_folders={}
+        )
+        project_context.save_context_config(config)
+        UI.success(
+            "Configuración de contexto restablecida por completo (raíz local '.' y sin paquetes externos)."
+        )
 
     elif action == "tree":
         context_data = project_context.generate_context()
@@ -192,12 +260,13 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
         tree_structure = parts[0].strip()
 
         UI.print(
-            "\n[dim cyan]Estructura jerárquica activa del contexto:[/]", indent=False
+            "\n[dim cyan]Estructura jerárquica activa del contexto (incluyendo externos):[/]",
+            indent=False,
         )
         print(tree_structure)
         UI.print("", indent=False)
 
     else:
         UI.error(
-            f"Acción '{action}' no reconocida. Opciones válidas: add, remove, exclude, include, clear, status, tree"
+            f"Acción '{action}' no reconocida. Opciones válidas: add, remove, exclude, unexclude, include, clear, status, tree"
         )
