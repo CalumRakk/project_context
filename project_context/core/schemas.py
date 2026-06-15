@@ -180,10 +180,6 @@ class RunSettings(BaseModel):
     googleSearch: Optional[dict] = None
 
     def sanitize(self):
-        """
-        Sanea la configuración actual basándose en el modelo seleccionado.
-        Evita que parámetros avanzados queden como 'ruido' al cambiar a modelos más simples.
-        """
         model_lower = self.model.lower()
         supports_thinking = "pro" in model_lower or "thinking" in model_lower
 
@@ -212,13 +208,13 @@ class ChatIAStudio(BaseModel):
     def reset_context_document_tokencount(self):
         for chunk in self.chunkedPrompt.chunks:
             if isinstance(chunk, ChunkDocument):
-                chunk.tokenCount = None  # type: ignore - Fuerza el recuento de tokens
+                chunk.tokenCount = None
                 break
 
 
-class LocalContextItems(BaseModel):
+class ContextConfig(BaseModel):
     files: List[str] = Field(default_factory=list)
-    folders: List[str] = Field(default_factory=list)
+    folders: List[str] = Field(default_factory=lambda: ["."])
     exclusions: List[str] = Field(default_factory=list)
 
 
@@ -262,8 +258,6 @@ class ProjectState(BaseModel):
     # No almacenar el md5sum. La api de drive ya ofrece el md5sum del file_id.
     # Cuando se genera un contexto, se calcula el md5sum del texto.
     # asi que tenemos dos fuentes de verdad. Almacenarlo, implica mantener un valor propenso a no actualizarse.
-
-    context_items: LocalContextItems = Field(default_factory=LocalContextItems)
 
     last_modified: float = Field(default_factory=time.time)
 

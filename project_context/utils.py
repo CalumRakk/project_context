@@ -7,12 +7,10 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
-import gitingest
 import pathspec
 from rich.console import Console
 from rich.theme import Theme
 
-from project_context.core.schemas import LocalContextItems
 from project_context.ui import UI
 
 logger = logging.getLogger(__name__)
@@ -202,71 +200,71 @@ def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] 
         UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
 
 
-def generate_context(
-    project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
-) -> tuple[str, int]:
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+# def generate_context(
+#     project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
+# ) -> tuple[str, int]:
+#     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    if not context_items or (not context_items.files and not context_items.folders):
-        custom_ignores = get_ignore_patterns(project_path, ".contextignore")
-        summary, tree, content = gitingest.ingest(
-            str(project_path), exclude_patterns=set(custom_ignores)
-        )
-        estimated_tokens = human_to_int(summary.split()[-1])
-        return tree + "\n\n" + content, estimated_tokens
+#     if not context_items or (not context_items.files and not context_items.folders):
+#         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+#         summary, tree, content = gitingest.ingest(
+#             str(project_path), exclude_patterns=set(custom_ignores)
+#         )
+#         estimated_tokens = human_to_int(summary.split()[-1])
+#         return tree + "\n\n" + content, estimated_tokens
 
-    custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+#     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
 
-    final_tree = "Directory structure (Custom Focus):\n"
-    final_content = ""
-    total_tokens = 0
+#     final_tree = "Directory structure (Custom Focus):\n"
+#     final_content = ""
+#     total_tokens = 0
 
-    files = context_items.files
-    if files:
-        final_tree += "└── [Archivos Específicos Añadidos]\n"
-        for idx, f_path in enumerate(files):
-            real_path = project_path / f_path
-            prefix = "    └── " if idx == len(files) - 1 else "    ├── "
-            final_tree += f"{prefix}{f_path}\n"
+#     files = context_items.files
+#     if files:
+#         final_tree += "└── [Archivos Específicos Añadidos]\n"
+#         for idx, f_path in enumerate(files):
+#             real_path = project_path / f_path
+#             prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+#             final_tree += f"{prefix}{f_path}\n"
 
-            if real_path.exists() and real_path.is_file():
-                try:
-                    text = real_path.read_text(encoding="utf-8")
-                    final_content += f"================================================\nFILE: {f_path}\n================================================\n{text}\n\n"
-                    total_tokens += len(text) // 4
-                except Exception as e:
-                    final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
+#             if real_path.exists() and real_path.is_file():
+#                 try:
+#                     text = real_path.read_text(encoding="utf-8")
+#                     final_content += f"================================================\nFILE: {f_path}\n================================================\n{text}\n\n"
+#                     total_tokens += len(text) // 4
+#                 except Exception as e:
+#                     final_content += f"================================================\nFILE: {f_path}\n================================================\n[Error leyendo archivo: {e}]\n\n"
 
-    folders = context_items.folders
-    exclusions = context_items.exclusions
-    if folders:
-        final_tree += "└── [Carpetas Específicas Añadidas]\n"
-        for folder in folders:
-            real_folder = project_path / folder
-            if real_folder.exists() and real_folder.is_dir():
-                folder_path_obj = Path(folder)
-                folder_specific_ignores = list(custom_ignores)
+#     folders = context_items.folders
+#     exclusions = context_items.exclusions
+#     if folders:
+#         final_tree += "└── [Carpetas Específicas Añadidas]\n"
+#         for folder in folders:
+#             real_folder = project_path / folder
+#             if real_folder.exists() and real_folder.is_dir():
+#                 folder_path_obj = Path(folder)
+#                 folder_specific_ignores = list(custom_ignores)
 
-                for exc in exclusions:
-                    exc_path = Path(exc)
-                    try:
-                        rel_exc = exc_path.relative_to(folder_path_obj)
-                        folder_specific_ignores.append(str(rel_exc.as_posix()))
-                    except ValueError:
-                        pass
+#                 for exc in exclusions:
+#                     exc_path = Path(exc)
+#                     try:
+#                         rel_exc = exc_path.relative_to(folder_path_obj)
+#                         folder_specific_ignores.append(str(rel_exc.as_posix()))
+#                     except ValueError:
+#                         pass
 
-                summary, tree, content = gitingest.ingest(
-                    str(real_folder), exclude_patterns=set(folder_specific_ignores)
-                )
+#                 summary, tree, content = gitingest.ingest(
+#                     str(real_folder), exclude_patterns=set(folder_specific_ignores)
+#                 )
 
-                indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
-                final_tree += f"{indented_tree}\n"
+#                 indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
+#                 final_tree += f"{indented_tree}\n"
 
-                final_content += f"{content}\n"
-                total_tokens += human_to_int(summary.split()[-1])
+#                 final_content += f"{content}\n"
+#                 total_tokens += human_to_int(summary.split()[-1])
 
-    full_context = final_tree + "\n" + final_content
-    return full_context, total_tokens
+#     full_context = final_tree + "\n" + final_content
+#     return full_context, total_tokens
 
 
 def has_files_modified_since(
@@ -395,53 +393,53 @@ def extract_image_references(file_path: Path) -> List[Tuple[str, bool]]:
     return extract_image_references_from_text(file_path.read_text(encoding="utf-8"))
 
 
-def get_context_tree(
-    project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
-) -> str:
-    project_path = Path(project_path) if isinstance(project_path, str) else project_path
+# def get_context_tree(
+#     project_path: Union[str, Path], context_items: Optional[LocalContextItems] = None
+# ) -> str:
+#     project_path = Path(project_path) if isinstance(project_path, str) else project_path
 
-    if not context_items or (not context_items.files and not context_items.folders):
-        custom_ignores = get_ignore_patterns(project_path, ".contextignore")
-        summary, tree, content = gitingest.ingest(
-            str(project_path), exclude_patterns=set(custom_ignores)
-        )
-        return tree
+#     if not context_items or (not context_items.files and not context_items.folders):
+#         custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+#         summary, tree, content = gitingest.ingest(
+#             str(project_path), exclude_patterns=set(custom_ignores)
+#         )
+#         return tree
 
-    custom_ignores = get_ignore_patterns(project_path, ".contextignore")
-    final_tree = "Directory structure (Custom Focus):\n"
+#     custom_ignores = get_ignore_patterns(project_path, ".contextignore")
+#     final_tree = "Directory structure (Custom Focus):\n"
 
-    files = context_items.files
-    if files:
-        final_tree += "└── [Archivos Específicos Añadidos]\n"
-        for idx, f_path in enumerate(files):
-            prefix = "    └── " if idx == len(files) - 1 else "    ├── "
-            final_tree += f"{prefix}{f_path}\n"
+#     files = context_items.files
+#     if files:
+#         final_tree += "└── [Archivos Específicos Añadidos]\n"
+#         for idx, f_path in enumerate(files):
+#             prefix = "    └── " if idx == len(files) - 1 else "    ├── "
+#             final_tree += f"{prefix}{f_path}\n"
 
-    folders = context_items.folders
-    exclusions = context_items.exclusions
-    if folders:
-        final_tree += "└── [Carpetas Específicas Añadidas]\n"
-        for folder in folders:
-            real_folder = project_path / folder
-            if real_folder.exists() and real_folder.is_dir():
-                folder_path_obj = Path(folder)
-                folder_specific_ignores = list(custom_ignores)
+#     folders = context_items.folders
+#     exclusions = context_items.exclusions
+#     if folders:
+#         final_tree += "└── [Carpetas Específicas Añadidas]\n"
+#         for folder in folders:
+#             real_folder = project_path / folder
+#             if real_folder.exists() and real_folder.is_dir():
+#                 folder_path_obj = Path(folder)
+#                 folder_specific_ignores = list(custom_ignores)
 
-                for exc in exclusions:
-                    exc_path = Path(exc)
-                    try:
-                        rel_exc = exc_path.relative_to(folder_path_obj)
-                        folder_specific_ignores.append(str(rel_exc.as_posix()))
-                    except ValueError:
-                        pass
+#                 for exc in exclusions:
+#                     exc_path = Path(exc)
+#                     try:
+#                         rel_exc = exc_path.relative_to(folder_path_obj)
+#                         folder_specific_ignores.append(str(rel_exc.as_posix()))
+#                     except ValueError:
+#                         pass
 
-                summary, tree, content = gitingest.ingest(
-                    str(real_folder), exclude_patterns=set(folder_specific_ignores)
-                )
-                indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
-                final_tree += f"{indented_tree}\n"
+#                 summary, tree, content = gitingest.ingest(
+#                     str(real_folder), exclude_patterns=set(folder_specific_ignores)
+#                 )
+#                 indented_tree = "\n".join(f"    {line}" for line in tree.splitlines())
+#                 final_tree += f"{indented_tree}\n"
 
-    return final_tree
+#     return final_tree
 
 
 def validate_google_secrets_file(path: Path) -> bool:

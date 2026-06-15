@@ -2,7 +2,6 @@ from rich.table import Table
 
 from project_context.commands.interactive.register import ParsedArgs, SessionContext
 from project_context.ui import UI, console
-from project_context.utils import get_context_tree
 
 
 def cmd_clear(ctx: SessionContext, args: ParsedArgs):
@@ -31,17 +30,6 @@ def cmd_update(ctx: SessionContext, args: ParsedArgs):
         apply_story_update(ctx.api, ctx.project_context, story_anchor_rel)
     else:
         ctx.context_service.create_or_update_chat()
-
-    state = ctx.project_context.load_state()
-    has_focus = bool(state.context_items.files or state.context_items.folders)
-
-    # Comprobación limpia usando el flag analizado
-    if args.has_flag("--tree") or has_focus:
-        UI.info("Árbol de archivos enviado:")
-        tree_str = get_context_tree(
-            ctx.project_context.project_path, state.context_items
-        )
-        print(f"\n[dim cyan]{tree_str}[/]\n")
 
 
 def cmd_save(ctx: SessionContext, args: ParsedArgs):

@@ -51,7 +51,6 @@ def create_interactive_completer(
             elif arg.completer_type == "profile":
                 positional_completer = profile_completer
             elif arg.completer_type == "snapshot":
-                # Recupera de forma preventiva los identificadores de snapshots existentes
                 try:
                     from project_context.core.database import DatabaseSession, Snapshot
 
@@ -72,15 +71,27 @@ def create_interactive_completer(
 
         if positional_completer:
             if not cmd_branch:
-                # Si el comando solo recibe un argumento libre, el completador toma el nodo principal
                 nested_dict[primary_name] = positional_completer
             else:
-                # Si acepta opciones y argumentos dinámicos, el completador fluye en cascada
                 for key in list(cmd_branch.keys()):
                     cmd_branch[key] = positional_completer
                 nested_dict[primary_name] = cmd_branch
         else:
             nested_dict[primary_name] = cmd_branch if cmd_branch else None
+
+    # --- AMPLIACIÓN DE AUTOCOMPLETADO ANIDADO PARA CONTEXTO ---
+    context_completions = {
+        "add": project_path_completer,
+        "remove": project_path_completer,
+        "exclude": None,
+        "include": None,
+        "list": None,
+        "status": None,
+        "tree": None,
+        "clear": None,
+    }
+    nested_dict["context"] = context_completions
+    nested_dict["ctx"] = context_completions
 
     return NestedCompleter.from_nested_dict(nested_dict)
 

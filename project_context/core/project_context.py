@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Self
 
@@ -8,12 +9,12 @@ import gitingest
 import typer
 from filelock import FileLock, Timeout
 
-from project_context.core.schemas import Context, ProjectState
+from project_context.core.schemas import Context, ContextConfig, ProjectState
 from project_context.ui import UI
 from project_context.utils import compute_md5, human_to_int
 
 if TYPE_CHECKING:
-    from project_context.core.schemas import ProjectState
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,34 @@ class ProjectContext:
     @property
     def exists_folder_project(self) -> bool:
         return self.local_dir.exists()
+
+    @property
+    def context_config_path(self) -> Path:
+        return self.local_dir / "context.json"
+
+    def load_context_config(self) -> ContextConfig:
+        """Carga de manera robusta la configuración unificada de contexto del proyecto."""
+        if not self.context_config_path.exists():
+            config = ContextConfig(folders=["."])
+            self.save_context_config(config)
+            return config
+        try:
+            data = json.loads(self.context_config_path.read_text(encoding="utf-8"))
+            return ContextConfig(**data)
+        except Exception as e:
+            logger.debug(
+                f"Error cargando context.json, usando valores por defecto: {e}"
+            )
+            config = ContextConfig(folders=["."])
+            self.save_context_config(config)
+            return config
+
+    def save_context_config(self, config: ContextConfig):
+        """Persiste la configuración unificada de contexto en disco."""
+        self.context_config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.context_config_path.write_text(
+            config.model_dump_json(indent=2), encoding="utf-8"
+        )
 
     def _build_folders(self):
         confirm = typer.confirm(
@@ -79,16 +108,14 @@ class ProjectContext:
             except Exception as e:
                 logger.debug(f"Error liberando el archivo de bloqueo: {e}")
 
-    def load_state(self) -> "ProjectState":
-        """Carga y valida el archivo state.json convirtiéndolo en un modelo Pydantic."""
-
+    def load_state(self) -> ProjectState:
+        """Carga y valida el archivo state_<hash>.json del perfil activo."""
         if not self.state_path.exists():
             return ProjectState(state_path=self.state_path)
 
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
             return ProjectState(**data, state_path=self.state_path)
-
         except json.JSONDecodeError:
             return ProjectState(state_path=self.state_path)
 
@@ -121,28 +148,50 @@ class ProjectContext:
             UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
 
     def generate_context(self) -> Context:
-        state = self.load_state()
+        """
+        Genera el prompt de contexto unificado.
 
-        has_context_exclusion = bool(
-            state.context_items.files or state.context_items.folders
-        )
+        "El contexto siempre es el resultado de procesar una lista de elementos incluidos,
+        aplicando sobre ellos la lista de exclusiones."
+        """
+        config = self.load_context_config()
 
-        if not has_context_exclusion:
-            summary, tree, content = gitingest.ingest(self.project_path.as_posix())
+        from project_context.utils import get_ignore_patterns
+
+        custom_ignores = list(config.exclusions)
+        gitignore_ignores = get_ignore_patterns(self.project_path, ".gitignore")
+        all_ignores = set(custom_ignores + gitignore_ignores)
+
+        # Caso 1: Enfoque Global (Análisis del proyecto completo)
+        if config.folders == ["."]:
+            summary, tree, content = gitingest.ingest(
+                self.project_path.as_posix(), exclude_patterns=all_ignores
+            )
             estimated_tokens = human_to_int(summary.split()[-1])
-
             text = tree + "\n\n" + content
             return Context(text=text, token_count=estimated_tokens)
 
-        final_tree = "Directory structure (Custom Focus):\n"
+        # Caso 2: Enfoque Específico (Archivos y subcarpetas enfocados)
+        final_tree = "Directory structure (Focus):\n"
         final_content = ""
         total_tokens = 0
 
-        files = state.context_items.files
+        # Procesamiento de archivos específicos
+        files = config.files
         if files:
             final_tree += "└── [Archivos Específicos Añadidos]\n"
             for idx, f_path in enumerate(files):
                 real_path = self.project_path / f_path
+
+                # Omitir si coincide con alguna regla de exclusión
+                from fnmatch import fnmatch
+
+                if any(
+                    fnmatch(str(f_path), pattern) or fnmatch(real_path.name, pattern)
+                    for pattern in all_ignores
+                ):
+                    continue
+
                 prefix = "    └── " if idx == len(files) - 1 else "    ├── "
                 final_tree += f"{prefix}{f_path}\n"
 
@@ -156,20 +205,33 @@ class ProjectContext:
                     except Exception as e:
                         final_content += f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n[Error leyendo archivo: {e}]\n\n"
 
-        folders = state.context_items.folders
+        # Procesamiento de carpetas específicas
+        folders = config.folders
         if folders:
             final_tree += "└── [Carpetas Específicas Añadidas]\n"
             for folder in folders:
                 real_folder = self.project_path / folder
                 if real_folder.exists() and real_folder.is_dir():
-                    summary, tree, content = gitingest.ingest(str(real_folder))
+                    summary, tree, content = gitingest.ingest(
+                        str(real_folder), exclude_patterns=all_ignores
+                    )
 
                     indented_tree = "\n".join(
                         f"    {line}" for line in tree.splitlines()
                     )
                     final_tree += f"{indented_tree}\n"
 
-                    final_content += f"{content}\n"
+                    # Post-procesado para asegurar que los marcadores de ruta de archivo
+                    # devueltos por Gitingest sigan siendo relativos a la raíz del repositorio.
+                    pattern = r"================================================\s*FILE:\s*([^\n]+)\s*================================================"
+
+                    def replace_path(match):
+                        rel_file_path = match.group(1)
+                        full_rel_path = (Path(folder) / rel_file_path).as_posix()
+                        return f"================================================\nFILE: {full_rel_path}\n================================================"
+
+                    fixed_content = re.sub(pattern, replace_path, content)
+                    final_content += f"{fixed_content}\n"
                     total_tokens += human_to_int(summary.split()[-1])
 
         full_context = final_tree + "\n" + final_content

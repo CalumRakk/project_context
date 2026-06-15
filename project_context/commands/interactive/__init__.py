@@ -7,6 +7,7 @@ from project_context.commands.interactive.chat import (
     cmd_update,
 )
 from project_context.commands.interactive.commit import cmd_commit
+from project_context.commands.interactive.context import cmd_context
 from project_context.commands.interactive.register import (
     CommandArgument,
     CommandOption,
@@ -141,4 +142,12 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         ],
     )
 
+    # --- COMANDOS DE CONTEXTO ---
+
+    registry.register(
+        names=["context", "ctx"],
+        handler=cmd_context,
+        description="Configura de forma dinámica las inclusiones y exclusiones del código del proyecto.",
+        require_chat=False,
+    )
     return registry
