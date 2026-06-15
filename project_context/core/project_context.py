@@ -1,11 +1,9 @@
 import json
 import logging
 import os
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Self
 
-import gitingest
 import typer
 from filelock import FileLock, Timeout
 
@@ -205,8 +203,8 @@ class ProjectContext:
         """
         Genera el prompt de contexto unificado.
 
-        El contexto incluye la estructura e ingesta tanto de focos locales (archivos/carpetas)
-        como de paquetes externos mapeados bajo alias virtuales en la raíz.
+        Delega la composición del proyecto local y paquetes externos mapeados
+        a la API virtual nativa de Gitingest.
         """
         config = self.load_context_config()
 
@@ -216,111 +214,68 @@ class ProjectContext:
         gitignore_ignores = get_ignore_patterns(self.project_path, ".gitignore")
         all_ignores = set(custom_ignores + gitignore_ignores)
 
-        final_tree = ""
-        final_content = ""
-        total_tokens = 0
+        import uuid
 
-        # Caso 1: Enfoque Global (Análisis del proyecto completo)
+        from gitingest.schemas.ingestion import IngestionQuery, VirtualTarget
+
+        targets = []
+
+        # Caso 1: Enfoque Global (Proyecto Completo)
         if config.folders == ["."]:
-            summary, tree, content = gitingest.ingest(
-                self.project_path.as_posix(), exclude_patterns=all_ignores
+            targets.append(
+                VirtualTarget(
+                    physical_path=self.project_path, virtual_alias=".", is_file=False
+                )
             )
-            estimated_tokens = human_to_int(summary.split()[-1])
-            final_tree = "Directory structure (Local Project):\n" + tree + "\n"
-            final_content = content + "\n"
-            total_tokens += estimated_tokens
         else:
-            # Caso 2: Enfoque Específico (Archivos y subcarpetas enfocados)
-            final_tree = "Directory structure (Focus):\n"
-
-            # Procesamiento de archivos específicos
-            files = config.files
-            if files:
-                final_tree += "└── [Archivos Específicos Añadidos]\n"
-                for idx, f_path in enumerate(files):
-                    real_path = self.project_path / f_path
-
-                    # Omitir si coincide con alguna regla de exclusión
-                    from fnmatch import fnmatch
-
-                    if any(
-                        fnmatch(str(f_path), pattern)
-                        or fnmatch(real_path.name, pattern)
-                        for pattern in all_ignores
-                    ):
-                        continue
-
-                    prefix = "    └── " if idx == len(files) - 1 else "    ├── "
-                    final_tree += f"{prefix}{f_path}\n"
-
-                    if real_path.exists() and real_path.is_file():
-                        try:
-                            text = real_path.read_text(encoding="utf-8")
-                            final_content += (
-                                f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n{text}\n\n"
-                            )
-                            total_tokens += len(text) // 4
-                        except Exception as e:
-                            final_content += f"{'=' * 48}\nFILE: {f_path}\n{'=' * 48}\n[Error leyendo archivo: {e}]\n\n"
-
-            # Procesamiento de carpetas específicas
-            folders = config.folders
-            if folders:
-                final_tree += "└── [Carpetas Específicas Añadidas]\n"
-                for folder in folders:
-                    real_folder = self.project_path / folder
-                    if real_folder.exists() and real_folder.is_dir():
-                        summary, tree, content = gitingest.ingest(
-                            str(real_folder), exclude_patterns=all_ignores
+            # Caso 2: Enfoque Específico
+            # Añadir archivos específicos al contexto raíz
+            for f_path in config.files:
+                real_path = self.project_path / f_path
+                if real_path.exists() and real_path.is_file():
+                    targets.append(
+                        VirtualTarget(
+                            physical_path=real_path, virtual_alias=".", is_file=True
                         )
+                    )
 
-                        indented_tree = "\n".join(
-                            f"    {line}" for line in tree.splitlines()
-                        )
-                        final_tree += f"{indented_tree}\n"
-
-                        # Post-procesado para asegurar que los marcadores de ruta de archivo
-                        # sigan siendo relativos a la raíz del repositorio.
-                        pattern = r"================================================\s*FILE:\s*([^\n]+)\s*================================================"
-
-                        def replace_path(match):
-                            rel_file_path = match.group(1)
-                            full_rel_path = (Path(folder) / rel_file_path).as_posix()
-                            return f"================================================\nFILE: {full_rel_path}\n================================================"
-
-                        fixed_content = re.sub(pattern, replace_path, content)
-                        final_content += f"{fixed_content}\n"
-                        total_tokens += human_to_int(summary.split()[-1])
-
-        # Procesamiento de paquetes externos mapeados
-        external_folders = getattr(config, "external_folders", {})
-        if external_folders:
-            final_tree += "└── [Paquetes Externos Mapeados]\n"
-            for alias, ext_path_str in external_folders.items():
-                real_folder = Path(ext_path_str)
+            # Añadir carpetas específicas mapeadas a la raíz
+            for folder in config.folders:
+                real_folder = self.project_path / folder
                 if real_folder.exists() and real_folder.is_dir():
-                    summary, tree, content = gitingest.ingest(
-                        str(real_folder), exclude_patterns=all_ignores
+                    targets.append(
+                        VirtualTarget(
+                            physical_path=real_folder, virtual_alias=".", is_file=False
+                        )
                     )
 
-                    # Estructura del árbol virtual del paquete externo
-                    final_tree += f"    └── {alias}/ (Mapeado de {ext_path_str})\n"
-                    indented_tree = "\n".join(
-                        f"        {line}" for line in tree.splitlines()
+        # Caso 3: Añadir paquetes externos mapeados con sus respectivos alias virtuales
+        external_folders = getattr(config, "external_folders", {})
+        for alias, ext_path_str in external_folders.items():
+            real_folder = Path(ext_path_str)
+            if real_folder.exists() and real_folder.is_dir():
+                targets.append(
+                    VirtualTarget(
+                        physical_path=real_folder, virtual_alias=alias, is_file=False
                     )
-                    final_tree += f"{indented_tree}\n"
+                )
 
-                    # Reescribimos el encabezado para mapearlo como si viviera en el nivel de raíz virtual
-                    pattern = r"================================================\s*FILE:\s*([^\n]+)\s*================================================"
+        # Construimos la query de ingesta unificada
+        query = IngestionQuery(
+            local_path=self.project_path,
+            slug=self.project_path.name,
+            id=uuid.uuid4(),
+            max_file_size=10 * 1024 * 1024,
+            ignore_patterns=all_ignores,
+            targets=targets,
+        )
 
-                    def replace_path_ext(match):
-                        rel_file_path = match.group(1)
-                        full_rel_path = (Path(alias) / rel_file_path).as_posix()
-                        return f"================================================\nFILE: {full_rel_path}\n================================================"
+        # Invocamos la ingesta composite nativa de Gitingest
+        from gitingest.ingestion import ingest_query
 
-                    fixed_content = re.sub(pattern, replace_path_ext, content)
-                    final_content += f"{fixed_content}\n"
-                    total_tokens += human_to_int(summary.split()[-1])
+        summary, tree, content = ingest_query(query)
 
-        full_context = final_tree + "\n" + final_content
-        return Context(text=full_context, token_count=total_tokens)
+        full_context = tree + "\n" + content
+        estimated_tokens = human_to_int(summary.split()[-1])
+
+        return Context(text=full_context, token_count=estimated_tokens)
