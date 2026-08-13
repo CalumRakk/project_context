@@ -76,9 +76,7 @@ def generate_story_prompt(parsed_data: dict, file_name: str) -> str:
     Construye el prompt exacto que se enviará a la IA según el modo detectado.
     """
     mode = parsed_data["mode"]
-    instruction = parsed_data["instruction"]
 
-    base_prompt = f"Actúa como un co-escritor creativo. Tu objetivo es trabajar en el archivo `{file_name}` que se encuentra en el contexto adjunto.\n\n"
     base_rule = (
         "usando como fuente el texto encerrado en las etiqueta `<mejora>` y `</mejora>`. "
         "Mantén la coherencia con el contexto global y prioriza escribir diálogos.\n\n"
@@ -98,20 +96,12 @@ def generate_story_prompt(parsed_data: dict, file_name: str) -> str:
 
     elif mode == "edicion":
         return (
-            base_prompt
-            + "Ayúdame a editar e integrar una nueva idea en el medio de la historia de este archivo.\n"
-            "Tienes que desarrollar y mejorar el siguiente borrador, agregando diálogos o descripciones si es necesario, "
-            "y hacer que encaje perfectamente como puente entre el texto anterior y el texto posterior.\n\n"
-            "Instrucciones / Borrador a mejorar:\n"
-            f"{instruction}\n\n"
-            "--- TEXTO ANTERIOR ---\n"
+            f"Ayúdame a editar e integrar una nueva idea en la historia del `{file_name}`, {base_rule}"
+            + "La mejora empieza exactamente después del siguiente texto:\n"
             "```text\n"
             f"{parsed_data['anchor_pre']}\n"
             "```\n\n"
-            "--- TEXTO POSTERIOR ---\n"
-            "```text\n"
-            f"{parsed_data['anchor_post']}\n"
-            "```\n"
+            "El texto despues de las etiquetas no lo incluyas en tu respuesta. Esto lo haré manualmente.\n\n"
         )
 
     return ""

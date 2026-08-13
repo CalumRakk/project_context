@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 from project_context import __version__
 
 setup(
-    name="project-context-cli",
+    name="project_context",
     version=__version__,
     author="CalumRakk",
     author_email="leocasti2@gmail.com",

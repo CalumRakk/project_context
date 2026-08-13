@@ -6,7 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Parts(BaseModel):
-    text: str
+    model_config = ConfigDict(extra="allow")
+
+    text: Optional[str] = None
+    thoughtSignature: Optional[str] = None
 
 
 Role = Literal["user", "model"]

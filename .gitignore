@@ -8,6 +8,7 @@ token.json
 *.egg-info
 script.py
 build/
+.git/
 
 identity.py
 fix_subtitles.py
