@@ -117,6 +117,13 @@ class ProjectContext:
         except json.JSONDecodeError:
             return ProjectState(state_path=self.state_path)
 
+    def check_file_override(self, rel_path: str) -> Optional[str]:
+        """Comprueba si una ruta de archivo relativa anula un exclude o un .gitignore."""
+        config = self.load_context_config()
+        from project_context.utils import diagnose_file_override
+
+        return diagnose_file_override(self.project_path, rel_path, config.exclusions)
+
     def ensure_gitignore(self, state_dict: Optional[dict] = None):
         """Verifica y añade la regla de exclusión del directorio local a .gitignore."""
         if state_dict and state_dict.get("auto_gitignore") is False:
@@ -146,25 +153,30 @@ class ProjectContext:
             UI.warn(f"No se pudo escribir en el archivo .gitignore: {e}")
 
     def validate_external_folder(self, alias: str, target_path: Path) -> None:
+        """Valida que una ruta externa cumpla con las reglas de negocio antes de vincularse (link):
+
+        1. El directorio debe existir físicamente y ser un directorio.
+        2. No puede estar dentro de la estructura local del proyecto.
+        3. El alias no colisiona con archivos/carpetas en la raíz del proyecto.
+        4. El alias no colisiona con otros alias ya registrados.
+        5. No puede solaparse ni anidarse con otras rutas externas ya vinculadas.
         """
-        Valida que una ruta externa cumpla con las reglas de negocio antes de registrarse:
-        1. No puede estar dentro de la estructura local del proyecto.
-        2. El alias no colisiona con archivos/carpetas en la raíz del proyecto.
-        3. El alias no colisiona con otros alias ya registrados.
-        4. No puede solaparse ni anidarse con otras rutas externas ya registradas.
-        """
-        config = self.load_context_config()
         abs_target = target_path.resolve()
         abs_project = self.project_path.resolve()
 
-        # Regla 1: No puede estar dentro de la estructura local del proyecto
+        if not abs_target.exists() or not abs_target.is_dir():
+            raise ValueError(
+                f"La ruta '{target_path}' no existe o no es un directorio válido en el disco."
+            )
+
+        # Regla 2: No puede estar dentro de la estructura local del proyecto
         if abs_target == abs_project or abs_project in abs_target.parents:
             raise ValueError(
                 "La ruta especificada ya se encuentra dentro de tu proyecto local.\n"
-                "Por favor, utiliza 'context add' para enfocar carpetas o archivos locales."
+                "Para enfocar carpetas o archivos locales utiliza 'context set' o 'context add'."
             )
 
-        # Regla 2: El alias no colisiona con archivos/carpetas en la raíz local
+        # Regla 3: El alias no colisiona con archivos/carpetas en la raíz local
         local_root_items = {
             item.name.lower()
             for item in self.project_path.iterdir()
@@ -173,22 +185,23 @@ class ProjectContext:
         if alias.lower() in local_root_items:
             raise ValueError(
                 f"El alias '{alias}' colisiona con un archivo o carpeta existente en la raíz local de tu proyecto.\n"
-                "Elige un nombre alternativo para este paquete externo."
+                "Elige un nombre alternativo para este enlace externo."
             )
 
-        # Regla 2b: Colisión con alias ya registrados
+        # Regla 4: Colisión con alias ya registrados
+        config = self.load_context_config()
         external_folders = getattr(config, "external_folders", {})
         if alias in external_folders:
             raise ValueError(
-                f"El alias '{alias}' ya está registrado en tus paquetes externos."
+                f"El alias '{alias}' ya está registrado. Usa 'context unlink {alias}' primero si deseas reasignarlo."
             )
 
-        # Regla 3: No puede solaparse ni anidarse con otras rutas externas
+        # Regla 5: No puede solaparse ni anidarse con otras rutas externas
         for ext_alias, ext_path_str in external_folders.items():
             abs_ext = Path(ext_path_str).resolve()
             if abs_target == abs_ext:
                 raise ValueError(
-                    f"Esta ruta ya está registrada como un paquete externo bajo el alias '{ext_alias}'."
+                    f"Esta ruta ya está vinculada como paquete externo bajo el alias '{ext_alias}'."
                 )
             if abs_ext in abs_target.parents:
                 raise ValueError(
@@ -200,11 +213,10 @@ class ProjectContext:
                 )
 
     def generate_context(self) -> Context:
-        """
-        Genera el prompt de contexto unificado.
+        """Genera el prompt de contexto unificado aplicando el principio de cortocircuito
 
-        Delega la composición del proyecto local y paquetes externos mapeados
-        a la API virtual nativa de Gitingest.
+        y la precedencia de reglas:
+        Archivo Explícito (files) > Exclusiones (exclusions) > Área de Trabajo (folders) > .gitignore.
         """
         config = self.load_context_config()
 
@@ -216,51 +228,58 @@ class ProjectContext:
 
         import uuid
 
+        from gitingest.ingestion import ingest_query
         from gitingest.schemas.ingestion import IngestionQuery, VirtualTarget
 
         targets = []
 
-        # Caso 1: Enfoque Global (Proyecto Completo)
+        # ARCHIVOS FORZADOS / WHITELIST (Máxima prioridad: cortocircuitan .gitignore y exclusions)
+        for f_path in config.files:
+            real_path = self.project_path / f_path
+            if real_path.exists() and real_path.is_file():
+                targets.append(
+                    VirtualTarget(
+                        physical_path=real_path,
+                        virtual_alias=".",
+                        is_file=True,
+                    )
+                )
+
+        # ÁREA DE TRABAJO LOCAL (Aplica .gitignore y exclusions)
         if config.folders == ["."]:
             targets.append(
                 VirtualTarget(
-                    physical_path=self.project_path, virtual_alias=".", is_file=False
+                    physical_path=self.project_path,
+                    virtual_alias=".",
+                    is_file=False,
                 )
             )
         else:
-            # Caso 2: Enfoque Específico
-            # Añadir archivos específicos al contexto raíz
-            for f_path in config.files:
-                real_path = self.project_path / f_path
-                if real_path.exists() and real_path.is_file():
-                    targets.append(
-                        VirtualTarget(
-                            physical_path=real_path, virtual_alias=".", is_file=True
-                        )
-                    )
-
-            # Añadir carpetas específicas mapeadas a la raíz
             for folder in config.folders:
                 real_folder = self.project_path / folder
                 if real_folder.exists() and real_folder.is_dir():
                     targets.append(
                         VirtualTarget(
-                            physical_path=real_folder, virtual_alias=".", is_file=False
+                            physical_path=real_folder,
+                            virtual_alias=".",
+                            is_file=False,
                         )
                     )
 
-        # Caso 3: Añadir paquetes externos mapeados con sus respectivos alias virtuales
+        # PAQUETES EXTERNOS (link)
         external_folders = getattr(config, "external_folders", {})
         for alias, ext_path_str in external_folders.items():
             real_folder = Path(ext_path_str)
             if real_folder.exists() and real_folder.is_dir():
                 targets.append(
                     VirtualTarget(
-                        physical_path=real_folder, virtual_alias=alias, is_file=False
+                        physical_path=real_folder,
+                        virtual_alias=alias,
+                        is_file=False,
                     )
                 )
 
-        # Construimos la query de ingesta unificada
+        # Construimos la query de ingesta
         query = IngestionQuery(
             local_path=self.project_path,
             slug=self.project_path.name,
@@ -270,11 +289,7 @@ class ProjectContext:
             targets=targets,
         )
 
-        # Invocamos la ingesta composite nativa de Gitingest
-        from gitingest.ingestion import ingest_query
-
         summary, tree, content = ingest_query(query)
-
         full_context = tree + "\n" + content
         estimated_tokens = human_to_int(summary.split()[-1])
 

@@ -21,7 +21,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
     """Construye y configura el registro de comandos de forma explícita."""
     registry = InteractiveRegistry()
 
-    # --- COMANDOS BASE ---
+    # COMANDOS BASE
     registry.register(
         names=["exit", "quit"],
         handler=cmd_exit,
@@ -36,7 +36,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         require_chat=False,
     )
 
-    # --- COMANDOS DE CHAT ---
+    # COMANDOS DE CHAT
     registry.register(
         names=["clear"],
         handler=cmd_clear,
@@ -107,7 +107,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         ],
     )
 
-    # --- COMANDOS DE COMMIT ---
+    # COMANDOS DE COMMIT
     registry.register(
         names=["commit", "ci"],
         handler=cmd_commit,
@@ -127,7 +127,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         ],
     )
 
-    # --- COMANDO DE HISTORIA ---
+    # COMANDO DE HISTORIA
     registry.register(
         names=["story"],
         handler=cmd_story,
@@ -143,7 +143,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         ],
     )
 
-    # --- COMANDOS DE CONTEXTO ---
+    # COMANDOS DE CONTEXTO
 
     registry.register(
         names=["context", "ctx"],
@@ -152,7 +152,7 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         require_chat=False,
     )
 
-    # --- COMANDO INLINE ---
+    # COMANDO INLINE
     registry.register(
         names=["inline"],
         handler=cmd_inline,

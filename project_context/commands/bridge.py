@@ -79,15 +79,23 @@ def create_interactive_completer(
         else:
             nested_dict[primary_name] = cmd_branch if cmd_branch else None
 
-    # --- AMPLIACIÓN DE AUTOCOMPLETADO ANIDADO PARA CONTEXTO ---
+    # AMPLIACIÓN DE AUTOCOMPLETADO ANIDADO PARA CONTEXTO
     context_completions = {
+        # Enfoque local
+        "set": project_path_completer,
         "add": project_path_completer,
         "remove": project_path_completer,
+        "rm": project_path_completer,
+        # Filtros de ruido
         "exclude": None,
-        "include": None,
-        "list": None,
+        "unexclude": None,
+        # Paquetes externos
+        "link": None,
+        "unlink": None,
+        # Control e inspección
         "status": None,
         "tree": None,
+        "reset": None,
         "clear": None,
     }
     nested_dict["context"] = context_completions

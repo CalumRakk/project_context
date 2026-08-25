@@ -221,6 +221,18 @@ class ContextConfig(BaseModel):
     exclusions: List[str] = Field(default_factory=list)
     external_folders: Dict[str, str] = Field(default_factory=dict)
 
+    @property
+    def is_root_focus(self) -> bool:
+        """Indica si el foco actual abarca todo el proyecto raíz sin exclusividades."""
+        return self.folders == ["."] and len(self.files) == 0
+
+    def reset_to_default(self) -> None:
+        """Restablece la configuración al estado limpio inicial."""
+        self.folders = ["."]
+        self.files = []
+        self.exclusions = []
+        self.external_folders = {}
+
 
 class ProfileConfig(BaseModel):
     email: str

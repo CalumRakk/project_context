@@ -57,6 +57,38 @@ custom_theme = Theme(
 console = Console(theme=custom_theme)
 
 
+def check_path_match(patterns: List[str], rel_path: str) -> bool:
+    """Evalúa si una ruta relativa coincide con una lista de patrones glob estilo git."""
+    if not patterns:
+        return False
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+    return spec.match_file(rel_path)
+
+
+def diagnose_file_override(
+    project_path: Path, rel_file_path: str, exclusions: List[str]
+) -> Optional[str]:
+    """Determina si un archivo específico está anulando una regla de exclusión o .gitignore.
+
+    Retorna:
+        - "exclude" si coincide con algún patrón de `config.exclusions`.
+        - ".gitignore" si coincide con alguna regla de `.gitignore`.
+        - None si no coincide con ninguna regla restrictiva.
+    """
+    normalized_rel = rel_file_path.replace("\\", "/").strip("/")
+
+    # Comprobar exclusions manuales (prioridad de notificación)
+    if exclusions and check_path_match(exclusions, normalized_rel):
+        return "exclude"
+
+    # Comprobar .gitignore del proyecto
+    gitignore_patterns = get_ignore_patterns(project_path, ".gitignore")
+    if gitignore_patterns and check_path_match(gitignore_patterns, normalized_rel):
+        return ".gitignore"
+
+    return None
+
+
 def setup_windows_terminal():
     if sys.platform.startswith("win"):
         os.system("chcp 65001 > nul")
