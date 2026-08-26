@@ -44,6 +44,11 @@ class ProjectContext:
     def context_config_path(self) -> Path:
         return self.local_dir / "context.json"
 
+    @property
+    def no_auto_gitignore_path(self) -> Path:
+        """Ruta al archivo marcador que desactiva el hook de .gitignore localmente."""
+        return self.local_dir / "no_auto_gitignore"
+
     def load_context_config(self) -> ContextConfig:
         """Carga de manera robusta la configuración unificada de contexto del proyecto."""
         if not self.context_config_path.exists():
@@ -86,6 +91,9 @@ class ProjectContext:
         if not self.exists_folder_project:
             self._build_folders()
 
+        # Hook activo al inicializar la sesión
+        self.ensure_gitignore()
+
         if self.is_multiple_instances is False:
             self._lock = FileLock(self._lock_path, timeout=0)
             try:
@@ -124,11 +132,25 @@ class ProjectContext:
 
         return diagnose_file_override(self.project_path, rel_path, config.exclusions)
 
-    def ensure_gitignore(self, state_dict: Optional[dict] = None):
-        """Verifica y añade la regla de exclusión del directorio local a .gitignore."""
-        if state_dict and state_dict.get("auto_gitignore") is False:
+    def ensure_gitignore(self):
+        """Verifica y añade la regla de exclusión a .gitignore respetando las opciones global y local."""
+
+        # Comprobación de anulación local (Archivo marcador)
+        if self.no_auto_gitignore_path.exists():
+            UI.info(
+                "Auto-gestión de .gitignore desactivada por configuración local (no_auto_gitignore detectado)."
+            )
             return
 
+        # Comprobación de anulación global (Variable de entorno)
+        env_opt = os.getenv("PROJECT_CONTEXT_AUTO_GITIGNORE", "true").lower()
+        if env_opt in ("false", "0", "no", "off"):
+            UI.info(
+                "Auto-gestión de .gitignore desactivada por variable de entorno (PROJECT_CONTEXT_AUTO_GITIGNORE)."
+            )
+            return
+
+        # Comprobación y escritura en .gitignore
         gitignore_path = self.project_path / ".gitignore"
         rule = ".project_context/"
         try:

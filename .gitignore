@@ -9,6 +9,7 @@ token.json
 script.py
 build/
 .git/
+.vscode/
 
 identity.py
 fix_subtitles.py
