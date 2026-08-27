@@ -17,11 +17,9 @@ docs/
 requirements.txt
 tests/
 .pre-commit-config.yaml
-
-# Metadatos locales de project-context-cli
-.project_context/
-
-.project_context*
 *.zip
 notas.md
 project_context/project_context/scripts
+
+# Metadatos locales de project-context-cli
+.project_context/

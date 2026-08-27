@@ -81,13 +81,13 @@ def create_interactive_completer(
 
     # AMPLIACIÓN DE AUTOCOMPLETADO ANIDADO PARA CONTEXTO
     context_completions = {
-        # Enfoque local
+        # Enfoque local y excepciones
         "set": project_path_completer,
         "add": project_path_completer,
         "remove": project_path_completer,
         "rm": project_path_completer,
-        # Filtros de ruido
-        "exclude": None,
+        # Filtros de ruido y poda
+        "exclude": project_path_completer,
         "unexclude": None,
         # Paquetes externos
         "link": None,
