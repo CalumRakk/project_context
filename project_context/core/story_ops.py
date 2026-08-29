@@ -50,23 +50,27 @@ def parse_story_file(file_path: Path) -> dict:
     clean_pre = clean_md(pre_text)
     clean_post = clean_md(post_text)
 
+    # Extraer las líneas no vacías para obtener anclas precisas
+    pre_lines = [line.strip() for line in clean_pre.splitlines() if line.strip()]
+    post_lines = [line.strip() for line in clean_post.splitlines() if line.strip()]
+
     if not clean_pre and not clean_post:
         mode = "nuevo"
         anchor_pre = ""
         anchor_post = ""
     elif clean_pre and not clean_post:
         mode = "continuacion"
-        anchor_pre = clean_pre[-800:].strip()
+        anchor_pre = pre_lines[-1] if pre_lines else ""
         anchor_post = ""
     else:
         mode = "edicion"
-        anchor_pre = clean_pre[-800:].strip() if clean_pre else ""
-        anchor_post = clean_post[:800].strip() if clean_post else ""
+        anchor_pre = pre_lines[-1] if pre_lines else ""
+        anchor_post = post_lines[0] if post_lines else ""
 
     return {
         "mode": mode,
         "instruction": instruction,
-        "anchor_pre": anchor_pre.split("\n")[-1] if anchor_pre else "",
+        "anchor_pre": anchor_pre,
         "anchor_post": anchor_post,
     }
 
@@ -96,12 +100,11 @@ def generate_story_prompt(parsed_data: dict, file_name: str) -> str:
 
     elif mode == "edicion":
         return (
-            f"Ayúdame a editar e integrar una nueva idea en la historia del `{file_name}`, {base_rule}"
-            + "La mejora empieza exactamente después del siguiente texto:\n"
+            f"Ayúdame a reescribir y mejorar la historia del `{file_name}`, {base_rule}"
+            + "Empieza a editar exactamente desde el siguiente texto:\n"
             "```text\n"
-            f"{parsed_data['anchor_pre']}\n"
+            f"{parsed_data['anchor_post']}\n"
             "```\n\n"
-            "El texto despues de las etiquetas no lo incluyas en tu respuesta. Esto lo haré manualmente.\n\n"
         )
 
     return ""
@@ -158,7 +161,7 @@ def apply_story_update(
     api: GoogleDriveManager,
     project_context: ProjectContext,
     story_anchor_rel: str,
-    ctx: Optional[SessionContext] = None,  # TODO: solucion magica a mejorar.
+    ctx: Optional[SessionContext] = None,
 ):
     """
     Actualiza el contexto, analiza la historia ancla,
