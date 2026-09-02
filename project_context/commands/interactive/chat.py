@@ -1,8 +1,12 @@
+import logging
+
 from rich.table import Table
 
 from project_context.commands.interactive.register import ParsedArgs, SessionContext
 from project_context.core.schemas import ChunkText
 from project_context.ui import UI, console
+
+logger = logging.getLogger("project_context.commands.chat")
 
 
 def cmd_clear(ctx: SessionContext, args: ParsedArgs):
@@ -55,21 +59,28 @@ def cmd_save(ctx: SessionContext, args: ParsedArgs):
 
 
 def cmd_restore(ctx: SessionContext, args: ParsedArgs):
-    """Restaura un snapshot guardado a partir de su ID."""
     snapshot_id = args.get_arg(0)
-    assert snapshot_id is not None  # Verificado previamente en el parsing
+    assert snapshot_id is not None
 
+    logger.info(
+        f"CMD_RESTORE_REQUEST: Iniciando restauración para snapshot_id='{snapshot_id}'"
+    )
     UI.info(f"Iniciando la restauración del snapshot {snapshot_id}...")
 
     success = ctx.snapshot_manager.restore_snapshot(snapshot_id)
     if success:
+        logger.info(f"CMD_RESTORE_SUCCESS: Snapshot {snapshot_id} aplicado con éxito.")
         UI.success(f"Snapshot {snapshot_id} restaurado con éxito.")
         UI.info(
             "Por favor, actualiza la interfaz de Google AI Studio (F5) si tienes el chat abierto."
         )
     else:
+        logger.error(
+            f"CMD_RESTORE_FAILED: Falló la restauración del snapshot {snapshot_id}."
+        )
         UI.error(
-            f"No se pudo restaurar el snapshot con ID '{snapshot_id}'. Verifica si el ID es correcto."
+            f"No se pudo restaurar el snapshot con ID '{snapshot_id}'. "
+            f"Revisa el archivo de log para ver el detalle del error."
         )
 
 

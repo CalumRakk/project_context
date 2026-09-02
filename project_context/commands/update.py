@@ -1,9 +1,11 @@
+import logging
 from pathlib import Path
 from typing import Optional
 
 import typer
 from typing_extensions import Annotated
 
+from project_context import __version__
 from project_context.core.profile_mg import ProfileManager
 from project_context.core.project_context import ProjectContext
 from project_context.core.story_ops import apply_story_update
@@ -11,6 +13,8 @@ from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.auth_service import AuthService
 from project_context.services.context_service import ContextService
 from project_context.ui import UI
+
+logger = logging.getLogger(__name__)
 
 
 def update_command(
@@ -32,11 +36,17 @@ def update_command(
     """
     Sincroniza los cambios del código del proyecto con Google Drive y sale de inmediato.
     """
-    project_path = Path.cwd() if project_path is None else project_path
 
+    project_path = Path.cwd() if project_path is None else project_path
     profile_manager = ProfileManager()
     profile_name = profile_manager.resolve_profile_name(use_profile)
     profile = profile_manager.load_profile_data(profile_name)
+
+    logger.info("=" * 60)
+    logger.info(f"SESIÓN INICIADA: 'update' | project-context v{__version__}")
+    logger.info(f"Proyecto: {project_path.resolve()}")
+    logger.info(f"Perfil: {profile_name} ({profile.email})")
+    logger.info("=" * 60)
 
     creds = AuthService.authenticate(profile.token_path, profile.secret_path)
     api = GoogleDriveManager(creds)
@@ -57,3 +67,4 @@ def update_command(
             context_service.create_or_update_chat()
 
         UI.success("Sincronización de contexto completada.")
+        logger.info("SESIÓN FINALIZADA: 'update' completado con éxito.")

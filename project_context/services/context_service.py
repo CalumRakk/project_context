@@ -45,31 +45,36 @@ class ContextService:
         return ContextRemote(context=context, file_id=file.id)
 
     def create_or_update_chat(self) -> None:
-        """
-        Sincroniza el contexto local con Google Drive. Crea o actualiza tanto
-        el archivo de contexto como el de la sesión de chat activa.
-        """
         folder_id = self.api.ai_studio_folder
-
-        if not self.api.can_access_file(folder_id):
-            raise ValueError(
-                f"No se pudo acceder a la carpeta {folder_id} en Google Drive."
-            )
-
         state = self.project_context.load_state()
         filename = self.build_filename_chat()
-        context = self.project_context.generate_context()
 
-        # Gestionar documento de contexto maestro
+        logger.info("Generando contexto unificado del proyecto...")
+        context = self.project_context.generate_context()
+        logger.info(
+            f"Contexto generado: {context.token_count} tokens aprox. | MD5: {context.md5sum} | Bytes: {len(context.text.encode('utf-8'))}"
+        )
+
+        # Documento de contexto
         if state.file_id is None or not self.api.can_access_file(state.file_id):
+            logger.info(
+                f"No hay archivo de contexto accesible en Drive (ID anterior: {state.file_id}). Creando nuevo..."
+            )
             context_remote = self.create_context_document(filename, context)
             state.file_id = context_remote.file_id
             state.save()
+            logger.info(f"Documento de contexto creado con ID: {state.file_id}")
         else:
+            logger.info(
+                f"Actualizando documento de contexto existente en Drive: {state.file_id}"
+            )
             context_remote = self.update_context_document(context, state.file_id)
 
-        # Gestionar sesión de chat de AI Studio
+        # Chat de AI Studio
         if state.chat_id is None or not self.api.can_access_file(state.chat_id):
+            logger.info(
+                f"No hay sesión de chat accesible en Drive (ID anterior: {state.chat_id}). Creando nueva..."
+            )
             chat_filename = self.build_filename_chat()
             initial_chat = ChunkFactory.build_initial_chat(context_remote)
             file = self.api.create_chat(
@@ -77,8 +82,12 @@ class ContextService:
             )
             state.chat_id = file.id
             state.save()
+            logger.info(f"Nuevo Chat creado en Drive: {state.chat_id}")
             UI.success(f"Se creó nuevo Chat ID: [dim]{state.chat_id}[/]")
         else:
+            logger.info(
+                f"Actualizando configuración y tokens en el Chat activo: {state.chat_id}"
+            )
             chat = self.api.get_chat(state.chat_id)
             chat.reset_context_document_tokencount()
             self.api.update_chat(state.chat_id, chat)

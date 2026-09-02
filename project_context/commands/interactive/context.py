@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +9,7 @@ from project_context.commands.interactive.register import ParsedArgs, SessionCon
 from project_context.ui import UI
 
 console_rich = Console()
+logger = logging.getLogger("project_context.context_cmd")
 
 
 def _get_relative_path(path_str: str, project_path: Path) -> Optional[str]:
@@ -108,6 +110,9 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             project_context.save_context_config(config)
             UI.success("Área de trabajo redefinida a todo el proyecto (raíz '.').")
             UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
+            logger.info(
+                f"CONTEXT_CONFIG_UPDATED: folders={config.folders}, files={config.files}, exclusions={config.exclusions}"
+            )
             return
 
         rel_str = _get_relative_path(target_raw, project_path)

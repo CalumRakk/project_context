@@ -284,9 +284,12 @@ class ProjectState(BaseModel):
             super().__setattr__("last_modified", time.time())
 
     def save(self):
-        """
-        Actualiza los parámetros críticos del estado en memoria y los persiste
-        en un único ciclo de escritura en el disco local.
-        """
+        """Actualiza y persiste los parámetros críticos del estado en disco."""
         data = self.model_dump_json(indent=2)
         self.state_path.write_text(data, encoding="utf-8")
+
+        import logging
+
+        logging.getLogger("project_context.state").info(
+            f"STATE_PERSISTED: path='{self.state_path.name}' | chat_id={self.chat_id} | file_id={self.file_id}"
+        )

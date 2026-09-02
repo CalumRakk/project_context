@@ -32,6 +32,7 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+current_log_path = None
 
 
 def version_callback(value: bool):
@@ -62,13 +63,14 @@ def global_options(
         ),
     ] = False,
 ):
+    global current_log_path
     cmd_name = ctx.invoked_subcommand or "sys"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     log_dir = get_app_root_dir() / "logs"
-    log_path = log_dir / f"{timestamp}_{cmd_name}.log"
+    current_log_path = log_dir / f"{timestamp}_{cmd_name}.log"
 
-    setup_logging(log_path, debug)
+    setup_logging(current_log_path, debug)
 
 
 # Registro de sub-grupos
@@ -98,9 +100,9 @@ def main():
 
     except Exception as e:
         logger.exception("Error inesperado en el hilo de ejecución principal:")
-
         UI.error(f"Ocurrió un error inesperado: {e}", spacing="top")
-        UI.info(
-            "Se han registrado los detalles técnicos en los archivos de registro (logs) de la aplicación."
-        )
+        if current_log_path:
+            UI.info(
+                f"Revisa el archivo de log para más detalles: [dim]{current_log_path.resolve()}[/]"
+            )
         sys.exit(1)

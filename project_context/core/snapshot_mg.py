@@ -90,13 +90,20 @@ class SnapshotManager:
         """Recupera un objeto almacenado en CAS local."""
         obj_path = self._get_object_path(md5sum)
         if not obj_path.exists():
+            logger.error(
+                f"CAS_OBJECT_MISSING: No se encontró el objeto con hash {md5sum} en '{obj_path}'"
+            )
             return None
         try:
             compressed = obj_path.read_bytes()
-            return decompress_data(compressed)
-        except Exception as e:
+            data = decompress_data(compressed)
             logger.debug(
-                f"[CAS Error] No se pudo leer o descomprimir el objeto {md5sum}: {e}"
+                f"CAS_OBJECT_RETRIEVED: {md5sum} ({len(data)} bytes descomprimidos)"
+            )
+            return data
+        except Exception as e:
+            logger.exception(
+                f"CAS_DECOMPRESS_ERROR: Fallo al descomprimir {md5sum} desde '{obj_path}': {e}"
             )
             return None
 
@@ -109,6 +116,7 @@ class SnapshotManager:
         Si el usuario tiene un chat o un documento de contexto activo en su estado local,
         se reutilizan esos mismos archivos sobreescribiendo su contenido para no alterar la URL activa.
         """
+
         active_email = self.project_context.email
         creator_assets = snapshot.get_assets_from_creator()
 
@@ -129,6 +137,10 @@ class SnapshotManager:
 
         # Sincronizar activos de soporte (Contexto, Adjuntos)
         for asset in non_chat_assets:
+            logger.info(
+                f"RESTORE_ASSETS_START: Snapshot {snapshot.id} | Total activos creador: {len(creator_assets)} "
+                f"(no-chat: {len(non_chat_assets)}, chat: {len(chat_assets)})"
+            )
             existing_asset = SnapshotAsset.get_or_none(
                 SnapshotAsset.snapshot == snapshot,
                 SnapshotAsset.email == active_email,
@@ -232,15 +244,23 @@ class SnapshotManager:
             chat_data = json.loads(chat_bytes.decode("utf-8"))
             chat_model = ChatIAStudio(**chat_data)
 
+            translated_chunks_count = 0
             for chunk in chat_model.chunkedPrompt.chunks:
                 if chunk.file_id is not None:
                     translated_id = id_map.get(chunk.file_id)
                     if translated_id:
+                        logger.debug(
+                            f"CHUNK_TRANSLATE: {chunk.file_id} -> {translated_id}"
+                        )
                         chunk.file_id = translated_id
+                        translated_chunks_count += 1
                     else:
                         logger.warning(
-                            f"Advertencia: No se encontró traducción en 'id_map' para el file_id: {chunk.file_id}"
+                            f"CHUNK_TRANSLATE_MISSED: No existe reemplazo en id_map para file_id={chunk.file_id}"
                         )
+            logger.info(
+                f"RESTORE_CHAT_TRANSLATED: {translated_chunks_count} referencias de archivos actualizadas en el chat."
+            )
 
             # Serializamos el modelo con los IDs actualizados para el usuario activo
             translated_content = chat_model.model_dump_json(
@@ -346,7 +366,10 @@ class SnapshotManager:
             state.file_id = context_asset.file_id
             state.save()
 
-            logger.info("Entorno restaurado exitosamente.")
+            logger.info(
+                f"RESTORE_COMPLETED_SUCCESS: Snapshot {snapshot_id} restaurado. "
+                f"Nuevo estado: chat_id={state.chat_id}, file_id={state.file_id}"
+            )
             return True
 
         except Exception as e:

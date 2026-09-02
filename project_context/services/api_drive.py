@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
@@ -13,6 +14,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from pydantic import BaseModel, ConfigDict
 
+from project_context.core.exceptions import ChatSessionError
 from project_context.core.schemas import (
     ChatIAStudio,
     ChunkDocument,
@@ -187,21 +189,39 @@ class GoogleDriveManager:
 
         """
 
+        t0 = time.time()
+        size_kb = len(content) / 1024
         content_stream = io.BytesIO(content)
         media = MediaIoBaseUpload(content_stream, mimetype=mime_type, resumable=True)
         fields = " ,".join(FileDriver.model_fields.keys())
+
+        action = (
+            f"UPDATE (file_id={file_id})"
+            if file_id
+            else f"CREATE (name={metadata.get('name') if metadata else 'N/A'})"
+        )
+        logger.debug(
+            f"DRIVE_UPLOAD_START: {action} | {size_kb:.2f} KB | mime={mime_type}"
+        )
+
         if file_id:
-            return (
+            resp = (
                 self.service.files()
                 .update(fileId=file_id, media_body=media, fields=fields)
                 .execute()
             )
+        else:
+            resp = (
+                self.service.files()
+                .create(body=metadata, media_body=media, fields=fields)
+                .execute()
+            )
 
-        return (
-            self.service.files()
-            .create(body=metadata, media_body=media, fields=fields)
-            .execute()
+        elapsed = time.time() - t0
+        logger.debug(
+            f"DRIVE_UPLOAD_DONE: {action} -> ID: {resp.get('id')} ({elapsed:.2f}s)"
         )
+        return resp
 
     def _resolver_content(self, content: Union[str, Path, bytes]):
         if isinstance(content, Path):
@@ -230,16 +250,21 @@ class GoogleDriveManager:
         # https://developers.google.com/workspace/drive/api/reference/rest/v3/files
 
         fields = ", ".join(FileDriver.model_fields.keys())
-
         try:
+            t0 = time.time()
             data = self.service.files().get(fileId=file_id, fields=fields).execute()
-
+            elapsed = time.time() - t0
+            logger.debug(f"DRIVE_METADATA_FETCHED: file_id={file_id} ({elapsed:.2f}s)")
             return FileDriver(**data)
-
-        except HttpError:
-            # La API devuelve HttpError tanto cuando el archivo no existe
-            # como cuando existe pero el usuario no tiene permisos para acceder.
-            logger.debug(f"El archivo {file_id} no existe o no se tiene acceso.")
+        except HttpError as e:
+            logger.warning(
+                f"DRIVE_METADATA_HTTP_ERROR: file_id={file_id} | status={e.resp.status} | {e}"
+            )
+            return None
+        except Exception as e:
+            logger.exception(
+                f"DRIVE_METADATA_PARSE_ERROR: file_id={file_id} | Fallo al parsear FileDriver: {e}"
+            )
             return None
 
     def find_item_by_name(self, name: str, parent_id: str = "root") -> Optional[dict]:
@@ -293,12 +318,15 @@ class GoogleDriveManager:
             return False
 
     def get_chat(self, chat_id: str) -> ChatIAStudio:
+        logger.debug(f"DRIVE_GET_CHAT: Descargando chat {chat_id}...")
         content_bytes = self._download_bytes(chat_id)
         if not content_bytes:
-            logger.debug(
-                f"No se pudo obtener el contenido del chat con ID '{chat_id}'."
+            logger.error(
+                f"No se pudo descargar el contenido del chat con ID '{chat_id}'."
             )
-            raise
+            raise ChatSessionError(
+                f"No se pudo descargar el archivo de chat con ID '{chat_id}' desde Drive."
+            )
 
         data = json.loads(content_bytes.decode("utf-8"))
         return ChatIAStudio(**data)
@@ -340,12 +368,13 @@ class GoogleDriveManager:
     def can_access_file(self, file_id):
         try:
             self.service.files().get(fileId=file_id, fields="id").execute()
+            logger.debug(f"DRIVE_ACCESS_CHECK: file_id={file_id} -> ACCESSIBLE")
             return True
-
         except HttpError as e:
-            if e.resp.status == 404:
-                return False
-            raise
+            logger.debug(
+                f"DRIVE_ACCESS_CHECK: file_id={file_id} -> NOT_ACCESSIBLE (status={e.resp.status})"
+            )
+            return False
 
     def clear_chat(self, chat_id: str):
         # TODO: REFACTOR ESTE MÉTODO. QUÉ DOLOR ANALIZARLO!
