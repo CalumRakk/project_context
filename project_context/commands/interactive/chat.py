@@ -1,6 +1,7 @@
 from rich.table import Table
 
 from project_context.commands.interactive.register import ParsedArgs, SessionContext
+from project_context.core.schemas import ChunkText
 from project_context.ui import UI, console
 
 
@@ -147,3 +148,35 @@ def cmd_history(ctx: SessionContext, args: ParsedArgs):
             f"Hay {total_snaps - (page * PAGE_SIZE)} snapshots adicionales ocultos.",
             commands=[f"history {page + 1}", "history --all"],
         )
+
+
+def cmd_fixfinish(ctx: SessionContext, args: ParsedArgs):
+    """Establece el valor 'finishReason' en 'STOP' para todos los bloques de texto del chat."""
+    state = ctx.project_context.load_state()
+    if not state.chat_id:
+        UI.error("No se encontró una sesión de chat activa.")
+        return
+
+    UI.info("Descargando estructura del chat activo...")
+    chat_data = ctx.api.get_chat(state.chat_id)
+    if not chat_data:
+        UI.error("No se pudo obtener el chat desde Google Drive.")
+        return
+
+    modified_count = 0
+    for chunk in chat_data.chunkedPrompt.chunks:
+        if isinstance(chunk, ChunkText):
+            chunk.finishReason = "STOP"
+            modified_count += 1
+
+    if modified_count == 0:
+        UI.warn("No se encontraron bloques ChunkText en el chat.")
+        return
+
+    UI.info(f"Actualizando {modified_count} bloque(s) de texto en Google Drive...")
+    ctx.api.update_chat(state.chat_id, chat_data)
+
+    UI.success(
+        f"Se estableció 'finishReason' en 'STOP' para {modified_count} bloque(s)."
+    )
+    UI.info("Recarga la interfaz de Google AI Studio (F5) para ver los cambios.")

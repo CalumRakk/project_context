@@ -1,6 +1,8 @@
+from project_context.commands.interactive.assemble import cmd_assemble
 from project_context.commands.interactive.base import cmd_exit, cmd_help
 from project_context.commands.interactive.chat import (
     cmd_clear,
+    cmd_fixfinish,
     cmd_history,
     cmd_restore,
     cmd_save,
@@ -167,4 +169,27 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         ],
     )
 
+    # REGISTRAR FIXFINISH / FIX
+    registry.register(
+        names=["fixfinish", "fix"],
+        handler=cmd_fixfinish,
+        description="Establece 'finishReason' como 'STOP' en todos los ChunkText del chat.",
+        require_chat=True,
+    )
+
+    # Dentro de bootstrap_interactive_registry():
+    registry.register(
+        names=["assemble", "dump", "temp"],
+        handler=cmd_assemble,
+        description="(Experimental) Ensambla el chat en un archivo Markdown y descarga imágenes.",
+        require_chat=True,
+        arguments=[
+            CommandArgument(
+                "archivo",
+                "Ruta del archivo Markdown destino (ej: capitulo_1.md).",
+                required=True,
+                completer_type="path",
+            )
+        ],
+    )
     return registry

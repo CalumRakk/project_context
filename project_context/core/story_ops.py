@@ -1,10 +1,12 @@
 import logging
+import os
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from project_context.commands.interactive.register import SessionContext
 from project_context.core.project_context import ProjectContext
+from project_context.core.schemas import ChunkImage, ChunkText
 from project_context.services.api_drive import ChunkFactory, GoogleDriveManager
 from project_context.utils import (
     UI,
@@ -243,3 +245,104 @@ def apply_story_update(
     UI.success(
         "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
     )
+
+
+def assemble_chat_to_markdown(
+    api: GoogleDriveManager,
+    project_context: ProjectContext,
+    target_rel_path: str,
+) -> Path:
+    """
+    Descarga el chat activo, filtra pensamientos, descarga imágenes vinculadas a disco
+    y ensambla la conversación formateada con encabezados claros de turnos.
+    """
+    state = project_context.load_state()
+    if not state.chat_id:
+        raise ValueError("No hay una sesión de chat activa para ensamblar.")
+
+    UI.info("Descargando historial de la conversación desde Google Drive...")
+    chat_data = api.get_chat(state.chat_id)
+    chunks = chat_data.chunkedPrompt.chunks
+
+    # Omitimos los primeros 3 chunks de configuración inicial
+    conv_chunks = chunks[3:] if len(chunks) > 3 else []
+    if not conv_chunks:
+        raise ValueError(
+            "El chat no contiene mensajes de conversación suficientes para ensamblar."
+        )
+
+    target_file = (project_context.project_path / target_rel_path).resolve()
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Carpeta donde se guardarán los recursos visuales descargados
+    images_dir = project_context.project_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    turn_blocks = []
+    downloaded_images = 0
+    last_role = None
+
+    for chunk in conv_chunks:
+        # 1. FILTRADO: Omitir pensamientos internos del modelo (isThought)
+        if getattr(chunk, "isThought", False):
+            continue
+
+        role = getattr(chunk, "role", "user")
+
+        # 2. PROCESAMIENTO DE IMÁGENES
+        if isinstance(chunk, ChunkImage) or chunk.is_image:
+            file_id = chunk.file_id
+            if file_id:
+                meta = api.get_metadata(file_id)
+                img_name = meta.filename if meta else f"image_{file_id}.png"
+                local_img_path = images_dir / img_name
+
+                # Descarga si no existe localmente
+                if not local_img_path.exists():
+                    UI.info(f"Descargando recurso visual: [cyan]{img_name}[/]...")
+                    img_bytes = api.get_file_content(file_id)
+                    local_img_path.write_bytes(img_bytes)
+                    downloaded_images += 1
+                else:
+                    UI.info(f"Reutilizando imagen local existente: [dim]{img_name}[/]")
+
+                rel_img_path = os.path.relpath(
+                    local_img_path, target_file.parent
+                ).replace("\\", "/")
+                img_markdown = f"![{img_name}]({rel_img_path})"
+
+                # Control de encabezado según cambio de turno
+                if role != last_role:
+                    header_title = "### 👤 Jugador" if role == "user" else "### 🎭 IA"
+                    turn_blocks.append(f"\n---\n\n{header_title}\n\n{img_markdown}")
+                    last_role = role
+                else:
+                    turn_blocks.append(img_markdown)
+            continue
+
+        # 3. PROCESAMIENTO DE TEXTO NARRATIVO
+        if isinstance(chunk, ChunkText) or chunk.is_text:
+            text = chunk.text.strip()  # type: ignore
+            if not text:
+                continue
+
+            # Control de encabezado según cambio de turno
+            if role != last_role:
+                header_title = "### 👤 Jugador" if role == "user" else "### 🎭 IA"
+                turn_blocks.append(f"\n---\n\n{header_title}\n\n{text}")
+                last_role = role
+            else:
+                turn_blocks.append(text)
+
+    # Unir todo el documento y limpiar separadores iniciales redundantes
+    assembled_content = "\n\n".join(turn_blocks).strip()
+    if assembled_content.startswith("---"):
+        assembled_content = assembled_content.lstrip("-").strip()
+    assembled_content += "\n"
+
+    target_file.write_text(assembled_content, encoding="utf-8")
+
+    if downloaded_images > 0:
+        UI.success(f"Se descargaron {downloaded_images} imagen(es) en: [dim]images/[/]")
+
+    return target_file

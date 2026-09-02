@@ -75,7 +75,7 @@ class PendingInputs(BaseModel):
 class ChunkText(BaseChunk):
     text: str
     tokenCount: Optional[int] = None
-    finishReason: Optional[str] = None
+    finishReason: Optional[str] = None  # STOP, PROHIBITED_CONTENT,
     isThought: Optional[bool] = None
     thinkingBudget: Optional[int] = -1
     parts: Optional[list[Parts]] = None
