@@ -5,6 +5,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
+from project_context import __version__
 from project_context.commands.bridge import interactive_session
 from project_context.core.database import DatabaseSession
 from project_context.core.profile_mg import ProfileManager
@@ -41,11 +42,22 @@ def run_command(
     profile_name = profile_manager.resolve_profile_name(use_profile)
     profile = profile_manager.load_profile_data(profile_name)
 
+    logger.info("=" * 60)
+    logger.info(f"SESIÓN INICIADA: 'run' | project-context v{__version__}")
+    logger.info(f"Proyecto: {project_path.resolve()}")
+    logger.info(f"Perfil: {profile_name} ({profile.email})")
+    logger.info("=" * 60)
+
     creds = AuthService.authenticate(profile.token_path, profile.secret_path)
     api = GoogleDriveManager(creds)
 
     with ProjectContext(profile.email, project_path) as projectcontext:
         with DatabaseSession(projectcontext):
+            state = projectcontext.load_state()
+            logger.info(
+                f"Estado inicial cargado: chat_id={state.chat_id}, file_id={state.file_id}"
+            )
+
             context_service = ContextService(api, projectcontext)
             context_service.restore_backup_if_exists()
             context_service.create_or_update_chat()

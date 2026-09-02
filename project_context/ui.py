@@ -24,9 +24,6 @@ custom_theme = Theme(
 console = Console(theme=custom_theme)
 ui_logger = logging.getLogger("project_context.ui")
 
-ui_logger.addHandler(logging.NullHandler())
-ui_logger.propagate = False
-
 
 def strip_markup(text: str) -> str:
     """Elimina las etiquetas de color [bold], [red], etc. para el archivo de log."""
@@ -68,16 +65,7 @@ class UI:
         log_level: int = logging.INFO,
         **kwargs,
     ):
-        """Imprime un mensaje con formato y opcionalmente agrega espacio antes o después.
-
-        Args:
-            message: El mensaje a imprimir.
-            spacing: Si se especifica, agrega una línea en la posición indicada:
-                - "top": antes del mensaje
-                - "bottom": después del mensaje
-                - "block": antes y después del mensaje
-            **kwargs: Argumentos adicionales para `console.print()`.
-        """
+        """Imprime un mensaje con formato y opcionalmente agrega espacio antes o después."""
         if spacing in ("top", "block"):
             console.print()
 
@@ -104,7 +92,7 @@ class UI:
     @staticmethod
     def info(message: str, *, spacing: Spacing = None, **kwargs):
         UI._print(
-            f"[info]i[/] {message}", spacing=spacing, log_level=logging.DEBUG, **kwargs
+            f"[info]i[/] {message}", spacing=spacing, log_level=logging.INFO, **kwargs
         )
 
     @staticmethod
@@ -112,7 +100,7 @@ class UI:
         UI._print(
             f"[success]>[/] {message}",
             spacing=spacing,
-            log_level=logging.DEBUG,
+            log_level=logging.INFO,
             **kwargs,
         )
 
@@ -139,11 +127,14 @@ class UI:
         **kwarg,
     ):
         """Muestra una sugerencia al usuario. Opcionalmente formatea un comando."""
-
-        UI._print(f"[dim cyan]  Tip:[/] {message}", spacing=spacing, **kwarg)
+        UI._print(
+            f"[dim cyan]  Tip:[/] {message}",
+            spacing=spacing,
+            log_level=logging.INFO,
+            **kwarg,
+        )
 
         if commands:
-            # Estandariza cómo se ven los comandos
             if isinstance(commands, str):
                 commands = [commands]
 
@@ -165,14 +156,13 @@ class UI:
         content_lines = [message]
 
         if commands:
-            content_lines.append("")  # Salto de línea estético antes de los comandos
+            content_lines.append("")
             if isinstance(commands, str):
                 commands = [commands]
 
             for command in commands:
                 content_lines.append(f"   [bold yellow]> {command}[/]")
 
-        # Unimos todo en un solo bloque de texto interpretado por Rich
         panel_content = "\n".join(content_lines)
 
         panel = Panel(
@@ -183,6 +173,9 @@ class UI:
         )
 
         console.print(panel)
+        clean_content = strip_markup(panel_content).strip()
+        if clean_content:
+            ui_logger.info(clean_content)
 
         if spacing in ("bottom", "block"):
             console.print()

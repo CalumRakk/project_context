@@ -1,3 +1,4 @@
+import logging
 import shlex
 import sys
 from pathlib import Path
@@ -17,14 +18,12 @@ from project_context.core.project_context import ProjectContext
 from project_context.services.api_drive import GoogleDriveManager
 from project_context.ui import UI
 
+logger = logging.getLogger("project_context.shell")
+
 
 def create_interactive_completer(
     project_path: Path, registry: InteractiveRegistry
 ) -> NestedCompleter:
-    """Construye un completador jerárquico dinámico a partir de las opciones
-
-    y argumentos declarados en el registro interactivo.
-    """
     profile_manager = ProfileManager()
     profiles = profile_manager.list_profiles()
 
@@ -38,12 +37,10 @@ def create_interactive_completer(
     for primary_name, meta in registry.get_commands_map().items():
         cmd_branch = {}
 
-        # Mapear opciones y flags fijas del comando
         for opt in meta.options:
             for name in opt.names:
                 cmd_branch[name] = None
 
-        # Resolver y asociar completadores posicionales dinámicos
         positional_completer = None
         for arg in meta.arguments:
             if arg.completer_type == "path":
@@ -79,20 +76,15 @@ def create_interactive_completer(
         else:
             nested_dict[primary_name] = cmd_branch if cmd_branch else None
 
-    # AMPLIACIÓN DE AUTOCOMPLETADO ANIDADO PARA CONTEXTO
     context_completions = {
-        # Enfoque local y excepciones
         "set": project_path_completer,
         "add": project_path_completer,
         "remove": project_path_completer,
         "rm": project_path_completer,
-        # Filtros de ruido y poda
         "exclude": project_path_completer,
         "unexclude": None,
-        # Paquetes externos
         "link": None,
         "unlink": None,
-        # Control e inspección
         "status": None,
         "tree": None,
         "reset": None,
@@ -108,9 +100,7 @@ def interactive_session(
     api: GoogleDriveManager,
     project_context: ProjectContext,
 ):
-
     ctx = SessionContext(api=api, project_context=project_context)
-
     state = project_context.load_state()
 
     url = f"https://aistudio.google.com/prompts/{state.chat_id}"
@@ -130,9 +120,12 @@ def interactive_session(
             if not command_line:
                 continue
 
+            logger.debug(f"PROMPT_INPUT: '{command_line}'")
+
             try:
                 parts = shlex.split(command_line)
             except ValueError as e:
+                logger.warning(f"PROMPT_SYNTAX_ERROR: {e}")
                 UI.error(f"Sintaxis de argumentos inválida: {e}")
                 continue
 
@@ -146,21 +139,31 @@ def interactive_session(
             consecutive_errors = 0
 
             if should_continue is False:
+                logger.info("INTERACTIVE_SESSION_EXIT: Sesión finalizada por comando.")
                 break
 
         except (EOFError, KeyboardInterrupt):
+            logger.info(
+                "INTERACTIVE_SESSION_EXIT: Interrupción por usuario (SIGINT/EOF)."
+            )
             UI.info("Saliendo...")
             break
         except ProjectContextError as e:
+            logger.exception(f"ProjectContextError capturado: {e}")
             UI.error(str(e))
             consecutive_errors += 1
             if consecutive_errors > 10:
+                logger.critical("Demasiados errores consecutivos. Forzando salida.")
                 UI.error("Demasiados errores consecutivos. Saliendo de forma segura...")
                 sys.exit(1)
         except Exception as e:
+            logger.exception(f"Error inesperado en sesión interactiva: {e}")
             UI.error(f"Error inesperado de ejecución: {e}")
             consecutive_errors += 1
             if consecutive_errors > 10:
+                logger.critical(
+                    "Demasiados errores inesperados consecutivos. Forzando salida."
+                )
                 UI.error(
                     "Demasiados inesperados errores consecutivos. Saliendo de forma segura..."
                 )
