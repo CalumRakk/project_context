@@ -59,6 +59,7 @@ def cmd_save(ctx: SessionContext, args: ParsedArgs):
 
 
 def cmd_restore(ctx: SessionContext, args: ParsedArgs):
+    """Restaura un snapshot guardado a partir de su ID."""
     snapshot_id = args.get_arg(0)
     assert snapshot_id is not None
 

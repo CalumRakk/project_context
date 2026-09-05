@@ -283,13 +283,13 @@ def assemble_chat_to_markdown(
     last_role = None
 
     for chunk in conv_chunks:
-        # 1. FILTRADO: Omitir pensamientos internos del modelo (isThought)
+        # FILTRADO: Omitir pensamientos internos del modelo (isThought)
         if getattr(chunk, "isThought", False):
             continue
 
         role = getattr(chunk, "role", "user")
 
-        # 2. PROCESAMIENTO DE IMÁGENES
+        # PROCESAMIENTO DE IMÁGENES
         if isinstance(chunk, ChunkImage) or chunk.is_image:
             file_id = chunk.file_id
             if file_id:
@@ -320,7 +320,7 @@ def assemble_chat_to_markdown(
                     turn_blocks.append(img_markdown)
             continue
 
-        # 3. PROCESAMIENTO DE TEXTO NARRATIVO
+        # PROCESAMIENTO DE TEXTO NARRATIVO
         if isinstance(chunk, ChunkText) or chunk.is_text:
             text = chunk.text.strip()  # type: ignore
             if not text:

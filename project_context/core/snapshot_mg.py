@@ -112,15 +112,18 @@ class SnapshotManager:
         Garantiza que el usuario activo tenga todos los activos del snapshot en su Drive,
         resolviendo enlaces rotos y evitando subidas duplicadas de archivos que ya coincidan
         con el hash del CAS. Devuelve el mapa de traducción de IDs.
-
-        Si el usuario tiene un chat o un documento de contexto activo en su estado local,
-        se reutilizan esos mismos archivos sobreescribiendo su contenido para no alterar la URL activa.
         """
-
         active_email = self.project_context.email
         creator_assets = snapshot.get_assets_from_creator()
 
+        logger.info(
+            f"REPLICATE_START: Snapshot ID={snapshot.id} | Creador='{snapshot.creator_email}' | Usuario activo='{active_email}'"
+        )
+
         if not creator_assets:
+            logger.error(
+                f"REPLICATE_ERROR: No se encontraron activos registrados en la DB para el Snapshot ID={snapshot.id}"
+            )
             raise ValueError("No se encontraron activos asociados a este snapshot.")
 
         # Cargar el estado actual para verificar si podemos reutilizar los archivos activos
@@ -128,19 +131,26 @@ class SnapshotManager:
         current_chat_id = state.chat_id
         current_file_id = state.file_id
 
+        logger.debug(
+            f"REPLICATE_CURRENT_STATE: chat_id='{current_chat_id}', file_id='{current_file_id}'"
+        )
+
         id_map = {}
 
-        # Separamos los activos de tipo 'chat' de los de soporte (contexto y adjuntos)
-        # para procesar primero los documentos que el chat referenciará internamente.
         non_chat_assets = [a for a in creator_assets if a.role != "chat"]
         chat_assets = [a for a in creator_assets if a.role == "chat"]
 
-        # Sincronizar activos de soporte (Contexto, Adjuntos)
+        logger.info(
+            f"REPLICATE_BREAKDOWN: Total={len(creator_assets)} activos (Soporte/Contexto={len(non_chat_assets)}, Chat={len(chat_assets)})"
+        )
+
+        # Sincronizar activos de soporte (Contexto, Adjuntos/Imágenes)
+
         for asset in non_chat_assets:
             logger.info(
-                f"RESTORE_ASSETS_START: Snapshot {snapshot.id} | Total activos creador: {len(creator_assets)} "
-                f"(no-chat: {len(non_chat_assets)}, chat: {len(chat_assets)})"
+                f"ASSET_PROCESS: rol='{asset.role}' | archivo='{asset.filename}' | md5={asset.md5sum} | original_id='{asset.file_id}'"
             )
+
             existing_asset = SnapshotAsset.get_or_none(
                 SnapshotAsset.snapshot == snapshot,
                 SnapshotAsset.email == active_email,
@@ -158,45 +168,53 @@ class SnapshotManager:
                 and self.api.can_access_file(current_file_id)
             ):
                 target_file_id = current_file_id
-                needs_upload = True  # Forzamos la actualización para escribir el contenido del snapshot
-                logger.debug(
-                    f"Reutilizando el archivo de contexto activo actual para restauración: {current_file_id}"
+                needs_upload = True
+                logger.info(
+                    f"ASSET_REUSE_ACTIVE: Reutilizando file_id activo actual '{current_file_id}' para sobrescribir con el snapshot."
                 )
             elif existing_asset:
-                # Verificamos si sigue existiendo físicamente en Drive
                 meta = self.api.get_metadata(existing_asset.file_id)
                 if meta:
                     target_file_id = existing_asset.file_id
-                    # Comparamos hashes MD5 para evitar subidas innecesarias
                     if meta.md5sum == asset.md5sum:
                         needs_upload = False
-                        logger.debug(
-                            f"El activo '{asset.filename}' ya existe y está sincronizado (hashes coinciden)."
+                        logger.info(
+                            f"ASSET_SYNC_SKIP: '{asset.filename}' ya está sincronizado en Drive (hash coincidente: {asset.md5sum}). Reutilizando ID '{target_file_id}'."
                         )
                     else:
-                        logger.debug(
-                            f"El activo '{asset.filename}' difiere en contenido en Drive. Se programará actualización."
+                        logger.info(
+                            f"ASSET_SYNC_DIFF: '{asset.filename}' difiere en Drive (Drive MD5={meta.md5sum} vs CAS MD5={asset.md5sum}). Se actualizará."
                         )
                 else:
-                    logger.debug(
-                        f"Se detectó un enlace roto en Drive para '{asset.filename}' (ID: {existing_asset.file_id}). Se re-creará."
+                    logger.warning(
+                        f"ASSET_BROKEN_LINK: Enlace roto en Drive para '{asset.filename}' (ID '{existing_asset.file_id}'). Se creará de nuevo."
                     )
 
             if needs_upload:
+                logger.debug(
+                    f"CAS_RETRIEVE: Obteniendo blob local para MD5={asset.md5sum}..."
+                )
                 content = self._retrieve_object(asset.md5sum)
                 if not content:
+                    logger.critical(
+                        f"CAS_MISSING_OBJECT: No se encontró el objeto físico comprimido en disco para MD5={asset.md5sum} ('{asset.filename}')"
+                    )
                     raise ValueError(
                         f"No se pudo recuperar el contenido del CAS local para el MD5: {asset.md5sum}"
                     )
 
                 if target_file_id:
-                    # Actualización del archivo existente (o el activo reutilizado)
+                    logger.info(
+                        f"DRIVE_UPDATE: Actualizando archivo '{asset.filename}' (ID: {target_file_id}, {len(content)} bytes)..."
+                    )
                     updated_file = self.api.update_file(
                         target_file_id, content, asset.mime_type
                     )
                     target_file_id = updated_file.id
                 else:
-                    # Subida de un archivo nuevo o restauración de un enlace roto
+                    logger.info(
+                        f"DRIVE_CREATE: Subiendo nuevo archivo '{asset.filename}' ({len(content)} bytes) a carpeta AI Studio..."
+                    )
                     cloned_file = self.api.create_file(
                         folder_id=self.api.ai_studio_folder,
                         file_name=asset.filename,
@@ -205,14 +223,17 @@ class SnapshotManager:
                     )
                     target_file_id = cloned_file.id
 
-                # Persistencia atómica de la referencia local
+                # Persistencia de la referencia en DB
                 if existing_asset:
                     existing_asset.file_id = target_file_id
                     existing_asset.md5sum = asset.md5sum
                     existing_asset.modified_at = datetime.now()
                     existing_asset.save()
+                    logger.debug(
+                        f"ASSET_DB_UPDATE: SnapshotAsset ID={existing_asset.id} actualizado con file_id='{target_file_id}'"
+                    )
                 else:
-                    SnapshotAsset.create(
+                    new_asset = SnapshotAsset.create(
                         snapshot=snapshot,
                         file_id=target_file_id,
                         filename=asset.filename,
@@ -222,25 +243,38 @@ class SnapshotManager:
                         role=asset.role,
                         modified_at=datetime.now(),
                     )
+                    logger.debug(
+                        f"ASSET_DB_CREATE: Nuevo SnapshotAsset ID={new_asset.id} para usuario '{active_email}'"
+                    )
 
             id_map[asset.file_id] = target_file_id
+            logger.debug(f"ID_MAP_REGISTERED: {asset.file_id} -> {target_file_id}")
 
         # Sincronizar el Chat traduciendo sus referencias internas
+
         for chat_asset in chat_assets:
+            logger.info(
+                f"CHAT_PROCESS: archivo='{chat_asset.filename}' | md5={chat_asset.md5sum} | original_id='{chat_asset.file_id}'"
+            )
+
             existing_chat_asset = SnapshotAsset.get_or_none(
                 SnapshotAsset.snapshot == snapshot,
                 SnapshotAsset.email == active_email,
                 SnapshotAsset.role == "chat",
             )
 
-            # Recuperamos el JSON histórico del chat desde el CAS local
             chat_bytes = self._retrieve_object(chat_asset.md5sum)
             if not chat_bytes:
+                logger.critical(
+                    f"CAS_MISSING_OBJECT: No se encontró el JSON del chat en el CAS local (MD5: {chat_asset.md5sum})"
+                )
                 raise ValueError(
                     f"No se pudo recuperar el chat desde el CAS para el MD5: {chat_asset.md5sum}"
                 )
 
-            # Deserialización y re-mapeo dinámico de IDs internos
+            logger.debug(
+                f"CHAT_DESERIALIZE: Deserializando estructura de chat ({len(chat_bytes)} bytes)..."
+            )
             chat_data = json.loads(chat_bytes.decode("utf-8"))
             chat_model = ChatIAStudio(**chat_data)
 
@@ -258,11 +292,11 @@ class SnapshotManager:
                         logger.warning(
                             f"CHUNK_TRANSLATE_MISSED: No existe reemplazo en id_map para file_id={chunk.file_id}"
                         )
+
             logger.info(
-                f"RESTORE_CHAT_TRANSLATED: {translated_chunks_count} referencias de archivos actualizadas en el chat."
+                f"CHAT_TRANSLATION_DONE: {translated_chunks_count} referencias de archivos actualizadas en los chunks del chat."
             )
 
-            # Serializamos el modelo con los IDs actualizados para el usuario activo
             translated_content = chat_model.model_dump_json(
                 exclude_none=True, exclude_unset=True
             ).encode("utf-8")
@@ -273,24 +307,33 @@ class SnapshotManager:
             # Si tenemos un chat activo en el estado, lo reutilizamos para preservar la URL
             if current_chat_id and self.api.can_access_file(current_chat_id):
                 target_chat_id = current_chat_id
-                logger.debug(
-                    f"Reutilizando el chat activo actual para restauración: {current_chat_id}"
+                logger.info(
+                    f"CHAT_REUSE_ACTIVE: Reutilizando chat_id activo '{current_chat_id}' para preservar la URL en el navegador."
                 )
             elif existing_chat_asset:
                 meta = self.api.get_metadata(existing_chat_asset.file_id)
                 if meta:
                     target_chat_id = existing_chat_asset.file_id
+                    logger.info(
+                        f"CHAT_EXISTING_FOUND: Encontrado chat en Drive con ID '{target_chat_id}'."
+                    )
                 else:
-                    logger.debug(
-                        f"Enlace roto del chat detectado para el ID: {existing_chat_asset.file_id}. Se creará uno nuevo."
+                    logger.warning(
+                        f"CHAT_BROKEN_LINK: Chat en Drive inaccesible (ID '{existing_chat_asset.file_id}'). Se creará uno nuevo."
                     )
 
             if needs_chat_upload:
                 if target_chat_id:
+                    logger.info(
+                        f"DRIVE_UPDATE_CHAT: Sobrescribiendo contenido del chat ID='{target_chat_id}' ({len(translated_content)} bytes)..."
+                    )
                     self.api.update_file(
                         target_chat_id, translated_content, chat_asset.mime_type
                     )
                 else:
+                    logger.info(
+                        "DRIVE_CREATE_CHAT: Creando nuevo recurso Chat en Google Drive..."
+                    )
                     cloned_chat = self.api.create_file(
                         folder_id=self.api.ai_studio_folder,
                         file_name=chat_asset.filename,
@@ -299,47 +342,61 @@ class SnapshotManager:
                     )
                     target_chat_id = cloned_chat.id
 
-                # Actualización de la referencia del chat en la base de datos
+                # Guardamos también el contenido traducido en el CAS local para no romper la referencia
+                translated_md5 = self._store_object(translated_content)
+
+                # Actualización de la referencia del chat en DB
                 if existing_chat_asset:
                     existing_chat_asset.file_id = target_chat_id
-                    existing_chat_asset.md5sum = compute_md5(translated_content)
+                    existing_chat_asset.md5sum = translated_md5
                     existing_chat_asset.modified_at = datetime.now()
                     existing_chat_asset.save()
+                    logger.debug(
+                        f"CHAT_DB_UPDATE: SnapshotAsset ID={existing_chat_asset.id} actualizado a file_id='{target_chat_id}'"
+                    )
                 else:
-                    SnapshotAsset.create(
+                    new_chat_asset = SnapshotAsset.create(
                         snapshot=snapshot,
                         file_id=target_chat_id,
                         filename=chat_asset.filename,
                         mime_type=chat_asset.mime_type,
-                        md5sum=compute_md5(translated_content),
+                        md5sum=translated_md5,
                         email=active_email,
                         role="chat",
                         modified_at=datetime.now(),
                     )
+                    logger.debug(
+                        f"CHAT_DB_CREATE: Nuevo SnapshotAsset ID={new_chat_asset.id} registrado para chat"
+                    )
 
             id_map[chat_asset.file_id] = target_chat_id
 
+        logger.info(
+            f"REPLICATE_COMPLETED: Replicación finalizada con éxito. Total mapeos={len(id_map)}"
+        )
         return id_map
 
     def restore_snapshot(self, snapshot_id: str | int) -> bool:
         """
         Restaura el entorno de Drive y los archivos locales usando el snapshot id de forma multiusuario.
         """
+        logger.info(
+            f"RESTORE_START: Iniciando proceso de restauración para snapshot_id='{snapshot_id}'"
+        )
         try:
             snap = cast(Snapshot, Snapshot.get_or_none(Snapshot.id == int(snapshot_id)))
             if not snap:
                 logger.error(
-                    f"No se encontró el snapshot con ID {snapshot_id} en la base de datos."
+                    f"RESTORE_NOT_FOUND: No se encontró ningún snapshot con ID={snapshot_id} en la base de datos SQLite."
                 )
                 return False
 
             active_email = self.project_context.email
-
-            # Ejecutar la sincronización idempotente de activos
-            # (re-crea enlaces rotos, evita subidas redundantes de archivos inalterados)
             logger.info(
-                f"Sincronizando recursos del snapshot {snapshot_id} para {active_email}..."
+                f"RESTORE_FOUND: Snapshot ID={snap.id} | Creador='{snap.creator_email}' | Mensaje='{snap.message}' | Solicitante='{active_email}'"
             )
+
+            # Sincronización idempotente de activos
             self.replicate_snapshot_assets(snap)
 
             # Recuperar las referencias de activos definitivas para el usuario activo
@@ -355,26 +412,25 @@ class SnapshotManager:
             )
 
             if not chat_asset or not context_asset:
-                logger.error(
-                    "Error crítico: No se pudieron resolver las referencias de chat o contexto para el usuario activo."
+                logger.critical(
+                    f"RESTORE_RESOLVE_FAILED: No se pudieron resolver las referencias esenciales en DB (chat_asset={chat_asset}, context_asset={context_asset}) para '{active_email}'."
                 )
                 return False
 
-            # Guardar el estado persistente en el archivo local de configuración del proyecto
+            # Actualizar el archivo de estado local
             state = self.project_context.load_state()
             state.chat_id = chat_asset.file_id
             state.file_id = context_asset.file_id
             state.save()
 
             logger.info(
-                f"RESTORE_COMPLETED_SUCCESS: Snapshot {snapshot_id} restaurado. "
-                f"Nuevo estado: chat_id={state.chat_id}, file_id={state.file_id}"
+                f"RESTORE_SUCCESS: Snapshot {snapshot_id} restaurado con éxito. Estado actualizado -> chat_id='{state.chat_id}', file_id='{state.file_id}'"
             )
             return True
 
         except Exception as e:
             logger.exception(
-                f"Fallo inesperado durante la restauración del snapshot: {e}"
+                f"RESTORE_EXCEPTION: Fallo inesperado durante la restauración del snapshot {snapshot_id}: {e}"
             )
             return False
 
