@@ -11,9 +11,9 @@
     );
   }
 
-  // ==========================================
+  //
   // 1. HOOK PARA XMLHTTPREQUEST (XHR)
-  // ==========================================
+  //
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
 
@@ -49,9 +49,9 @@
     return originalSend.apply(this, args);
   };
 
-  // ==========================================
+  //
   // 2. HOOK PARA FETCH
-  // ==========================================
+  //
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     let url = '';
@@ -107,9 +107,9 @@
     };
   }
 
-  // ==========================================
+  //
   // 3. PARSER Y EXTRACTOR DE CONTENIDO SEGURO
-  // ==========================================
+  //
   function parseAndExtract(rawText, requestId, isComplete) {
     if (!rawText || rawText.trim().length === 0) return;
 

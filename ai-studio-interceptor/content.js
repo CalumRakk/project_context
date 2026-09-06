@@ -1,12 +1,12 @@
 (function () {
   const sessionHistory = [];
   let isPanelOpen = false;
+  let deleteConfirmTimeout = null;
 
   window.addEventListener('__AI_STUDIO_INTERCEPT__', (event) => {
     const { type, payload } = event.detail;
 
     if (type === 'stream-start') {
-      // Evitar duplicados por mismo requestId
       const exists = sessionHistory.some(h => h.id === payload.requestId);
       if (!exists) {
         sessionHistory.unshift({
@@ -15,8 +15,7 @@
           text: '',
           thoughts: '',
           isBlocked: false,
-          finishReason: 'GENERATING...',
-          safetyRatings: []
+          finishReason: 'GENERATING...'
         });
         updateBadge();
       }
@@ -24,7 +23,6 @@
     else if (type === 'stream-progress' || type === 'stream-complete') {
       let item = sessionHistory.find(h => h.id === payload.requestId);
       
-      // Si el stream-start no se registró a tiempo, crearlo
       if (!item) {
         item = {
           id: payload.requestId,
@@ -42,7 +40,6 @@
       item.isBlocked = payload.isBlocked;
       item.finishReason = payload.finishReason;
 
-      // Limpiar entradas vacías si terminó sin texto
       if (type === 'stream-complete' && !item.text && !item.thoughts && !item.isBlocked) {
         const idx = sessionHistory.indexOf(item);
         if (idx !== -1) sessionHistory.splice(idx, 1);
@@ -76,8 +73,12 @@
             <small>Memoria de sesión activa</small>
           </div>
           <div class="drawer-actions">
-            <button id="ai-interceptor-clear" title="Limpiar historial">🗑️</button>
-            <button id="ai-interceptor-close">✕</button>
+            <button id="ai-interceptor-clear" title="Limpiar historial">
+              <span class="clear-icon">🗑️</span>
+              <span class="clear-text"></span>
+            </button>
+            <div class="action-divider"></div>
+            <button id="ai-interceptor-close" title="Cerrar panel">✕</button>
           </div>
         </div>
         <div id="ai-interceptor-list" class="drawer-content">
@@ -92,10 +93,56 @@
 
     document.getElementById('ai-interceptor-badge').addEventListener('click', toggleDrawer);
     document.getElementById('ai-interceptor-close').addEventListener('click', toggleDrawer);
-    document.getElementById('ai-interceptor-clear').addEventListener('click', () => {
-      sessionHistory.length = 0;
-      updateBadge();
-      renderHistoryList();
+    
+    // Configuración del botón de borrado seguro con confirmación
+    setupSecureClearButton();
+  }
+
+  function setupSecureClearButton() {
+    const clearBtn = document.getElementById('ai-interceptor-clear');
+    if (!clearBtn) return;
+
+    function resetClearState() {
+      if (deleteConfirmTimeout) {
+        clearTimeout(deleteConfirmTimeout);
+        deleteConfirmTimeout = null;
+      }
+      clearBtn.classList.remove('btn-confirm-delete');
+      clearBtn.querySelector('.clear-icon').textContent = '🗑️';
+      clearBtn.querySelector('.clear-text').textContent = '';
+      clearBtn.title = 'Limpiar historial';
+    }
+
+    clearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+
+      if (sessionHistory.length === 0) return;
+
+      // Segundo clic: El usuario confirmó
+      if (clearBtn.classList.contains('btn-confirm-delete')) {
+        sessionHistory.length = 0;
+        updateBadge();
+        renderHistoryList();
+        resetClearState();
+      } 
+      // Primer clic: Pedir confirmación con animación
+      else {
+        clearBtn.classList.add('btn-confirm-delete');
+        clearBtn.querySelector('.clear-icon').textContent = '⚠️';
+        clearBtn.querySelector('.clear-text').textContent = '¿Confirmar?';
+        clearBtn.title = 'Haz clic de nuevo para borrar todo';
+
+        deleteConfirmTimeout = setTimeout(() => {
+          resetClearState();
+        }, 3500); // 3.5 segundos para confirmar
+      }
+    });
+
+    // Si hace clic fuera del botón, cancela la confirmación
+    document.addEventListener('click', (e) => {
+      if (!clearBtn.contains(e.target) && clearBtn.classList.contains('btn-confirm-delete')) {
+        resetClearState();
+      }
     });
   }
 
