@@ -1,28 +1,18 @@
 (function () {
-  console.log('%c[AI Studio Interceptor] 🚀 Inicializado (Soporte Dual: XHR + Fetch)', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
-
-  const PROTO_FINISH_REASONS = {
-    1: 'STOP',
-    2: 'MAX_TOKENS',
-    3: 'SAFETY',
-    4: 'RECITATION',
-    5: 'OTHER',
-    6: 'BLOCKLIST',
-    7: 'PROHIBITED_CONTENT',
-    8: 'SPII'
-  };
+  console.log('%c[AI Studio Interceptor] 🚀 Inicializado (Filtros Precisos)', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
 
   function isTargetUrl(url) {
     if (!url || typeof url !== 'string') return false;
+    // Interceptar estrictamente la generación de contenido (no conteos de tokens ni metadatos)
     return (
       url.includes('MakerSuiteService/GenerateContent') ||
       url.includes('GenerateContent') ||
-      url.includes('alkalimakersuite')
+      url.includes('streamGenerateContent')
     );
   }
 
   // ==========================================
-  // 1. HOOK PARA XMLHTTPREQUEST (XHR) - PRINCIPAL
+  // 1. HOOK PARA XMLHTTPREQUEST (XHR)
   // ==========================================
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -35,42 +25,32 @@
 
   XMLHttpRequest.prototype.send = function (...args) {
     if (this._url && isTargetUrl(this._url)) {
-      console.log('%c[XHR DETECTADO] 🎯 Petición GenerateContent iniciada:', 'color: #81c995; font-weight: bold;', this._url);
-      const requestId = 'xhr_' + Date.now();
+      const requestId = 'req_' + Date.now();
+      let started = false;
 
-      dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
-
-      const handleProgress = () => {
+      const handleProgress = (isComplete = false) => {
         try {
           if (this.responseText) {
-            parseAndExtract(this.responseText, requestId, false);
+            if (!started) {
+              dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
+              started = true;
+            }
+            parseAndExtract(this.responseText, requestId, isComplete);
           }
         } catch (e) {
-          console.error('[XHR Interceptor] Error procesando texto en streaming:', e);
+          console.error('[Interceptor] Error en streaming XHR:', e);
         }
       };
 
-      this.addEventListener('progress', handleProgress);
-
-      this.addEventListener('readystatechange', () => {
-        if (this.readyState === 3) {
-          handleProgress();
-        } else if (this.readyState === 4) {
-          console.log('%c[XHR FINALIZADO] ✅ Generación completa recibida', 'color: #81c995; font-weight: bold;');
-          try {
-            parseAndExtract(this.responseText, requestId, true);
-          } catch (e) {
-            console.error('[XHR Interceptor] Error en estado final:', e);
-          }
-        }
-      });
+      this.addEventListener('progress', () => handleProgress(false));
+      this.addEventListener('load', () => handleProgress(true));
     }
 
     return originalSend.apply(this, args);
   };
 
   // ==========================================
-  // 2. HOOK PARA FETCH (RESPALDO)
+  // 2. HOOK PARA FETCH
   // ==========================================
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
@@ -86,8 +66,7 @@
     const response = await Reflect.apply(originalFetch, window, args);
 
     if (url && isTargetUrl(url)) {
-      console.log('%c[FETCH DETECTADO] 🎯 Petición GenerateContent iniciada:', 'color: #81c995; font-weight: bold;', url);
-      const requestId = 'fetch_' + Date.now();
+      const requestId = 'req_' + Date.now();
       attachPassiveStreamSpy(response, requestId);
     }
 
@@ -97,8 +76,7 @@
   function attachPassiveStreamSpy(response, requestId) {
     if (!response?.body?.getReader) return;
 
-    dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
-
+    let started = false;
     const originalGetReader = response.body.getReader.bind(response.body);
     const decoder = new TextDecoder('utf-8');
     let fullRawText = '';
@@ -110,6 +88,11 @@
       reader.read = async function () {
         const result = await originalRead();
         try {
+          if (!started) {
+            dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
+            started = true;
+          }
+
           if (!result.done && result.value) {
             fullRawText += decoder.decode(result.value, { stream: true });
             parseAndExtract(fullRawText, requestId, false);
@@ -125,10 +108,10 @@
   }
 
   // ==========================================
-  // 3. PARSER Y EXTRACTOR DE CONTENIDO
+  // 3. PARSER Y EXTRACTOR DE CONTENIDO SEGURO
   // ==========================================
   function parseAndExtract(rawText, requestId, isComplete) {
-    if (!rawText) return;
+    if (!rawText || rawText.trim().length === 0) return;
 
     let accumulatedText = '';
     let thoughtsText = '';
@@ -146,22 +129,15 @@
           } else {
             accumulatedText += text;
           }
-        }, (reasonCode, isSafety) => {
-          finishReason = reasonCode;
-          if (isSafety) isBlocked = true;
+        }, (reason, safetyFlag) => {
+          finishReason = reason;
+          if (safetyFlag) isBlocked = true;
         });
-      } catch (e) {
-        // Bloque JSON parcial
-      }
+      } catch (e) {}
     }
 
-    if (isBlocked && finishReason === 'STOP') {
-      finishReason = 'SAFETY';
-    }
-
-    if (accumulatedText.length > 0) {
-      console.log(`%c[CAPTURA] 📝 ${accumulatedText.length} caracteres extraídos | Estado: ${finishReason}`, 'color: #ff9800;');
-    }
+    // Si no hay texto capturado aún y no es final, no inundar el panel
+    if (!accumulatedText && !thoughtsText && !isBlocked) return;
 
     dispatchAppEvent(isComplete ? 'stream-complete' : 'stream-progress', {
       requestId,
@@ -200,9 +176,13 @@
       if (node.text && typeof node.text === 'string') {
         onTextFound(node.text, !!node.thought);
       }
-      if (node.finishReason) {
-        const isSafe = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(node.finishReason);
-        onFinishReason(node.finishReason, isSafe);
+      if (node.finishReason && typeof node.finishReason === 'string') {
+        const isSafety = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(node.finishReason);
+        onFinishReason(node.finishReason, isSafety);
+      }
+      if (Array.isArray(node.safetyRatings)) {
+        const hasBlocked = node.safetyRatings.some(r => r.blocked || r.probability === 'HIGH');
+        if (hasBlocked) onFinishReason('SAFETY', true);
       }
       for (const key in node) {
         extractFromJspb(node[key], onTextFound, onFinishReason);
@@ -211,19 +191,28 @@
     }
 
     if (Array.isArray(node)) {
+      // Detección de texto JSPB: [null|number, "texto", ...]
       if (node.length >= 2 && typeof node[1] === 'string' && (node[0] === null || typeof node[0] === 'number')) {
         const textCandidate = node[1];
-        if (textCandidate.length > 0 && !textCandidate.startsWith('!FBel') && !textCandidate.startsWith('CAES')) {
+        if (
+          textCandidate.length > 0 &&
+          !textCandidate.startsWith('!FBel') &&
+          !textCandidate.startsWith('CAES') &&
+          !textCandidate.startsWith('generic::')
+        ) {
           const isThought = node[2] === true || node[3] === true;
           onTextFound(textCandidate, isThought);
         }
       }
 
+      // Strings explícitos de finishReason (evitamos números arbitrarios)
       for (const item of node) {
-        if (typeof item === 'number' && PROTO_FINISH_REASONS[item]) {
-          onFinishReason(PROTO_FINISH_REASONS[item], [3, 6, 7, 8].includes(item));
-        } else if (typeof item === 'string' && ['SAFETY', 'PROHIBITED_CONTENT', 'STOP', 'MAX_TOKENS'].includes(item)) {
-          onFinishReason(item, item !== 'STOP' && item !== 'MAX_TOKENS');
+        if (typeof item === 'string') {
+          if (['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(item)) {
+            onFinishReason(item, true);
+          } else if (['STOP', 'MAX_TOKENS', 'RECITATION'].includes(item)) {
+            onFinishReason(item, false);
+          }
         }
       }
 

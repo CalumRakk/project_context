@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "AI Studio Safety & Stream Interceptor",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Intercepta respuestas de AI Studio, rescata texto y almacena historial temporal en memoria.",
     "permissions": [
         "storage"
