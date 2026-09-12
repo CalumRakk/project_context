@@ -297,6 +297,22 @@ class SnapshotManager:
                 f"CHAT_TRANSLATION_DONE: {translated_chunks_count} referencias de archivos actualizadas en los chunks del chat."
             )
 
+            # Forzar explícitamente que el Chunk de contexto del chat sea el ID del contexto restaurado
+            context_target_id = None
+            for non_chat in non_chat_assets:
+                if non_chat.role == "context":
+                    context_target_id = id_map.get(non_chat.file_id)
+                    break
+
+            if context_target_id:
+                for chunk in chat_model.chunkedPrompt.chunks:
+                    if chunk.is_document or hasattr(chunk, "driveDocument"):
+                        chunk.file_id = context_target_id
+                        logger.info(
+                            f"CHAT_CONTEXT_BOUND: Vinculado ChunkDocument al context_target_id='{context_target_id}'"
+                        )
+                        break
+
             translated_content = chat_model.model_dump_json(
                 exclude_none=True, exclude_unset=True
             ).encode("utf-8")
