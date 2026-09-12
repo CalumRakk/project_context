@@ -1,6 +1,6 @@
 /*
    1. BOTÓN FLOTANTE (BADGE)
-  */
+*/
 #ai-interceptor-badge {
   position: fixed;
   bottom: 24px;
@@ -49,13 +49,13 @@
 
 /*
    2. PANEL LATERAL (DRAWER)
-  */
+*/
 #ai-interceptor-drawer {
   position: fixed;
   top: 0;
   right: 0;
-  width: 480px;
-  max-width: 90vw;
+  width: 520px;
+  max-width: 92vw;
   height: 100vh;
   background: #131314;
   border-left: 1px solid #2d2f31;
@@ -81,21 +81,20 @@
 }
 
 .drawer-title span {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   display: block;
 }
 
 .drawer-title small {
   font-size: 11px;
-  color: #8e918f;
+  color: #8ab4f8;
 }
 
-/* Acciones del Encabezado */
 .drawer-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .action-divider {
@@ -115,7 +114,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.2s;
 }
 
 .drawer-actions button:hover {
@@ -129,65 +128,67 @@
   border-radius: 50%;
 }
 
-#ai-interceptor-close:hover {
-  background: #3c4043;
-  color: #fff;
-}
-
-/* Estado de Confirmación de Borrado (Animado) */
 #ai-interceptor-clear.btn-confirm-delete {
   background: #4d1c1c;
   border-color: #f28b82;
   color: #fce8e6;
   font-weight: 600;
-  padding: 6px 12px;
   animation: delete-pulse 1.2s infinite alternate ease-in-out;
 }
 
-#ai-interceptor-clear.btn-confirm-delete:hover {
-  background: #6e2424;
-  border-color: #f6aea9;
-}
-
-/* Contenedor del Historial */
 .drawer-content {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .drawer-empty {
   text-align: center;
   color: #8e918f;
-  margin-top: 40px;
+  margin-top: 50px;
   font-size: 13px;
 }
 
 /*
-   3. ELEMENTOS DEL HISTORIAL (ITEMS)
-  */
-.history-item {
+   3. TARJETAS DE PROMPT & INTENTOS (CARDS)
+*/
+.prompt-card {
   background: #1e1f20;
   border: 1px solid #2d2f31;
   border-radius: 8px;
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.history-item.item-blocked {
+.prompt-card.item-blocked {
   border-color: #f28b82;
   background: #251818;
 }
 
-.item-meta {
+.prompt-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.prompt-turn-tag {
+  font-size: 11px;
+  font-weight: bold;
+  background: #2d2f31;
+  color: #8ab4f8;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.prompt-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
 }
 
@@ -199,6 +200,7 @@
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: bold;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -206,7 +208,68 @@
 .status-blocked { background: #4d1c1c; color: #f28b82; }
 .status-generating { background: #182f4d; color: #8ab4f8; }
 
-.item-body pre {
+/* Caja del Prompt */
+.prompt-box {
+  background: #18191a;
+  border-left: 3px solid #8ab4f8;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.prompt-box strong {
+  display: block;
+  font-size: 11px;
+  color: #8ab4f8;
+  margin-bottom: 2px;
+}
+
+.prompt-box p {
+  margin: 0;
+  color: #e3e3e3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Selector de Versiones (v1, v2...) */
+.attempts-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #141516;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.attempts-label {
+  font-size: 11px;
+  color: #8e918f;
+}
+
+.attempt-tab {
+  background: #282a2c;
+  color: #c4c7c5;
+  border: 1px solid #3c4043;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.attempt-tab.active {
+  background: #8ab4f8;
+  color: #131314;
+  font-weight: bold;
+  border-color: #8ab4f8;
+}
+
+.attempt-tab.blocked {
+  border-color: #f28b82;
+}
+
+/* Cuerpo de la Respuesta */
+.response-body pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -220,6 +283,7 @@
   color: #c4c7c5;
 }
 
+/* Pensamiento (Thoughts) */
 .item-thoughts {
   font-size: 11px;
   color: #8ab4f8;
@@ -235,7 +299,8 @@
   overflow-y: auto;
 }
 
-.item-footer {
+/* Pie de Tarjeta */
+.prompt-card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -247,24 +312,29 @@
   color: #8e918f;
 }
 
-.copy-btn {
+.card-footer-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.card-footer-buttons button {
   background: #282a2c;
   color: #e3e3e3;
   border: 1px solid #3c4043;
   border-radius: 4px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 11px;
   cursor: pointer;
   transition: background 0.2s;
 }
 
-.copy-btn:hover {
+.card-footer-buttons button:hover {
   background: #3c4043;
 }
 
 /*
-   4. TOAST DE ALERTA
-  */
+   4. TOAST DE ALERTA & ANIMACIONES
+*/
 #ai-interceptor-toast {
   position: fixed;
   bottom: 80px;
@@ -315,9 +385,6 @@
   font-size: 11px;
 }
 
-/*
-   5. ANIMACIONES
-  */
 @keyframes pulse-red {
   0% { box-shadow: 0 0 0 0 rgba(242, 139, 130, 0.4); }
   70% { box-shadow: 0 0 0 10px rgba(242, 139, 130, 0); }
@@ -325,12 +392,6 @@
 }
 
 @keyframes delete-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(242, 139, 130, 0.4);
-    transform: scale(0.98);
-  }
-  100% {
-    box-shadow: 0 0 10px rgba(242, 139, 130, 0.6);
-    transform: scale(1.02);
-  }
+  0% { transform: scale(0.98); }
+  100% { transform: scale(1.02); }
 }
