@@ -10,11 +10,13 @@
     );
   }
 
+  // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
   function getActiveChatId() {
     const path = window.location.pathname;
     const parts = path.split('/').filter(Boolean);
-    if (parts.length >= 2 && parts[0] === 'prompts') {
-      return parts[1];
+    const promptIdx = parts.findIndex(p => p === 'prompts' || p === 'prompt');
+    if (promptIdx !== -1 && parts[promptIdx + 1]) {
+      return parts[promptIdx + 1];
     }
     return 'new_chat';
   }
@@ -102,13 +104,14 @@
       this.addEventListener('progress', () => handleProgress(false));
       this.addEventListener('load', () => handleProgress(true));
       this.addEventListener('error', () => handleProgress(true));
+      this.addEventListener('abort', () => handleProgress(true));
     }
 
     return originalSend.apply(this, arguments);
   };
 
   // ==========================================
-  // 2. HOOK PARA FETCH (RESPALDO)
+  // 2. HOOK PARA FETCH (RESPALDO Y STREAMING)
   // ==========================================
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
@@ -149,8 +152,33 @@
       const reader = originalGetReader(...readerArgs);
       const originalRead = reader.read.bind(reader);
 
+      // Captura si el cliente o el filtro cancelan el stream deliberadamente
+      const originalCancel = reader.cancel ? reader.cancel.bind(reader) : null;
+      if (originalCancel) {
+        reader.cancel = async function (...cancelArgs) {
+          try {
+            if (fullRawText) {
+              parseAndExtract(fullRawText, requestId, meta, true);
+            }
+          } catch (e) {}
+          return originalCancel(...cancelArgs);
+        };
+      }
+
       reader.read = async function () {
-        const result = await originalRead();
+        let result;
+        try {
+          result = await originalRead();
+        } catch (streamErr) {
+          // Si el stream es abortado con un AbortError (típico de filtros de seguridad)
+          try {
+            if (fullRawText) {
+              parseAndExtract(fullRawText, requestId, meta, true);
+            }
+          } catch (e) {}
+          throw streamErr;
+        }
+
         try {
           if (!started) {
             dispatchAppEvent('stream-start', {
@@ -170,6 +198,7 @@
             parseAndExtract(fullRawText, requestId, meta, true);
           }
         } catch (err) {}
+
         return result;
       };
 

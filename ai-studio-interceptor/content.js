@@ -1,15 +1,19 @@
 (function () {
   let records = [];
+  let isStorageLoaded = false;
   let currentChatId = getActiveChatId();
   let isPanelOpen = false;
   let selectedAttempts = {};
   let deleteConfirmTimeout = null;
+  let saveDebounceTimeout = null;
 
+  // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
   function getActiveChatId() {
     const path = window.location.pathname;
     const parts = path.split('/').filter(Boolean);
-    if (parts.length >= 2 && parts[0] === 'prompts') {
-      return parts[1];
+    const promptIdx = parts.findIndex(p => p === 'prompts' || p === 'prompt');
+    if (promptIdx !== -1 && parts[promptIdx + 1]) {
+      return parts[promptIdx + 1];
     }
     return 'new_chat';
   }
@@ -27,10 +31,12 @@
     return `${chatId}_t${turnIndex}_${simpleHash(promptText)}`;
   }
 
+  // Carga inmediata de storage al arrancar la extensión (no espera al DOM)
   async function loadStorage() {
     try {
       const data = await chrome.storage.local.get('ai_vault_records');
       records = data.ai_vault_records || [];
+      isStorageLoaded = true;
       updateBadge();
       if (isPanelOpen) renderPromptList();
     } catch (e) {
@@ -38,7 +44,12 @@
     }
   }
 
+  // Persistencia segura: nunca sobrescribe si no se ha cargado previamente
   async function persistStorage() {
+    if (!isStorageLoaded) {
+      console.warn('[Vault] Persistencia bloqueada: el almacenamiento aún no se ha cargado.');
+      return;
+    }
     try {
       await chrome.storage.local.set({ ai_vault_records: records });
       updateBadge();
@@ -47,6 +58,17 @@
     }
   }
 
+  // Guarda de forma continua durante el streaming sin saturar el disco
+  function debouncedPersistStorage(delay = 400) {
+    if (saveDebounceTimeout) clearTimeout(saveDebounceTimeout);
+    saveDebounceTimeout = setTimeout(() => {
+      persistStorage();
+    }, delay);
+  }
+
+  // Iniciar la carga de almacenamiento de inmediato
+  loadStorage();
+
   // Monitor de cambio de URL en SPA
   setInterval(() => {
     const newChatId = getActiveChatId();
@@ -54,15 +76,17 @@
       const oldChatId = currentChatId;
       currentChatId = newChatId;
 
-      // Migrar registros de new_chat al nuevo ID permanente de Drive
-      if (oldChatId === 'new_chat' && newChatId !== 'new_chat') {
+      // Migrar registros de new_chat al nuevo ID permanente de Drive solo si el storage ya cargó
+      if (oldChatId === 'new_chat' && newChatId !== 'new_chat' && isStorageLoaded) {
+        let modified = false;
         records.forEach(r => {
           if (r.chatId === 'new_chat') {
             r.chatId = newChatId;
             r.key = getPromptKey(newChatId, r.turnIndex, r.promptText);
+            modified = true;
           }
         });
-        persistStorage();
+        if (modified) persistStorage();
       }
 
       updateChatHeader();
@@ -124,6 +148,7 @@
     if (type === 'stream-start') {
       promptRecord.updatedAt = payload.timestamp;
       selectedAttempts[promptRecord.key] = promptRecord.attempts.length - 1;
+      debouncedPersistStorage(200); // Guarda de inmediato al iniciar
       updateBadge();
       if (isPanelOpen) renderPromptList();
     } 
@@ -135,10 +160,14 @@
       promptRecord.updatedAt = payload.timestamp;
 
       if (type === 'stream-complete') {
-        persistStorage();
+        if (saveDebounceTimeout) clearTimeout(saveDebounceTimeout);
+        persistStorage(); // Guardado síncrono al terminar
         if (payload.isBlocked) {
           showBlockedToast(payload);
         }
+      } else {
+        // En progreso: guardar con debounce para asegurar los datos si se recarga la pestaña
+        debouncedPersistStorage(500);
       }
 
       updateBadge();
@@ -192,7 +221,8 @@
     document.getElementById('ai-interceptor-export').addEventListener('click', exportChatToMarkdown);
     
     setupSecureClearButton();
-    loadStorage();
+    updateChatHeader();
+    updateBadge();
   }
 
   function setupSecureClearButton() {
