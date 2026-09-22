@@ -1,3 +1,4 @@
+import json
 import logging
 import shlex
 import sys
@@ -31,6 +32,31 @@ def create_interactive_completer(
         expanduser=True, get_paths=lambda: [str(project_path)]
     )
     profile_completer = WordCompleter(profiles)
+
+    # --- Autocompletado dinámico de alias de exclusión ---
+    def get_saved_aliases() -> list[str]:
+        try:
+            config_path = project_path / ".project_context" / "context.json"
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                return list(data.get("exclusion_aliases", {}).keys())
+        except Exception:
+            pass
+        return []
+
+    alias_name_completer = WordCompleter(get_saved_aliases)
+
+    alias_subcompletions = {
+        "save": alias_name_completer,
+        "apply": alias_name_completer,
+        "load": alias_name_completer,
+        "use": alias_name_completer,
+        "remove": alias_name_completer,
+        "rm": alias_name_completer,
+        "delete": alias_name_completer,
+        "list": None,
+        "ls": None,
+    }
 
     nested_dict = {}
 
@@ -76,6 +102,7 @@ def create_interactive_completer(
         else:
             nested_dict[primary_name] = cmd_branch if cmd_branch else None
 
+    # Mapeo de subcomandos para context / ctx
     context_completions = {
         "set": project_path_completer,
         "add": project_path_completer,
@@ -83,6 +110,7 @@ def create_interactive_completer(
         "rm": project_path_completer,
         "exclude": project_path_completer,
         "unexclude": None,
+        "alias": alias_subcompletions,
         "link": None,
         "unlink": None,
         "status": None,

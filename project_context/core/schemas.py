@@ -220,6 +220,7 @@ class ContextConfig(BaseModel):
     folders: List[str] = Field(default_factory=lambda: ["."])
     exclusions: List[str] = Field(default_factory=list)
     external_folders: Dict[str, str] = Field(default_factory=dict)
+    exclusion_aliases: Dict[str, List[str]] = Field(default_factory=dict)
 
     @property
     def is_root_focus(self) -> bool:
@@ -227,11 +228,15 @@ class ContextConfig(BaseModel):
         return self.folders == ["."] and len(self.files) == 0
 
     def reset_to_default(self) -> None:
-        """Restablece la configuración al estado limpio inicial."""
+        """Restablece la configuración activa al estado limpio inicial,
+
+        preservando el catálogo de alias guardados por el usuario.
+        """
         self.folders = ["."]
         self.files = []
         self.exclusions = []
         self.external_folders = {}
+        # NOTA: self.exclusion_aliases se conserva deliberadamente
 
 
 class ProfileConfig(BaseModel):

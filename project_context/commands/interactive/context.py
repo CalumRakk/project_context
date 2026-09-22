@@ -91,6 +91,16 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             for exc in config.exclusions:
                 table.add_row("Exclusiones Activas", exc)
 
+        # Alias guardados (Catálogo de presets)
+        if config.exclusion_aliases:
+            aliases_summary = ", ".join(
+                f"[cyan]{name}[/] [dim]({len(pats)} reglas)[/]"
+                for name, pats in sorted(config.exclusion_aliases.items())
+            )
+            table.add_row("Alias Guardados", aliases_summary)
+        else:
+            table.add_row("Alias Guardados", "[dim]Ninguno[/]")
+
         UI.print("", indent=False)
         console_rich.print(table)
         UI.print("", indent=False)
@@ -413,6 +423,167 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             UI.warn(
                 f"No existe ningún paquete externo vinculado con el alias '{alias}'."
             )
+    # CATÁLOGO DE EXCLUSIONES: ALIAS
+
+    elif action == "alias":
+        subaction = args.get_arg(1)
+        if not subaction:
+            subaction = "list"
+
+        subaction = subaction.lower()
+
+        # --- GUARDAR ALIAS ---
+        if subaction == "save":
+            alias_name = args.get_arg(2)
+            if not alias_name:
+                UI.error("Uso: context alias save <nombre_alias> [--merge]")
+                return
+
+            alias_name = alias_name.strip()
+            if not config.exclusions:
+                UI.warn(
+                    "No hay exclusiones activas actualmente para guardar en un alias."
+                )
+                UI.tip(
+                    "Usa 'context exclude <ruta_o_patron>' para definir exclusiones primero."
+                )
+                return
+
+            is_merge = args.has_flag("--merge") or any(
+                a.lower() in ("--merge", "-m") for a in args.args
+            )
+            already_exists = alias_name in config.exclusion_aliases
+
+            if already_exists and is_merge:
+                # Fusión: sumamos las exclusiones activas al alias existente sin duplicados
+                existing_patterns = config.exclusion_aliases[alias_name]
+                existing_set = set(existing_patterns)
+                added = 0
+                for pat in config.exclusions:
+                    if pat not in existing_set:
+                        existing_patterns.append(pat)
+                        existing_set.add(pat)
+                        added += 1
+
+                project_context.save_context_config(config)
+                UI.success(
+                    f"Alias '{alias_name}' fusionado ({added} nuevos patrones añadidos al alias. Total: {len(existing_patterns)})."
+                )
+            else:
+                config.exclusion_aliases[alias_name] = list(config.exclusions)
+                project_context.save_context_config(config)
+
+                count = len(config.exclusions)
+                if already_exists:
+                    UI.success(
+                        f"Alias '{alias_name}' actualizado y sobrescrito con éxito ({count} patrones)."
+                    )
+                    UI.tip(
+                        "Para fusionar con los patrones anteriores sin sobrescribir, usa:",
+                        commands=[f"context alias save {alias_name} --merge"],
+                    )
+                else:
+                    UI.success(
+                        f"Alias '{alias_name}' registrado exitosamente ({count} patrones)."
+                    )
+
+        # --- APLICAR ALIAS ---
+        elif subaction in ("apply", "load", "use"):
+            alias_name = args.get_arg(2)
+            if not alias_name:
+                UI.error("Uso: context alias apply <nombre_alias>")
+                if config.exclusion_aliases:
+                    avail = ", ".join(sorted(config.exclusion_aliases.keys()))
+                    UI.info(f"Alias disponibles: [cyan]{avail}[/]")
+                return
+
+            alias_name = alias_name.strip()
+            if alias_name not in config.exclusion_aliases:
+                UI.error(f"El alias '{alias_name}' no existe en el catálogo.")
+                if config.exclusion_aliases:
+                    avail = ", ".join(sorted(config.exclusion_aliases.keys()))
+                    UI.info(f"Alias disponibles: [cyan]{avail}[/]")
+                else:
+                    UI.tip(
+                        "Guarda tu primer alias usando:",
+                        commands=["context alias save <nombre>"],
+                    )
+                return
+
+            # Si el usuario intenta usar --merge en apply, le advertimos amablemente
+            if args.has_flag("--merge") or any(
+                a.lower() in ("--merge", "-m") for a in args.args
+            ):
+                UI.warn(
+                    "La bandera '--merge' solo aplica al guardar: `context alias save <nombre> --merge`.\n"
+                    "  Al aplicar un alias se reemplazan las exclusiones activas por defecto."
+                )
+
+            alias_patterns = config.exclusion_aliases[alias_name]
+            config.exclusions = list(alias_patterns)
+            project_context.save_context_config(config)
+
+            UI.success(
+                f"Alias '{alias_name}' aplicado ({len(alias_patterns)} patrones establecidos como exclusiones activas)."
+            )
+            UI.info(
+                "Escribe [bold yellow]update[/] para sincronizar este contexto con Google Drive."
+            )
+
+        # --- LISTAR ALIAS ---
+        elif subaction in ("list", "ls"):
+            if not config.exclusion_aliases:
+                UI.info("No hay ningún alias de exclusión guardado actualmente.")
+                UI.tip(
+                    "Puedes guardar las exclusiones activas en un alias con:",
+                    commands=["context alias save <nombre>"],
+                )
+                return
+
+            table = Table(
+                title="[bold cyan]Catálogo de Alias de Exclusiones[/]",
+                show_header=True,
+                header_style="bold magenta",
+                box=None,
+            )
+            table.add_column("Alias", style="bold green", width=22)
+            table.add_column("Reglas", style="dim cyan", justify="right", width=8)
+            table.add_column("Patrones asociados", style="white")
+
+            for name, patterns in sorted(config.exclusion_aliases.items()):
+                patterns_str = ", ".join(patterns) if patterns else "[dim](vacío)[/]"
+                table.add_row(name, str(len(patterns)), patterns_str)
+
+            UI.print("", indent=False)
+            console_rich.print(table)
+            UI.print("", indent=False)
+            UI.tip(
+                "Para aplicar un alias ejecuta:",
+                commands=[
+                    f"context alias apply {next(iter(sorted(config.exclusion_aliases)))}"
+                ],
+            )
+
+        # --- ELIMINAR ALIAS ---
+        elif subaction in ("remove", "rm", "delete"):
+            alias_name = args.get_arg(2)
+            if not alias_name:
+                UI.error("Uso: context alias remove <nombre_alias>")
+                return
+
+            alias_name = alias_name.strip()
+            if alias_name in config.exclusion_aliases:
+                del config.exclusion_aliases[alias_name]
+                project_context.save_context_config(config)
+                UI.success(f"Alias '{alias_name}' eliminado del catálogo.")
+            else:
+                UI.warn(f"El alias '{alias_name}' no existe en el catálogo.")
+
+        else:
+            UI.error(
+                f"Subacción '{subaction}' no reconocida.\n"
+                "Opciones válidas: save, apply, list (ls), remove (rm)."
+            )
 
     # RESTABLECER Y VISTA PREVIA: RESET / TREE
 
@@ -443,6 +614,7 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             f"Acción '{action}' no reconocida. Opciones válidas:\n"
             "  • Enfoque: set, add, remove (rm)\n"
             "  • Filtros: exclude, unexclude\n"
+            "  • Alias: alias (save, apply, list, remove)\n"
             "  • Externos: link, unlink\n"
             "  • Control: status, tree, reset (clear)"
         )
