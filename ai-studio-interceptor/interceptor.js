@@ -64,9 +64,9 @@
     };
   }
 
-  // ==========================================
+  
   // 1. HOOK PARA XMLHTTPREQUEST (USADO POR AI STUDIO)
-  // ==========================================
+  
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
 
@@ -110,9 +110,9 @@
     return originalSend.apply(this, arguments);
   };
 
-  // ==========================================
+  
   // 2. HOOK PARA FETCH (RESPALDO Y STREAMING)
-  // ==========================================
+  
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     let url = '';
@@ -206,9 +206,9 @@
     };
   }
 
-  // ==========================================
+  
   // 3. PARSER Y DETECTOR DE RESPUESTAS
-  // ==========================================
+  
   function parseAndExtract(rawText, requestId, meta, isComplete) {
     if (!rawText || rawText.trim().length === 0) return;
 

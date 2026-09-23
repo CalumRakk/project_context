@@ -1,4 +1,113 @@
 /*
+   Estilos para el botón de eliminar versión individual
+*/
+.card-footer-buttons {
+  flex-wrap: wrap;
+}
+
+.card-footer-buttons button.delete-attempt-btn {
+  background: #251818;
+  color: #f28b82;
+  border-color: #4d2828;
+  transition: all 0.2s ease;
+}
+
+.card-footer-buttons button.delete-attempt-btn:hover {
+  background: #3c1e1e;
+  border-color: #f28b82;
+  color: #fce8e6;
+}
+
+.card-footer-buttons button.delete-attempt-btn.btn-confirm-delete {
+  background: #5c1b1b;
+  border-color: #f28b82;
+  color: #ffffff;
+  font-weight: bold;
+  animation: delete-pulse 1.2s infinite alternate ease-in-out;
+}
+
+
+/*
+   Estilos para el modo de edición de respuesta
+*/
+.prompt-card.item-editing {
+  border-color: #8ab4f8;
+  box-shadow: 0 0 8px rgba(138, 180, 248, 0.2);
+}
+
+.response-edit-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.response-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 180px;
+  max-height: 420px;
+  background: #111213;
+  color: #f1f3f4;
+  border: 1px solid #8ab4f8;
+  border-radius: 4px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.response-edit-area:focus {
+  border-color: #a8c7fa;
+  box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.25);
+}
+
+.response-edit-hint {
+  font-size: 10px;
+  color: #8e918f;
+  text-align: right;
+}
+
+.response-edit-hint code {
+  background: #282a2c;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #a8c7fa;
+}
+
+/* Botones de acción de edición */
+.card-footer-buttons button.save-attempt-btn {
+  background: #133824;
+  color: #81c995;
+  border-color: #27623a;
+  font-weight: 600;
+}
+
+.card-footer-buttons button.save-attempt-btn:hover {
+  background: #1d4d32;
+  border-color: #81c995;
+  color: #e6f4ea;
+}
+
+.card-footer-buttons button.cancel-attempt-btn {
+  background: #282a2c;
+  color: #c4c7c5;
+}
+
+.card-footer-buttons button.cancel-attempt-btn:hover {
+  background: #3c4043;
+  color: #ffffff;
+}
+
+.card-footer-buttons button.edit-attempt-btn:hover {
+  background: #182f4d;
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+}
+
+/*
    1. BOTÓN FLOTANTE (BADGE)
 */
 #ai-interceptor-badge {

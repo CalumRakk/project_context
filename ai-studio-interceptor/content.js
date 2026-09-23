@@ -7,6 +7,29 @@
   let deleteConfirmTimeout = null;
   let saveDebounceTimeout = null;
 
+  // Estado para la confirmación de borrado de versión individual
+  let deleteAttemptConfirmTimeout = null;
+  let confirmingAttemptKey = null;
+  let confirmingAttemptIndex = null;
+
+  // Estado para la edición de versión individual
+  let editingAttemptKey = null;
+  let editingAttemptIndex = null;
+
+  function resetAttemptDeleteState() {
+    if (deleteAttemptConfirmTimeout) {
+      clearTimeout(deleteAttemptConfirmTimeout);
+      deleteAttemptConfirmTimeout = null;
+    }
+    confirmingAttemptKey = null;
+    confirmingAttemptIndex = null;
+  }
+
+  function resetAttemptEditState() {
+    editingAttemptKey = null;
+    editingAttemptIndex = null;
+  }
+
   // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
   function getActiveChatId() {
     const path = window.location.pathname;
@@ -31,7 +54,7 @@
     return `${chatId}_t${turnIndex}_${simpleHash(promptText)}`;
   }
 
-  // Carga inmediata de storage al arrancar la extensión (no espera al DOM)
+  // Carga inmediata de storage al arrancar la extensión
   async function loadStorage() {
     try {
       const data = await chrome.storage.local.get('ai_vault_records');
@@ -44,7 +67,7 @@
     }
   }
 
-  // Persistencia segura: nunca sobrescribe si no se ha cargado previamente
+  // Persistencia segura
   async function persistStorage() {
     if (!isStorageLoaded) {
       console.warn('[Vault] Persistencia bloqueada: el almacenamiento aún no se ha cargado.');
@@ -58,7 +81,6 @@
     }
   }
 
-  // Guarda de forma continua durante el streaming sin saturar el disco
   function debouncedPersistStorage(delay = 400) {
     if (saveDebounceTimeout) clearTimeout(saveDebounceTimeout);
     saveDebounceTimeout = setTimeout(() => {
@@ -66,7 +88,6 @@
     }, delay);
   }
 
-  // Iniciar la carga de almacenamiento de inmediato
   loadStorage();
 
   // Monitor de cambio de URL en SPA
@@ -76,7 +97,6 @@
       const oldChatId = currentChatId;
       currentChatId = newChatId;
 
-      // Migrar registros de new_chat al nuevo ID permanente de Drive solo si el storage ya cargó
       if (oldChatId === 'new_chat' && newChatId !== 'new_chat' && isStorageLoaded) {
         let modified = false;
         records.forEach(r => {
@@ -89,29 +109,28 @@
         if (modified) persistStorage();
       }
 
+      resetAttemptDeleteState();
+      resetAttemptEditState();
       updateChatHeader();
       updateBadge();
       if (isPanelOpen) renderPromptList();
     }
   }, 1000);
 
-  // ==========================================
+  
   // RECEPCIÓN DE MENSAJES DEL INTERCEPTOR
-  // ==========================================
+  
   window.addEventListener('__AI_STUDIO_INTERCEPT__', (event) => {
     const { type, payload } = event.detail;
     currentChatId = getActiveChatId();
 
-    // 1. Buscar si ya existe el registro asociado a esta petición exacta
     let promptRecord = records.find(r => r.attempts.some(a => a.id === payload.requestId));
 
-    // 2. Si no, buscar por clave de prompt
     const key = getPromptKey(payload.chatId || currentChatId, payload.turnIndex, payload.promptText);
     if (!promptRecord) {
       promptRecord = records.find(r => r.key === key);
     }
 
-    // 3. Crear el registro si es un inicio de stream o primera recepción
     if (!promptRecord) {
       promptRecord = {
         key,
@@ -125,13 +144,11 @@
       records.unshift(promptRecord);
     }
 
-    // Actualizar chatId por si cambió de new_chat a Drive ID durante el envío
     if (promptRecord.chatId === 'new_chat' && currentChatId !== 'new_chat') {
       promptRecord.chatId = currentChatId;
       promptRecord.key = getPromptKey(currentChatId, promptRecord.turnIndex, promptRecord.promptText);
     }
 
-    // Buscar o crear el intento (attempt)
     let attempt = promptRecord.attempts.find(a => a.id === payload.requestId);
     if (!attempt) {
       attempt = {
@@ -148,7 +165,7 @@
     if (type === 'stream-start') {
       promptRecord.updatedAt = payload.timestamp;
       selectedAttempts[promptRecord.key] = promptRecord.attempts.length - 1;
-      debouncedPersistStorage(200); // Guarda de inmediato al iniciar
+      debouncedPersistStorage(200);
       updateBadge();
       if (isPanelOpen) renderPromptList();
     } 
@@ -161,12 +178,11 @@
 
       if (type === 'stream-complete') {
         if (saveDebounceTimeout) clearTimeout(saveDebounceTimeout);
-        persistStorage(); // Guardado síncrono al terminar
+        persistStorage();
         if (payload.isBlocked) {
           showBlockedToast(payload);
         }
       } else {
-        // En progreso: guardar con debounce para asegurar los datos si se recarga la pestaña
         debouncedPersistStorage(500);
       }
 
@@ -175,9 +191,61 @@
     }
   });
 
-  // ==========================================
+  
+  // ELIMINACIÓN DE VERSIONES INDIVIDUALES
+  
+  function deleteAttempt(key, attemptIndex) {
+    const recordIndex = records.findIndex(r => r.key === key);
+    if (recordIndex === -1) return;
+
+    const record = records[recordIndex];
+    if (!record.attempts || attemptIndex < 0 || attemptIndex >= record.attempts.length) return;
+
+    if (editingAttemptKey === key && editingAttemptIndex === attemptIndex) {
+      resetAttemptEditState();
+    }
+
+    record.attempts.splice(attemptIndex, 1);
+
+    if (record.attempts.length === 0) {
+      records.splice(recordIndex, 1);
+      delete selectedAttempts[key];
+    } else {
+      const newCount = record.attempts.length;
+      let currentSelected = selectedAttempts[key] !== undefined ? selectedAttempts[key] : newCount;
+
+      if (currentSelected === attemptIndex) {
+        selectedAttempts[key] = Math.min(attemptIndex, newCount - 1);
+      } else if (currentSelected > attemptIndex) {
+        selectedAttempts[key] = currentSelected - 1;
+      } else {
+        selectedAttempts[key] = Math.min(currentSelected, newCount - 1);
+      }
+    }
+
+    persistStorage();
+    updateBadge();
+    renderPromptList();
+  }
+
+  
+  // GUARDAR EDICIÓN DE VERSIÓN
+  
+  function saveEditedAttempt(key, attemptIndex, newText) {
+    const record = records.find(r => r.key === key);
+    if (!record || !record.attempts || !record.attempts[attemptIndex]) return;
+
+    record.attempts[attemptIndex].text = newText;
+    record.updatedAt = Date.now();
+
+    resetAttemptEditState();
+    persistStorage();
+    renderPromptList();
+  }
+
+  
   // CONSTRUCCIÓN DE LA INTERFAZ
-  // ==========================================
+  
   function initUI() {
     if (document.getElementById('ai-interceptor-root')) return;
 
@@ -223,6 +291,14 @@
     setupSecureClearButton();
     updateChatHeader();
     updateBadge();
+
+    // Cancelar estado de confirmación de borrado al hacer clic fuera del botón
+    document.addEventListener('click', (e) => {
+      if (confirmingAttemptKey && !e.target.closest('.delete-attempt-btn')) {
+        resetAttemptDeleteState();
+        renderPromptList();
+      }
+    });
   }
 
   function setupSecureClearButton() {
@@ -247,6 +323,8 @@
 
       if (clearBtn.classList.contains('btn-confirm-delete')) {
         records = records.filter(r => r.chatId !== currentChatId);
+        resetAttemptEditState();
+        resetAttemptDeleteState();
         persistStorage();
         renderPromptList();
         resetClearState();
@@ -361,6 +439,7 @@
         timestamp: record.createdAt
       };
 
+      const isEditing = (editingAttemptKey === record.key && editingAttemptIndex === activeIndex);
       const time = new Date(currentAttempt.timestamp).toLocaleTimeString();
       const statusClass = currentAttempt.isBlocked ? 'status-blocked' : (currentAttempt.finishReason === 'STOP' ? 'status-ok' : 'status-generating');
       const textPreview = currentAttempt.text ? escapeHtml(currentAttempt.text) : '<em style="color:#888;">(Sin texto generado)</em>';
@@ -377,8 +456,37 @@
         </div>
       ` : '';
 
+      const isConfirming = confirmingAttemptKey === record.key && confirmingAttemptIndex === activeIndex;
+      const deleteBtnText = isConfirming ? '⚠️ ¿Confirmar?' : `🗑️ Eliminar v${activeIndex + 1}`;
+      const deleteBtnClass = isConfirming ? 'delete-attempt-btn btn-confirm-delete' : 'delete-attempt-btn';
+
+      // Cuerpo de la respuesta: área editable si está en edición, o pre normal si no
+      const responseHtml = isEditing ? `
+        <div class="response-edit-wrapper">
+          <textarea class="response-edit-area" data-key="${record.key}" data-index="${activeIndex}" placeholder="Escribe o edita la respuesta rescatada...">${escapeHtml(currentAttempt.text)}</textarea>
+          <div class="response-edit-hint">Atajo: <code>Ctrl + Enter</code> para guardar | <code>Esc</code> para cancelar</div>
+        </div>
+      ` : `
+        <div class="response-body">
+          <pre>${textPreview}</pre>
+        </div>
+      `;
+
+      // Botones dinámicos según el modo edición
+      const footerButtons = isEditing ? `
+        <button class="save-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">💾 Guardar</button>
+        <button class="cancel-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">✖️ Cancelar</button>
+      ` : `
+        <button class="edit-attempt-btn" data-key="${record.key}" data-index="${activeIndex}" title="Editar esta versión">✏️ Editar</button>
+        <button class="copy-prompt-btn" data-key="${record.key}">📋 Prompt</button>
+        <button class="copy-response-btn" data-key="${record.key}" data-index="${activeIndex}">📋 Respuesta</button>
+        <button class="${deleteBtnClass}" data-key="${record.key}" data-index="${activeIndex}" title="Eliminar esta versión">
+          ${deleteBtnText}
+        </button>
+      `;
+
       return `
-        <div class="prompt-card ${currentAttempt.isBlocked ? 'item-blocked' : ''}">
+        <div class="prompt-card ${currentAttempt.isBlocked ? 'item-blocked' : ''} ${isEditing ? 'item-editing' : ''}">
           <div class="prompt-card-header">
             <span class="prompt-turn-tag">Turno #${record.turnIndex}</span>
             <div class="prompt-header-actions">
@@ -394,24 +502,23 @@
 
           ${versionTabs}
           ${thoughtsPreview}
-
-          <div class="response-body">
-            <pre>${textPreview}</pre>
-          </div>
+          ${responseHtml}
 
           <div class="prompt-card-footer">
             <span class="char-count">${currentAttempt.text.length} chars rescatados</span>
             <div class="card-footer-buttons">
-              <button class="copy-prompt-btn" data-key="${record.key}">📋 Copiar Prompt</button>
-              <button class="copy-response-btn" data-key="${record.key}" data-index="${activeIndex}">📋 Copiar Respuesta</button>
+              ${footerButtons}
             </div>
           </div>
         </div>
       `;
     }).join('');
 
+    // Listener para cambiar de pestaña de versión
     listEl.querySelectorAll('.attempt-tab').forEach(btn => {
       btn.addEventListener('click', (e) => {
+        resetAttemptDeleteState();
+        resetAttemptEditState();
         const key = e.target.getAttribute('data-key');
         const index = parseInt(e.target.getAttribute('data-index'), 10);
         selectedAttempts[key] = index;
@@ -419,18 +526,73 @@
       });
     });
 
+    // Listener para entrar en modo edición
+    listEl.querySelectorAll('.edit-attempt-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        resetAttemptDeleteState();
+        editingAttemptKey = btn.getAttribute('data-key');
+        editingAttemptIndex = parseInt(btn.getAttribute('data-index'), 10);
+        renderPromptList();
+
+        // Poner foco al final del textarea
+        const textarea = listEl.querySelector(`.response-edit-area[data-key="${editingAttemptKey}"][data-index="${editingAttemptIndex}"]`);
+        if (textarea) {
+          textarea.focus();
+          textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        }
+      });
+    });
+
+    // Listener para guardar edición
+    listEl.querySelectorAll('.save-attempt-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-key');
+        const index = parseInt(btn.getAttribute('data-index'), 10);
+        const textarea = listEl.querySelector(`.response-edit-area[data-key="${key}"][data-index="${index}"]`);
+        if (textarea) {
+          saveEditedAttempt(key, index, textarea.value);
+        }
+      });
+    });
+
+    // Listener para cancelar edición
+    listEl.querySelectorAll('.cancel-attempt-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        resetAttemptEditState();
+        renderPromptList();
+      });
+    });
+
+    // Atajos de teclado en el textarea (Ctrl/Cmd + Enter para guardar, Esc para cancelar)
+    listEl.querySelectorAll('.response-edit-area').forEach(textarea => {
+      textarea.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault();
+          const key = textarea.getAttribute('data-key');
+          const index = parseInt(textarea.getAttribute('data-index'), 10);
+          saveEditedAttempt(key, index, textarea.value);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          resetAttemptEditState();
+          renderPromptList();
+        }
+      });
+    });
+
+    // Listener para copiar prompt
     listEl.querySelectorAll('.copy-prompt-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const key = e.target.getAttribute('data-key');
         const record = records.find(r => r.key === key);
         if (record) {
           navigator.clipboard.writeText(record.promptText).then(() => {
-            feedbackButton(e.target, '✅ Prompt Copiado');
+            feedbackButton(e.target, '✅ Copiado');
           });
         }
       });
     });
 
+    // Listener para copiar respuesta
     listEl.querySelectorAll('.copy-response-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const key = e.target.getAttribute('data-key');
@@ -439,8 +601,32 @@
         const attempt = record?.attempts[index];
         if (attempt && attempt.text) {
           navigator.clipboard.writeText(attempt.text).then(() => {
-            feedbackButton(e.target, '✅ Respuesta Copiada');
+            feedbackButton(e.target, '✅ Copiado');
           });
+        }
+      });
+    });
+
+    // Listener para eliminar intento individual (con confirmación de 2 pasos)
+    listEl.querySelectorAll('.delete-attempt-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.getAttribute('data-key');
+        const index = parseInt(btn.getAttribute('data-index'), 10);
+
+        if (confirmingAttemptKey === key && confirmingAttemptIndex === index) {
+          resetAttemptDeleteState();
+          deleteAttempt(key, index);
+        } else {
+          resetAttemptDeleteState();
+          confirmingAttemptKey = key;
+          confirmingAttemptIndex = index;
+          renderPromptList();
+
+          deleteAttemptConfirmTimeout = setTimeout(() => {
+            resetAttemptDeleteState();
+            renderPromptList();
+          }, 3500);
         }
       });
     });
