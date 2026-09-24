@@ -1,36 +1,33 @@
 (function () {
-  let records = [];
+  let captures = [];
+  let chatCounters = {}; // { [chatId]: number }
   let isStorageLoaded = false;
   let currentChatId = getActiveChatId();
   let isPanelOpen = false;
-  let selectedAttempts = {};
-  let deleteConfirmTimeout = null;
+
+  let deleteChatConfirmTimeout = null;
   let saveDebounceTimeout = null;
 
-  // Estado para búsqueda
+  // Estado de búsqueda
   let searchQuery = '';
 
-  // Estado para la confirmación de borrado de versión individual
-  let deleteAttemptConfirmTimeout = null;
-  let confirmingAttemptKey = null;
-  let confirmingAttemptIndex = null;
+  // Control de confirmación de eliminación por ID
+  let deleteCaptureConfirmTimeout = null;
+  let confirmingCaptureId = null;
 
-  // Estado para la edición de versión individual
-  let editingAttemptKey = null;
-  let editingAttemptIndex = null;
+  // Control de edición por ID
+  let editingCaptureId = null;
 
-  function resetAttemptDeleteState() {
-    if (deleteAttemptConfirmTimeout) {
-      clearTimeout(deleteAttemptConfirmTimeout);
-      deleteAttemptConfirmTimeout = null;
+  function resetCaptureDeleteState() {
+    if (deleteCaptureConfirmTimeout) {
+      clearTimeout(deleteCaptureConfirmTimeout);
+      deleteCaptureConfirmTimeout = null;
     }
-    confirmingAttemptKey = null;
-    confirmingAttemptIndex = null;
+    confirmingCaptureId = null;
   }
 
-  function resetAttemptEditState() {
-    editingAttemptKey = null;
-    editingAttemptIndex = null;
+  function resetCaptureEditState() {
+    editingCaptureId = null;
   }
 
   function resetSearch() {
@@ -46,7 +43,6 @@
     }
   }
 
-  // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
   function getActiveChatId() {
     const path = window.location.pathname;
     const parts = path.split('/').filter(Boolean);
@@ -57,37 +53,34 @@
     return 'new_chat';
   }
 
-  function simpleHash(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return Math.abs(hash).toString(36);
-  }
-
-  function getPromptKey(chatId, turnIndex, promptText) {
-    return `${chatId}_t${turnIndex}_${simpleHash(promptText)}`;
-  }
-
-  // ==========================================
+  
   // HELPERS DE BÚSQUEDA Y SANITIZACIÓN
-  // ==========================================
+  
   function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  // Filtra etiquetas de razonamiento/pensamiento incrustadas en el texto
+  function filterThoughts(text) {
+    if (!text) return '';
+    return text
+      .replace(/<thought>[\s\S]*?(?:<\/thought>|$)/gi, '')
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+      .trim();
+  }
+
   function countMatches(text, query) {
-    if (!text || !query) return 0;
-    const escaped = escapeRegExp(query);
-    const regex = new RegExp(escaped, 'gi');
-    const matches = text.match(regex);
+    const cleanText = filterThoughts(text);
+    if (!cleanText || !query) return 0;
+    const regex = new RegExp(escapeRegExp(query), 'gi');
+    const matches = cleanText.match(regex);
     return matches ? matches.length : 0;
   }
 
   function highlightText(text, query) {
-    if (!text) return '';
-    const safeText = escapeHtml(text);
+    const cleanText = filterThoughts(text);
+    if (!cleanText) return '';
+    const safeText = escapeHtml(cleanText);
     const trimmedQuery = (query || '').trim();
     if (!trimmedQuery) return safeText;
 
@@ -96,27 +89,66 @@
     return safeText.replace(regex, '<mark class="vault-highlight">$1</mark>');
   }
 
-  // Carga inmediata de storage al arrancar la extensión
+  function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  
+  // ALMACENAMIENTO Y MIGRACIÓN TRANSPARENTE
+  
   async function loadStorage() {
     try {
-      const data = await chrome.storage.local.get('ai_vault_records');
-      records = data.ai_vault_records || [];
+      const data = await chrome.storage.local.get(['ai_vault_captures', 'ai_vault_counters', 'ai_vault_records']);
+      
+      chatCounters = data.ai_vault_counters || {};
+
+      if (data.ai_vault_captures) {
+        captures = data.ai_vault_captures;
+      } else if (Array.isArray(data.ai_vault_records) && data.ai_vault_records.length > 0) {
+        console.log('[Vault] Migrando registros antiguos a formato de capturas planas...');
+        captures = [];
+        data.ai_vault_records.forEach(rec => {
+          const chatId = rec.chatId || 'new_chat';
+          if (Array.isArray(rec.attempts)) {
+            rec.attempts.forEach(att => {
+              chatCounters[chatId] = (chatCounters[chatId] || 0) + 1;
+              captures.push({
+                id: att.id || ('cap_' + att.timestamp + '_' + Math.random().toString(36).substring(2, 7)),
+                chatId: chatId,
+                version: chatCounters[chatId],
+                timestamp: att.timestamp || rec.createdAt || Date.now(),
+                text: att.text || '',
+                thoughts: att.thoughts || '',
+                finishReason: att.finishReason || 'STOP',
+                isBlocked: !!att.isBlocked
+              });
+            });
+          }
+        });
+        await chrome.storage.local.set({ ai_vault_captures: captures, ai_vault_counters: chatCounters });
+        await chrome.storage.local.remove('ai_vault_records');
+      } else {
+        captures = [];
+      }
+
       isStorageLoaded = true;
       updateBadge();
-      if (isPanelOpen) renderPromptList();
+      if (isPanelOpen) renderCaptureList();
     } catch (e) {
       console.error('[Vault] Error cargando storage:', e);
     }
   }
 
-  // Persistencia segura
   async function persistStorage() {
-    if (!isStorageLoaded) {
-      console.warn('[Vault] Persistencia bloqueada: el almacenamiento aún no se ha cargado.');
-      return;
-    }
+    if (!isStorageLoaded) return;
     try {
-      await chrome.storage.local.set({ ai_vault_records: records });
+      await chrome.storage.local.set({
+        ai_vault_captures: captures,
+        ai_vault_counters: chatCounters
+      });
       updateBadge();
     } catch (e) {
       console.error('[Vault] Error guardando storage:', e);
@@ -141,83 +173,76 @@
 
       if (oldChatId === 'new_chat' && newChatId !== 'new_chat' && isStorageLoaded) {
         let modified = false;
-        records.forEach(r => {
-          if (r.chatId === 'new_chat') {
-            r.chatId = newChatId;
-            r.key = getPromptKey(newChatId, r.turnIndex, r.promptText);
+        captures.forEach(c => {
+          if (c.chatId === 'new_chat') {
+            c.chatId = newChatId;
             modified = true;
           }
         });
+        if (chatCounters['new_chat']) {
+          chatCounters[newChatId] = Math.max(chatCounters[newChatId] || 0, chatCounters['new_chat']);
+          delete chatCounters['new_chat'];
+          modified = true;
+        }
         if (modified) persistStorage();
       }
 
-      resetAttemptDeleteState();
-      resetAttemptEditState();
+      resetCaptureDeleteState();
+      resetCaptureEditState();
       resetSearch();
       updateChatHeader();
       updateBadge();
-      if (isPanelOpen) renderPromptList();
+      if (isPanelOpen) renderCaptureList();
     }
   }, 1000);
 
-  // ==========================================
+  
   // RECEPCIÓN DE MENSAJES DEL INTERCEPTOR
-  // ==========================================
+  
   window.addEventListener('__AI_STUDIO_INTERCEPT__', (event) => {
     const { type, payload } = event.detail;
     currentChatId = getActiveChatId();
+    const effectiveChatId = payload.chatId || currentChatId;
 
-    let promptRecord = records.find(r => r.attempts.some(a => a.id === payload.requestId));
+    let capture = captures.find(c => c.id === payload.requestId);
 
-    const key = getPromptKey(payload.chatId || currentChatId, payload.turnIndex, payload.promptText);
-    if (!promptRecord) {
-      promptRecord = records.find(r => r.key === key);
-    }
+    if (!capture) {
+      chatCounters[effectiveChatId] = (chatCounters[effectiveChatId] || 0) + 1;
+      const nextVersion = chatCounters[effectiveChatId];
 
-    if (!promptRecord) {
-      promptRecord = {
-        key,
-        chatId: payload.chatId || currentChatId,
-        turnIndex: payload.turnIndex,
-        promptText: payload.promptText,
-        createdAt: payload.timestamp,
-        updatedAt: payload.timestamp,
-        attempts: []
-      };
-      records.unshift(promptRecord);
-    }
-
-    if (promptRecord.chatId === 'new_chat' && currentChatId !== 'new_chat') {
-      promptRecord.chatId = currentChatId;
-      promptRecord.key = getPromptKey(currentChatId, promptRecord.turnIndex, promptRecord.promptText);
-    }
-
-    let attempt = promptRecord.attempts.find(a => a.id === payload.requestId);
-    if (!attempt) {
-      attempt = {
+      capture = {
         id: payload.requestId,
+        chatId: effectiveChatId,
+        version: nextVersion,
         timestamp: payload.timestamp,
         text: '',
         thoughts: '',
         finishReason: 'GENERATING...',
         isBlocked: false
       };
-      promptRecord.attempts.push(attempt);
+      // Insertar al inicio de la lista global
+      captures.unshift(capture);
+    }
+
+    if (capture.chatId === 'new_chat' && currentChatId !== 'new_chat') {
+      capture.chatId = currentChatId;
     }
 
     if (type === 'stream-start') {
-      promptRecord.updatedAt = payload.timestamp;
-      selectedAttempts[promptRecord.key] = promptRecord.attempts.length - 1;
       debouncedPersistStorage(200);
       updateBadge();
-      if (isPanelOpen) renderPromptList();
-    } 
-    else if (type === 'stream-progress' || type === 'stream-complete') {
-      attempt.text = payload.accumulatedText || attempt.text;
-      attempt.thoughts = payload.thoughtsText || attempt.thoughts;
-      attempt.isBlocked = payload.isBlocked;
-      attempt.finishReason = payload.finishReason;
-      promptRecord.updatedAt = payload.timestamp;
+      if (isPanelOpen) {
+        renderCaptureList();
+        // Mantener el scroll arriba al empezar una nueva respuesta
+        const listEl = document.getElementById('ai-interceptor-list');
+        if (listEl) listEl.scrollTop = 0;
+      }
+    } else if (type === 'stream-progress' || type === 'stream-complete') {
+      capture.text = payload.accumulatedText || capture.text;
+      capture.thoughts = payload.thoughtsText || capture.thoughts;
+      capture.isBlocked = payload.isBlocked;
+      capture.finishReason = payload.finishReason;
+      capture.timestamp = payload.timestamp;
 
       if (type === 'stream-complete') {
         if (saveDebounceTimeout) clearTimeout(saveDebounceTimeout);
@@ -230,72 +255,62 @@
       }
 
       updateBadge();
-      if (isPanelOpen) renderPromptList();
+      if (isPanelOpen) renderCaptureList();
     }
   });
 
-  // ==========================================
-  // ELIMINACIÓN DE VERSIONES INDIVIDUALES
-  // ==========================================
-  function deleteAttempt(key, attemptIndex) {
-    const recordIndex = records.findIndex(r => r.key === key);
-    if (recordIndex === -1) return;
+  
+  // ACCIONES SOBRE CAPTURAS (POR ID ÚNICO)
+  
+  function deleteCapture(id) {
+    const index = captures.findIndex(c => c.id === id);
+    if (index === -1) return;
 
-    const record = records[recordIndex];
-    if (!record.attempts || attemptIndex < 0 || attemptIndex >= record.attempts.length) return;
-
-    if (editingAttemptKey === key && editingAttemptIndex === attemptIndex) {
-      resetAttemptEditState();
+    if (editingCaptureId === id) {
+      resetCaptureEditState();
     }
 
-    record.attempts.splice(attemptIndex, 1);
-
-    if (record.attempts.length === 0) {
-      records.splice(recordIndex, 1);
-      delete selectedAttempts[key];
-    } else {
-      const newCount = record.attempts.length;
-      let currentSelected = selectedAttempts[key] !== undefined ? selectedAttempts[key] : newCount;
-
-      if (currentSelected === attemptIndex) {
-        selectedAttempts[key] = Math.min(attemptIndex, newCount - 1);
-      } else if (currentSelected > attemptIndex) {
-        selectedAttempts[key] = currentSelected - 1;
-      } else {
-        selectedAttempts[key] = Math.min(currentSelected, newCount - 1);
-      }
-    }
+    captures.splice(index, 1);
 
     persistStorage();
     updateBadge();
-    renderPromptList();
+    renderCaptureList();
   }
 
-  // ==========================================
-  // GUARDAR EDICIÓN DE VERSIÓN
-  // ==========================================
-  function saveEditedAttempt(key, attemptIndex, newText) {
-    const record = records.find(r => r.key === key);
-    if (!record || !record.attempts || !record.attempts[attemptIndex]) return;
+  function saveEditedCapture(id, newText) {
+    const capture = captures.find(c => c.id === id);
+    if (!capture) return;
 
-    record.attempts[attemptIndex].text = newText;
-    record.updatedAt = Date.now();
+    capture.text = newText;
+    capture.timestamp = Date.now();
 
-    resetAttemptEditState();
+    resetCaptureEditState();
     persistStorage();
-    renderPromptList();
+    renderCaptureList();
   }
 
-  // ==========================================
+  // Devuelve las capturas del chat actual ordenadas: ÚLTIMA ARRIBA, MÁS VIEJA AL FINAL
+  function getActiveChatCaptures() {
+    return captures
+      .filter(c => c.chatId === currentChatId)
+      .sort((a, b) => {
+        if (b.version !== undefined && a.version !== undefined && b.version !== a.version) {
+          return b.version - a.version;
+        }
+        return (b.timestamp || 0) - (a.timestamp || 0);
+      });
+  }
+
+  
   // CONSTRUCCIÓN DE LA INTERFAZ
-  // ==========================================
+  
   function initUI() {
     if (document.getElementById('ai-interceptor-root')) return;
 
     const root = document.createElement('div');
     root.id = 'ai-interceptor-root';
     root.innerHTML = `
-      <button id="ai-interceptor-badge" title="Bóveda de Prompts y Respuestas">
+      <button id="ai-interceptor-badge" title="Bóveda de Respuestas">
         <span class="badge-icon">🛡️</span>
         <span class="badge-text">Vault</span>
         <span id="ai-interceptor-count">0</span>
@@ -304,12 +319,12 @@
       <div id="ai-interceptor-drawer" class="drawer-hidden">
         <div class="drawer-header">
           <div class="drawer-title">
-            <span>🛡️ Prompt & Response Vault</span>
+            <span>🛡️ Response Vault</span>
             <small id="vault-current-scope">Chat: new_chat</small>
           </div>
           <div class="drawer-actions">
-            <button id="ai-interceptor-export" title="Exportar chat a Markdown">📥</button>
-            <button id="ai-interceptor-clear" title="Limpiar este chat">
+            <button id="ai-interceptor-export" title="Exportar capturas a Markdown">📥</button>
+            <button id="ai-interceptor-clear" title="Limpiar capturas de este chat">
               <span class="clear-icon">🗑️</span>
               <span class="clear-text"></span>
             </button>
@@ -318,14 +333,13 @@
           </div>
         </div>
 
-        <!-- BARRA DE BÚSQUEDA PERSISTENTE -->
         <div class="drawer-search-container">
           <div class="search-input-wrapper">
             <span class="search-icon">🔍</span>
             <input 
               type="text" 
               id="vault-search-input" 
-              placeholder="Buscar en el texto generado..." 
+              placeholder="Buscar en el texto capturado..." 
               autocomplete="off" 
               spellcheck="false" 
             />
@@ -347,17 +361,16 @@
     document.getElementById('ai-interceptor-badge').addEventListener('click', toggleDrawer);
     document.getElementById('ai-interceptor-close').addEventListener('click', toggleDrawer);
     document.getElementById('ai-interceptor-export').addEventListener('click', exportChatToMarkdown);
-    
+
     setupSearchBar();
     setupSecureClearButton();
     updateChatHeader();
     updateBadge();
 
-    // Cancelar estado de confirmación de borrado al hacer clic fuera del botón
     document.addEventListener('click', (e) => {
-      if (confirmingAttemptKey && !e.target.closest('.delete-attempt-btn')) {
-        resetAttemptDeleteState();
-        renderPromptList();
+      if (confirmingCaptureId && !e.target.closest('.delete-capture-btn')) {
+        resetCaptureDeleteState();
+        renderCaptureList();
       }
     });
   }
@@ -370,19 +383,19 @@
     input.addEventListener('input', (e) => {
       searchQuery = e.target.value;
       clearBtn.style.display = searchQuery ? 'flex' : 'none';
-      renderPromptList();
+      renderCaptureList();
     });
 
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         resetSearch();
-        renderPromptList();
+        renderCaptureList();
       }
     });
 
     clearBtn.addEventListener('click', () => {
       resetSearch();
-      renderPromptList();
+      renderCaptureList();
       input.focus();
     });
   }
@@ -392,35 +405,36 @@
     if (!clearBtn) return;
 
     function resetClearState() {
-      if (deleteConfirmTimeout) {
-        clearTimeout(deleteConfirmTimeout);
-        deleteConfirmTimeout = null;
+      if (deleteChatConfirmTimeout) {
+        clearTimeout(deleteChatConfirmTimeout);
+        deleteChatConfirmTimeout = null;
       }
       clearBtn.classList.remove('btn-confirm-delete');
       clearBtn.querySelector('.clear-icon').textContent = '🗑️';
       clearBtn.querySelector('.clear-text').textContent = '';
-      clearBtn.title = 'Limpiar este chat';
+      clearBtn.title = 'Limpiar capturas de este chat';
     }
 
     clearBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const chatRecords = getActiveChatRecords();
-      if (chatRecords.length === 0) return;
+      const chatCaptures = getActiveChatCaptures();
+      if (chatCaptures.length === 0) return;
 
       if (clearBtn.classList.contains('btn-confirm-delete')) {
-        records = records.filter(r => r.chatId !== currentChatId);
-        resetAttemptEditState();
-        resetAttemptDeleteState();
+        captures = captures.filter(c => c.chatId !== currentChatId);
+        delete chatCounters[currentChatId];
+        resetCaptureEditState();
+        resetCaptureDeleteState();
         resetSearch();
         persistStorage();
-        renderPromptList();
+        renderCaptureList();
         resetClearState();
       } else {
         clearBtn.classList.add('btn-confirm-delete');
         clearBtn.querySelector('.clear-icon').textContent = '⚠️';
         clearBtn.querySelector('.clear-text').textContent = '¿Borrar chat?';
 
-        deleteConfirmTimeout = setTimeout(() => {
+        deleteChatConfirmTimeout = setTimeout(() => {
           resetClearState();
         }, 3500);
       }
@@ -439,7 +453,10 @@
     if (isPanelOpen) {
       drawer.classList.remove('drawer-hidden');
       updateChatHeader();
-      renderPromptList();
+      renderCaptureList();
+      // Asegurar que el scroll siempre empiece arriba para ver la última captura
+      const listEl = document.getElementById('ai-interceptor-list');
+      if (listEl) listEl.scrollTop = 0;
     } else {
       drawer.classList.add('drawer-hidden');
     }
@@ -453,19 +470,15 @@
     }
   }
 
-  function getActiveChatRecords() {
-    return records.filter(r => r.chatId === currentChatId);
-  }
-
   function updateBadge() {
     const countEl = document.getElementById('ai-interceptor-count');
     const badgeEl = document.getElementById('ai-interceptor-badge');
     if (!countEl || !badgeEl) return;
 
-    const chatRecords = getActiveChatRecords();
-    countEl.textContent = chatRecords.length;
+    const chatCaptures = getActiveChatCaptures();
+    countEl.textContent = chatCaptures.length;
 
-    const hasBlocked = chatRecords.some(r => r.attempts.some(a => a.isBlocked));
+    const hasBlocked = chatCaptures.some(c => c.isBlocked);
     if (hasBlocked) {
       badgeEl.classList.add('has-blocked');
     } else {
@@ -483,7 +496,7 @@
         <div>
           <strong>¡Respuesta Interrumpida por Filtro!</strong>
           <p>Motivo: <span class="tag-reason">${payload.finishReason}</span></p>
-          <small>El texto generado ha sido rescatado en la tarjeta de este prompt.</small>
+          <small>El texto generado ha sido rescatado en el panel.</small>
         </div>
       </div>
       <button id="toast-open-btn">Ver Rescate</button>
@@ -501,60 +514,40 @@
     }, 7000);
   }
 
-  // ==========================================
-  // RENDERIZADO PRINCIPAL
-  // ==========================================
-  function renderPromptList() {
+  
+  // RENDERIZADO DE CAPTURAS
+  
+  function renderCaptureList() {
     const listEl = document.getElementById('ai-interceptor-list');
     const metaEl = document.getElementById('vault-search-meta');
     if (!listEl) return;
 
-    const chatRecords = getActiveChatRecords();
+    const chatCaptures = getActiveChatCaptures();
     const query = searchQuery.trim();
 
-    if (chatRecords.length === 0) {
-      listEl.innerHTML = '<div class="drawer-empty">No hay prompts ni respuestas capturadas en este chat.</div>';
+    if (chatCaptures.length === 0) {
+      listEl.innerHTML = '<div class="drawer-empty">No hay respuestas capturadas en este chat aún.</div>';
       if (metaEl) metaEl.style.display = 'none';
       return;
     }
 
-    // Filtrar y procesar según búsqueda
-    let displayRecords = chatRecords;
+    let displayCaptures = chatCaptures;
     let totalMatchesInChat = 0;
-    let matchingCardsCount = 0;
 
     if (query) {
-      displayRecords = chatRecords.filter(record => {
-        // Contar coincidencias en cada versión
-        const matchesPerAttempt = record.attempts.map(att => countMatches(att.text, query));
-        const recordTotalMatches = matchesPerAttempt.reduce((acc, c) => acc + c, 0);
-
-        if (recordTotalMatches > 0) {
-          totalMatchesInChat += recordTotalMatches;
-          matchingCardsCount++;
-
-          // OPCIÓN A: Auto-selección de la versión que contiene la coincidencia
-          const currentSelected = selectedAttempts[record.key] !== undefined
-            ? Math.min(selectedAttempts[record.key], record.attempts.length - 1)
-            : record.attempts.length - 1;
-
-          // Si la versión actual no tiene coincidencias, cambiar a la primera que sí tenga
-          if (matchesPerAttempt[currentSelected] === 0) {
-            const firstMatchingIdx = matchesPerAttempt.findIndex(m => m > 0);
-            if (firstMatchingIdx !== -1) {
-              selectedAttempts[record.key] = firstMatchingIdx;
-            }
-          }
+      displayCaptures = chatCaptures.filter(cap => {
+        const matches = countMatches(cap.text, query);
+        if (matches > 0) {
+          totalMatchesInChat += matches;
           return true;
         }
         return false;
       });
 
-      // Actualizar metadata de búsqueda
       if (metaEl) {
         metaEl.style.display = 'block';
-        if (matchingCardsCount > 0) {
-          metaEl.innerHTML = `<span>${totalMatchesInChat}</span> ${totalMatchesInChat === 1 ? 'coincidencia' : 'coincidencias'} en <span>${matchingCardsCount}</span> ${matchingCardsCount === 1 ? 'turno' : 'turnos'}`;
+        if (displayCaptures.length > 0) {
+          metaEl.innerHTML = `<span>${totalMatchesInChat}</span> ${totalMatchesInChat === 1 ? 'coincidencia' : 'coincidencias'} en <span>${displayCaptures.length}</span> ${displayCaptures.length === 1 ? 'captura' : 'capturas'}`;
         } else {
           metaEl.innerHTML = `<span class="search-no-match">Sin coincidencias para "${escapeHtml(query)}"</span>`;
         }
@@ -566,63 +559,29 @@
       }
     }
 
-    if (displayRecords.length === 0) {
+    if (displayCaptures.length === 0) {
       listEl.innerHTML = `<div class="drawer-empty">No se encontraron respuestas que contengan "<strong>${escapeHtml(query)}</strong>".</div>`;
       return;
     }
 
-    listEl.innerHTML = displayRecords.map(record => {
-      const attemptsCount = record.attempts.length;
-      const activeIndex = selectedAttempts[record.key] !== undefined 
-        ? Math.min(selectedAttempts[record.key], attemptsCount - 1) 
-        : attemptsCount - 1;
+    listEl.innerHTML = displayCaptures.map(cap => {
+      const isEditing = (editingCaptureId === cap.id);
+      const isConfirming = (confirmingCaptureId === cap.id);
+      const time = new Date(cap.timestamp).toLocaleTimeString();
+      const statusClass = cap.isBlocked ? 'status-blocked' : (cap.finishReason === 'STOP' ? 'status-ok' : 'status-generating');
 
-      const currentAttempt = record.attempts[activeIndex] || {
-        text: '',
-        thoughts: '',
-        finishReason: 'VACÍO',
-        isBlocked: false,
-        timestamp: record.createdAt
-      };
+      const cleanText = filterThoughts(cap.text);
 
-      const isEditing = (editingAttemptKey === record.key && editingAttemptIndex === activeIndex);
-      const time = new Date(currentAttempt.timestamp).toLocaleTimeString();
-      const statusClass = currentAttempt.isBlocked ? 'status-blocked' : (currentAttempt.finishReason === 'STOP' ? 'status-ok' : 'status-generating');
-      
-      // Resaltado dinámico seguro solo en modo lectura
-      const textPreview = currentAttempt.text 
-        ? highlightText(currentAttempt.text, query)
+      const textPreview = cleanText 
+        ? highlightText(cleanText, query)
         : '<em style="color:#888;">(Sin texto generado)</em>';
 
-      const thoughtsPreview = currentAttempt.thoughts 
-        ? `<details class="item-thoughts"><summary>💭 Pensamiento (${currentAttempt.thoughts.length} chars)</summary><pre>${escapeHtml(currentAttempt.thoughts)}</pre></details>` 
-        : '';
+      const deleteBtnText = isConfirming ? '⚠️ ¿Confirmar?' : `🗑️ Eliminar`;
+      const deleteBtnClass = isConfirming ? 'delete-capture-btn btn-confirm-delete' : 'delete-capture-btn';
 
-      // Selector de Versiones con badges de coincidencia
-      const versionTabs = attemptsCount > 1 ? `
-        <div class="attempts-selector">
-          <span class="attempts-label">Versiones:</span>
-          ${record.attempts.map((att, idx) => {
-            const attMatches = query ? countMatches(att.text, query) : 0;
-            const matchBadge = attMatches > 0 ? `<span class="tab-match-badge" title="${attMatches} coincidencias">${attMatches}</span>` : '';
-            const matchClass = query ? (attMatches > 0 ? 'has-matches' : 'no-matches') : '';
-            return `
-              <button class="attempt-tab ${idx === activeIndex ? 'active' : ''} ${att.isBlocked ? 'blocked' : ''} ${matchClass}" data-key="${record.key}" data-index="${idx}">
-                v${idx + 1} ${att.isBlocked ? '' : ''}${matchBadge}
-              </button>
-            `;
-          }).join('')}
-        </div>
-      ` : '';
-
-      const isConfirming = confirmingAttemptKey === record.key && confirmingAttemptIndex === activeIndex;
-      const deleteBtnText = isConfirming ? '⚠️ ¿Confirmar?' : `🗑️ Eliminar v${activeIndex + 1}`;
-      const deleteBtnClass = isConfirming ? 'delete-attempt-btn btn-confirm-delete' : 'delete-attempt-btn';
-
-      // Área editable vs lectura normal
       const responseHtml = isEditing ? `
         <div class="response-edit-wrapper">
-          <textarea class="response-edit-area" data-key="${record.key}" data-index="${activeIndex}" placeholder="Escribe o edita la respuesta rescatada...">${escapeHtml(currentAttempt.text)}</textarea>
+          <textarea class="response-edit-area" data-id="${cap.id}" placeholder="Edita el texto rescatado...">${escapeHtml(cleanText)}</textarea>
           <div class="response-edit-hint">Atajo: <code>Ctrl + Enter</code> para guardar | <code>Esc</code> para cancelar</div>
         </div>
       ` : `
@@ -632,38 +591,30 @@
       `;
 
       const footerButtons = isEditing ? `
-        <button class="save-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">💾 Guardar</button>
-        <button class="cancel-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">✖️ Cancelar</button>
+        <button class="save-capture-btn" data-id="${cap.id}">💾 Guardar</button>
+        <button class="cancel-capture-btn" data-id="${cap.id}">✖️ Cancelar</button>
       ` : `
-        <button class="edit-attempt-btn" data-key="${record.key}" data-index="${activeIndex}" title="Editar esta versión">✏️ Editar</button>
-        <button class="copy-prompt-btn" data-key="${record.key}">📋 Prompt</button>
-        <button class="copy-response-btn" data-key="${record.key}" data-index="${activeIndex}">📋 Respuesta</button>
-        <button class="${deleteBtnClass}" data-key="${record.key}" data-index="${activeIndex}" title="Eliminar esta versión">
+        <button class="edit-capture-btn" data-id="${cap.id}" title="Editar esta captura">✏️ Editar</button>
+        <button class="copy-response-btn" data-id="${cap.id}">📋 Copiar</button>
+        <button class="${deleteBtnClass}" data-id="${cap.id}" title="Eliminar captura v${cap.version}">
           ${deleteBtnText}
         </button>
       `;
 
       return `
-        <div class="prompt-card ${currentAttempt.isBlocked ? 'item-blocked' : ''} ${isEditing ? 'item-editing' : ''}">
+        <div class="prompt-card ${cap.isBlocked ? 'item-blocked' : ''} ${isEditing ? 'item-editing' : ''}">
           <div class="prompt-card-header">
-            <span class="prompt-turn-tag">Turno #${record.turnIndex}</span>
+            <span class="prompt-turn-tag">Captura v${cap.version}</span>
             <div class="prompt-header-actions">
               <span class="item-time">${time}</span>
-              <span class="item-status ${statusClass}">${currentAttempt.finishReason}</span>
+              <span class="item-status ${statusClass}">${cap.finishReason}</span>
             </div>
           </div>
 
-          <div class="prompt-box">
-            <strong>Prompt:</strong>
-            <p>${escapeHtml(record.promptText)}</p>
-          </div>
-
-          ${versionTabs}
-          ${thoughtsPreview}
           ${responseHtml}
 
           <div class="prompt-card-footer">
-            <span class="char-count">${currentAttempt.text.length} chars rescatados</span>
+            <span class="char-count">${cleanText.length} chars</span>
             <div class="card-footer-buttons">
               ${footerButtons}
             </div>
@@ -672,33 +623,17 @@
       `;
     }).join('');
 
-    // Reasignar listeners
     attachCardEventListeners(listEl);
   }
 
   function attachCardEventListeners(listEl) {
-    // Cambio de pestaña de versión
-    listEl.querySelectorAll('.attempt-tab').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        resetAttemptDeleteState();
-        resetAttemptEditState();
-        const tab = e.target.closest('.attempt-tab');
-        const key = tab.getAttribute('data-key');
-        const index = parseInt(tab.getAttribute('data-index'), 10);
-        selectedAttempts[key] = index;
-        renderPromptList();
-      });
-    });
-
-    // Entrar en modo edición
-    listEl.querySelectorAll('.edit-attempt-btn').forEach(btn => {
+    listEl.querySelectorAll('.edit-capture-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        resetAttemptDeleteState();
-        editingAttemptKey = btn.getAttribute('data-key');
-        editingAttemptIndex = parseInt(btn.getAttribute('data-index'), 10);
-        renderPromptList();
+        resetCaptureDeleteState();
+        editingCaptureId = btn.getAttribute('data-id');
+        renderCaptureList();
 
-        const textarea = listEl.querySelector(`.response-edit-area[data-key="${editingAttemptKey}"][data-index="${editingAttemptIndex}"]`);
+        const textarea = listEl.querySelector(`.response-edit-area[data-id="${editingCaptureId}"]`);
         if (textarea) {
           textarea.focus();
           textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -706,89 +641,67 @@
       });
     });
 
-    // Guardar edición
-    listEl.querySelectorAll('.save-attempt-btn').forEach(btn => {
+    listEl.querySelectorAll('.save-capture-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const key = btn.getAttribute('data-key');
-        const index = parseInt(btn.getAttribute('data-index'), 10);
-        const textarea = listEl.querySelector(`.response-edit-area[data-key="${key}"][data-index="${index}"]`);
+        const id = btn.getAttribute('data-id');
+        const textarea = listEl.querySelector(`.response-edit-area[data-id="${id}"]`);
         if (textarea) {
-          saveEditedAttempt(key, index, textarea.value);
+          saveEditedCapture(id, textarea.value);
         }
       });
     });
 
-    // Cancelar edición
-    listEl.querySelectorAll('.cancel-attempt-btn').forEach(btn => {
+    listEl.querySelectorAll('.cancel-capture-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        resetAttemptEditState();
-        renderPromptList();
+        resetCaptureEditState();
+        renderCaptureList();
       });
     });
 
-    // Atajos de teclado en el textarea
     listEl.querySelectorAll('.response-edit-area').forEach(textarea => {
       textarea.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
           e.preventDefault();
-          const key = textarea.getAttribute('data-key');
-          const index = parseInt(textarea.getAttribute('data-index'), 10);
-          saveEditedAttempt(key, index, textarea.value);
+          const id = textarea.getAttribute('data-id');
+          saveEditedCapture(id, textarea.value);
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          resetAttemptEditState();
-          renderPromptList();
+          resetCaptureEditState();
+          renderCaptureList();
         }
       });
     });
 
-    // Copiar prompt
-    listEl.querySelectorAll('.copy-prompt-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const key = e.target.getAttribute('data-key');
-        const record = records.find(r => r.key === key);
-        if (record) {
-          navigator.clipboard.writeText(record.promptText).then(() => {
-            feedbackButton(e.target, '✅ Copiado');
-          });
-        }
-      });
-    });
-
-    // Copiar respuesta
+    // Copiar al portapapeles (texto limpio sin pensamientos)
     listEl.querySelectorAll('.copy-response-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        const key = e.target.getAttribute('data-key');
-        const index = parseInt(e.target.getAttribute('data-index'), 10);
-        const record = records.find(r => r.key === key);
-        const attempt = record?.attempts[index];
-        if (attempt && attempt.text) {
-          navigator.clipboard.writeText(attempt.text).then(() => {
+        const id = e.target.getAttribute('data-id');
+        const cap = captures.find(c => c.id === id);
+        const textToCopy = cap ? filterThoughts(cap.text) : '';
+        if (textToCopy) {
+          navigator.clipboard.writeText(textToCopy).then(() => {
             feedbackButton(e.target, '✅ Copiado');
           });
         }
       });
     });
 
-    // Eliminar versión individual
-    listEl.querySelectorAll('.delete-attempt-btn').forEach(btn => {
+    listEl.querySelectorAll('.delete-capture-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const key = btn.getAttribute('data-key');
-        const index = parseInt(btn.getAttribute('data-index'), 10);
+        const id = btn.getAttribute('data-id');
 
-        if (confirmingAttemptKey === key && confirmingAttemptIndex === index) {
-          resetAttemptDeleteState();
-          deleteAttempt(key, index);
+        if (confirmingCaptureId === id) {
+          resetCaptureDeleteState();
+          deleteCapture(id);
         } else {
-          resetAttemptDeleteState();
-          confirmingAttemptKey = key;
-          confirmingAttemptIndex = index;
-          renderPromptList();
+          resetCaptureDeleteState();
+          confirmingCaptureId = id;
+          renderCaptureList();
 
-          deleteAttemptConfirmTimeout = setTimeout(() => {
-            resetAttemptDeleteState();
-            renderPromptList();
+          deleteCaptureConfirmTimeout = setTimeout(() => {
+            resetCaptureDeleteState();
+            renderCaptureList();
           }, 3500);
         }
       });
@@ -801,22 +714,22 @@
     setTimeout(() => { btn.textContent = original; }, 1800);
   }
 
+  
+  // EXPORTACIÓN A MARKDOWN (SIN PENSAMIENTOS)
+  
   function exportChatToMarkdown() {
-    const chatRecords = getActiveChatRecords();
-    if (chatRecords.length === 0) return;
+    const chatCaptures = getActiveChatCaptures();
+    if (chatCaptures.length === 0) return;
+
+    // Exportar ordenado cronológicamente (v1, v2...)
+    const ordered = [...chatCaptures].sort((a, b) => a.version - b.version);
 
     let md = `# Historial Rescatado de AI Studio\n**Chat ID:** \`${currentChatId}\`\n**Fecha:** ${new Date().toLocaleString()}\n\n---\n\n`;
 
-    chatRecords.forEach((rec) => {
-      md += `## Turno #${rec.turnIndex}: ${rec.promptText}\n\n`;
-      rec.attempts.forEach((att, idx) => {
-        md += `### Intento v${idx + 1} (${att.finishReason} - ${new Date(att.timestamp).toLocaleTimeString()})\n\n`;
-        if (att.thoughts) {
-          md += `> **Pensamiento:**\n> ${att.thoughts.replace(/\n/g, '\n> ')}\n\n`;
-        }
-        md += `\`\`\`\n${att.text}\n\`\`\`\n\n`;
-      });
-      md += `---\n\n`;
+    ordered.forEach((cap) => {
+      const cleanText = filterThoughts(cap.text);
+      md += `## Captura v${cap.version} (${cap.finishReason} - ${new Date(cap.timestamp).toLocaleTimeString()})\n\n`;
+      md += `\`\`\`\n${cleanText}\n\`\`\`\n\n---\n\n`;
     });
 
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
@@ -826,13 +739,6 @@
     a.download = `AI_Studio_Vault_${currentChatId}_${Date.now()}.md`;
     a.click();
     URL.revokeObjectURL(url);
-  }
-
-  function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
   }
 
   if (document.readyState === 'loading') {

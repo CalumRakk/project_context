@@ -1,5 +1,5 @@
 (function () {
-  console.log('%c[AI Studio Vault] 🚀 Interceptor Híbrido (XHR + Fetch) Activo', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
+  console.log('%c[AI Studio Vault] 🚀 Interceptor Híbrido Activo (Modo Capturas)', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
 
   function isTargetUrl(url) {
     if (!url || typeof url !== 'string') return false;
@@ -10,7 +10,7 @@
     );
   }
 
-  // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
+  // Obtiene el ID del chat actual de la URL
   function getActiveChatId() {
     const path = window.location.pathname;
     const parts = path.split('/').filter(Boolean);
@@ -21,51 +21,12 @@
     return 'new_chat';
   }
 
-  function extractPromptMetadata(bodyData) {
-    let promptText = '';
-    let turnIndex = 1;
-
-    try {
-      let parsed = null;
-      if (typeof bodyData === 'string') {
-        parsed = JSON.parse(bodyData);
-      } else if (bodyData instanceof ArrayBuffer || bodyData instanceof Uint8Array) {
-        const text = new TextDecoder().decode(bodyData);
-        parsed = JSON.parse(text);
-      } else if (typeof bodyData === 'object' && bodyData !== null) {
-        parsed = bodyData;
-      }
-
-      if (parsed) {
-        const contents = parsed.contents || (parsed[1] && parsed[1].contents);
-        if (Array.isArray(contents)) {
-          turnIndex = contents.length;
-          for (let i = contents.length - 1; i >= 0; i--) {
-            const item = contents[i];
-            const role = item.role || (Array.isArray(item) ? item[1] : null);
-            if (role === 'user' || !role) {
-              const parts = item.parts || (Array.isArray(item) ? item[0] : null);
-              if (Array.isArray(parts)) {
-                promptText = parts.map(p => (typeof p === 'string' ? p : p.text || '')).filter(Boolean).join('\n');
-              } else if (typeof item === 'string') {
-                promptText = item;
-              }
-              if (promptText) break;
-            }
-          }
-        }
-      }
-    } catch (e) {}
-
-    return {
-      promptText: promptText.trim() || '(Prompt interceptado)',
-      turnIndex: turnIndex || 1,
-      chatId: getActiveChatId()
-    };
+  function generateCaptureId() {
+    return 'cap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
   }
 
   
-  // 1. HOOK PARA XMLHTTPREQUEST (USADO POR AI STUDIO)
+  // 1. HOOK PARA XMLHTTPREQUEST
   
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -77,8 +38,8 @@
 
   XMLHttpRequest.prototype.send = function (body) {
     if (this._url && isTargetUrl(this._url)) {
-      const requestId = 'req_' + Date.now();
-      const meta = extractPromptMetadata(body);
+      const requestId = generateCaptureId();
+      const chatId = getActiveChatId();
       let started = false;
 
       const handleProgress = (isComplete = false) => {
@@ -87,14 +48,12 @@
             if (!started) {
               dispatchAppEvent('stream-start', {
                 requestId,
-                chatId: meta.chatId,
-                turnIndex: meta.turnIndex,
-                promptText: meta.promptText,
+                chatId,
                 timestamp: Date.now()
               });
               started = true;
             }
-            parseAndExtract(this.responseText, requestId, meta, isComplete);
+            parseAndExtract(this.responseText, requestId, chatId, isComplete);
           }
         } catch (e) {
           console.error('[Vault] Error en streaming XHR:', e);
@@ -111,36 +70,31 @@
   };
 
   
-  // 2. HOOK PARA FETCH (RESPALDO Y STREAMING)
+  // 2. HOOK PARA FETCH
   
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     let url = '';
-    let bodyData = null;
-
     if (typeof args[0] === 'string') {
       url = args[0];
-      bodyData = args[1]?.body;
     } else if (args[0] instanceof Request) {
       url = args[0].url;
-      try { bodyData = await args[0].clone().text(); } catch (e) {}
     } else if (args[0] && typeof args[0] === 'object') {
       url = args[0].url || '';
-      bodyData = args[0].body;
     }
 
     const response = await Reflect.apply(originalFetch, window, args);
 
     if (url && isTargetUrl(url)) {
-      const requestId = 'req_' + Date.now();
-      const meta = extractPromptMetadata(bodyData);
-      attachFetchStreamSpy(response, requestId, meta);
+      const requestId = generateCaptureId();
+      const chatId = getActiveChatId();
+      attachFetchStreamSpy(response, requestId, chatId);
     }
 
     return response;
   };
 
-  function attachFetchStreamSpy(response, requestId, meta) {
+  function attachFetchStreamSpy(response, requestId, chatId) {
     if (!response?.body?.getReader) return;
 
     let started = false;
@@ -152,13 +106,12 @@
       const reader = originalGetReader(...readerArgs);
       const originalRead = reader.read.bind(reader);
 
-      // Captura si el cliente o el filtro cancelan el stream deliberadamente
       const originalCancel = reader.cancel ? reader.cancel.bind(reader) : null;
       if (originalCancel) {
         reader.cancel = async function (...cancelArgs) {
           try {
             if (fullRawText) {
-              parseAndExtract(fullRawText, requestId, meta, true);
+              parseAndExtract(fullRawText, requestId, chatId, true);
             }
           } catch (e) {}
           return originalCancel(...cancelArgs);
@@ -170,10 +123,9 @@
         try {
           result = await originalRead();
         } catch (streamErr) {
-          // Si el stream es abortado con un AbortError (típico de filtros de seguridad)
           try {
             if (fullRawText) {
-              parseAndExtract(fullRawText, requestId, meta, true);
+              parseAndExtract(fullRawText, requestId, chatId, true);
             }
           } catch (e) {}
           throw streamErr;
@@ -183,9 +135,7 @@
           if (!started) {
             dispatchAppEvent('stream-start', {
               requestId,
-              chatId: meta.chatId,
-              turnIndex: meta.turnIndex,
-              promptText: meta.promptText,
+              chatId,
               timestamp: Date.now()
             });
             started = true;
@@ -193,9 +143,9 @@
 
           if (!result.done && result.value) {
             fullRawText += decoder.decode(result.value, { stream: true });
-            parseAndExtract(fullRawText, requestId, meta, false);
+            parseAndExtract(fullRawText, requestId, chatId, false);
           } else if (result.done) {
-            parseAndExtract(fullRawText, requestId, meta, true);
+            parseAndExtract(fullRawText, requestId, chatId, true);
           }
         } catch (err) {}
 
@@ -209,7 +159,7 @@
   
   // 3. PARSER Y DETECTOR DE RESPUESTAS
   
-  function parseAndExtract(rawText, requestId, meta, isComplete) {
+  function parseAndExtract(rawText, requestId, chatId, isComplete) {
     if (!rawText || rawText.trim().length === 0) return;
 
     let accumulatedText = '';
@@ -239,9 +189,7 @@
 
     dispatchAppEvent(isComplete ? 'stream-complete' : 'stream-progress', {
       requestId,
-      chatId: meta.chatId,
-      turnIndex: meta.turnIndex,
-      promptText: meta.promptText,
+      chatId,
       accumulatedText,
       thoughtsText,
       isBlocked,

@@ -1,24 +1,24 @@
 /*
-   Estilos para el botón de eliminar versión individual
+   Estilos para el botón de eliminar captura
 */
 .card-footer-buttons {
   flex-wrap: wrap;
 }
 
-.card-footer-buttons button.delete-attempt-btn {
+.card-footer-buttons button.delete-capture-btn {
   background: #251818;
   color: #f28b82;
   border-color: #4d2828;
   transition: all 0.2s ease;
 }
 
-.card-footer-buttons button.delete-attempt-btn:hover {
+.card-footer-buttons button.delete-capture-btn:hover {
   background: #3c1e1e;
   border-color: #f28b82;
   color: #fce8e6;
 }
 
-.card-footer-buttons button.delete-attempt-btn.btn-confirm-delete {
+.card-footer-buttons button.delete-capture-btn.btn-confirm-delete {
   background: #5c1b1b;
   border-color: #f28b82;
   color: #ffffff;
@@ -26,9 +26,8 @@
   animation: delete-pulse 1.2s infinite alternate ease-in-out;
 }
 
-
 /*
-   Estilos para el modo de edición de respuesta
+   Modo de edición de respuesta
 */
 .prompt-card.item-editing {
   border-color: #8ab4f8;
@@ -78,30 +77,30 @@
 }
 
 /* Botones de acción de edición */
-.card-footer-buttons button.save-attempt-btn {
+.card-footer-buttons button.save-capture-btn {
   background: #133824;
   color: #81c995;
   border-color: #27623a;
   font-weight: 600;
 }
 
-.card-footer-buttons button.save-attempt-btn:hover {
+.card-footer-buttons button.save-capture-btn:hover {
   background: #1d4d32;
   border-color: #81c995;
   color: #e6f4ea;
 }
 
-.card-footer-buttons button.cancel-attempt-btn {
+.card-footer-buttons button.cancel-capture-btn {
   background: #282a2c;
   color: #c4c7c5;
 }
 
-.card-footer-buttons button.cancel-attempt-btn:hover {
+.card-footer-buttons button.cancel-capture-btn:hover {
   background: #3c4043;
   color: #ffffff;
 }
 
-.card-footer-buttons button.edit-attempt-btn:hover {
+.card-footer-buttons button.edit-capture-btn:hover {
   background: #182f4d;
   border-color: #8ab4f8;
   color: #8ab4f8;
@@ -262,7 +261,7 @@
 }
 
 /*
-   3. TARJETAS DE PROMPT & INTENTOS (CARDS)
+   3. TARJETAS DE CAPTURA
 */
 .prompt-card {
   background: #1e1f20;
@@ -317,71 +316,12 @@
 .status-blocked { background: #4d1c1c; color: #f28b82; }
 .status-generating { background: #182f4d; color: #8ab4f8; }
 
-/* Caja del Prompt */
-.prompt-box {
-  background: #18191a;
-  border-left: 3px solid #8ab4f8;
-  padding: 8px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.prompt-box strong {
-  display: block;
-  font-size: 11px;
-  color: #8ab4f8;
-  margin-bottom: 2px;
-}
-
-.prompt-box p {
-  margin: 0;
-  color: #e3e3e3;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Selector de Versiones (v1, v2...) */
-.attempts-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  background: #141516;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.attempts-label {
-  font-size: 11px;
-  color: #8e918f;
-}
-
-.attempt-tab {
-  background: #282a2c;
-  color: #c4c7c5;
-  border: 1px solid #3c4043;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.attempt-tab.active {
-  background: #8ab4f8;
-  color: #131314;
-  font-weight: bold;
-  border-color: #8ab4f8;
-}
-
-.attempt-tab.blocked {
-  border-color: #f28b82;
-}
-
 /* Cuerpo de la Respuesta */
 .response-body pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 220px;
+  max-height: 260px;
   overflow-y: auto;
   background: #131314;
   padding: 8px;
@@ -505,7 +445,7 @@
 }
 
 /*
-   5. BARRA DE BÚSQUEDA Y RESALTADO ELEGANTE
+   5. BARRA DE BÚSQUEDA Y RESALTADO
 */
 .drawer-search-container {
   padding: 10px 16px;
@@ -595,7 +535,6 @@
   font-weight: normal;
 }
 
-/* Resaltado del término buscado */
 mark.vault-highlight {
   background: rgba(253, 214, 99, 0.28);
   color: #fdd663;
@@ -603,29 +542,4 @@ mark.vault-highlight {
   border-radius: 2px;
   padding: 0 2px;
   font-weight: 600;
-}
-
-/* Indicadores de coincidencia en las pestañas de versión */
-.tab-match-badge {
-  background: #fdd663;
-  color: #202124;
-  font-size: 9px;
-  font-weight: 800;
-  border-radius: 8px;
-  padding: 1px 5px;
-  margin-left: 4px;
-  display: inline-block;
-  vertical-align: middle;
-}
-
-.attempt-tab.has-matches {
-  border-color: rgba(253, 214, 99, 0.4);
-}
-
-.attempt-tab.no-matches {
-  opacity: 0.55;
-}
-
-.attempt-tab.active.has-matches {
-  box-shadow: 0 0 6px rgba(253, 214, 99, 0.3);
 }
