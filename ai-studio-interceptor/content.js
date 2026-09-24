@@ -7,6 +7,9 @@
   let deleteConfirmTimeout = null;
   let saveDebounceTimeout = null;
 
+  // Estado para búsqueda
+  let searchQuery = '';
+
   // Estado para la confirmación de borrado de versión individual
   let deleteAttemptConfirmTimeout = null;
   let confirmingAttemptKey = null;
@@ -28,6 +31,19 @@
   function resetAttemptEditState() {
     editingAttemptKey = null;
     editingAttemptIndex = null;
+  }
+
+  function resetSearch() {
+    searchQuery = '';
+    const searchInput = document.getElementById('vault-search-input');
+    const clearBtn = document.getElementById('vault-search-clear');
+    const metaEl = document.getElementById('vault-search-meta');
+    if (searchInput) searchInput.value = '';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (metaEl) {
+      metaEl.textContent = '';
+      metaEl.style.display = 'none';
+    }
   }
 
   // Soporta /prompts/ID, /prompt/ID, /u/0/prompts/ID, etc.
@@ -52,6 +68,32 @@
 
   function getPromptKey(chatId, turnIndex, promptText) {
     return `${chatId}_t${turnIndex}_${simpleHash(promptText)}`;
+  }
+
+  // ==========================================
+  // HELPERS DE BÚSQUEDA Y SANITIZACIÓN
+  // ==========================================
+  function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function countMatches(text, query) {
+    if (!text || !query) return 0;
+    const escaped = escapeRegExp(query);
+    const regex = new RegExp(escaped, 'gi');
+    const matches = text.match(regex);
+    return matches ? matches.length : 0;
+  }
+
+  function highlightText(text, query) {
+    if (!text) return '';
+    const safeText = escapeHtml(text);
+    const trimmedQuery = (query || '').trim();
+    if (!trimmedQuery) return safeText;
+
+    const safeQuery = escapeHtml(trimmedQuery);
+    const regex = new RegExp(`(${escapeRegExp(safeQuery)})`, 'gi');
+    return safeText.replace(regex, '<mark class="vault-highlight">$1</mark>');
   }
 
   // Carga inmediata de storage al arrancar la extensión
@@ -111,15 +153,16 @@
 
       resetAttemptDeleteState();
       resetAttemptEditState();
+      resetSearch();
       updateChatHeader();
       updateBadge();
       if (isPanelOpen) renderPromptList();
     }
   }, 1000);
 
-  
+  // ==========================================
   // RECEPCIÓN DE MENSAJES DEL INTERCEPTOR
-  
+  // ==========================================
   window.addEventListener('__AI_STUDIO_INTERCEPT__', (event) => {
     const { type, payload } = event.detail;
     currentChatId = getActiveChatId();
@@ -191,9 +234,9 @@
     }
   });
 
-  
+  // ==========================================
   // ELIMINACIÓN DE VERSIONES INDIVIDUALES
-  
+  // ==========================================
   function deleteAttempt(key, attemptIndex) {
     const recordIndex = records.findIndex(r => r.key === key);
     if (recordIndex === -1) return;
@@ -228,9 +271,9 @@
     renderPromptList();
   }
 
-  
+  // ==========================================
   // GUARDAR EDICIÓN DE VERSIÓN
-  
+  // ==========================================
   function saveEditedAttempt(key, attemptIndex, newText) {
     const record = records.find(r => r.key === key);
     if (!record || !record.attempts || !record.attempts[attemptIndex]) return;
@@ -243,9 +286,9 @@
     renderPromptList();
   }
 
-  
+  // ==========================================
   // CONSTRUCCIÓN DE LA INTERFAZ
-  
+  // ==========================================
   function initUI() {
     if (document.getElementById('ai-interceptor-root')) return;
 
@@ -274,6 +317,23 @@
             <button id="ai-interceptor-close" title="Cerrar panel">✕</button>
           </div>
         </div>
+
+        <!-- BARRA DE BÚSQUEDA PERSISTENTE -->
+        <div class="drawer-search-container">
+          <div class="search-input-wrapper">
+            <span class="search-icon">🔍</span>
+            <input 
+              type="text" 
+              id="vault-search-input" 
+              placeholder="Buscar en el texto generado..." 
+              autocomplete="off" 
+              spellcheck="false" 
+            />
+            <button id="vault-search-clear" title="Limpiar búsqueda" style="display: none;">✕</button>
+          </div>
+          <div id="vault-search-meta" class="search-meta" style="display: none;"></div>
+        </div>
+
         <div id="ai-interceptor-list" class="drawer-content">
           <div class="drawer-empty">No hay respuestas capturadas en este chat aún.</div>
         </div>
@@ -288,6 +348,7 @@
     document.getElementById('ai-interceptor-close').addEventListener('click', toggleDrawer);
     document.getElementById('ai-interceptor-export').addEventListener('click', exportChatToMarkdown);
     
+    setupSearchBar();
     setupSecureClearButton();
     updateChatHeader();
     updateBadge();
@@ -298,6 +359,31 @@
         resetAttemptDeleteState();
         renderPromptList();
       }
+    });
+  }
+
+  function setupSearchBar() {
+    const input = document.getElementById('vault-search-input');
+    const clearBtn = document.getElementById('vault-search-clear');
+    if (!input || !clearBtn) return;
+
+    input.addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      clearBtn.style.display = searchQuery ? 'flex' : 'none';
+      renderPromptList();
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        resetSearch();
+        renderPromptList();
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      resetSearch();
+      renderPromptList();
+      input.focus();
     });
   }
 
@@ -325,6 +411,7 @@
         records = records.filter(r => r.chatId !== currentChatId);
         resetAttemptEditState();
         resetAttemptDeleteState();
+        resetSearch();
         persistStorage();
         renderPromptList();
         resetClearState();
@@ -414,18 +501,77 @@
     }, 7000);
   }
 
+  // ==========================================
+  // RENDERIZADO PRINCIPAL
+  // ==========================================
   function renderPromptList() {
     const listEl = document.getElementById('ai-interceptor-list');
+    const metaEl = document.getElementById('vault-search-meta');
     if (!listEl) return;
 
     const chatRecords = getActiveChatRecords();
+    const query = searchQuery.trim();
 
     if (chatRecords.length === 0) {
       listEl.innerHTML = '<div class="drawer-empty">No hay prompts ni respuestas capturadas en este chat.</div>';
+      if (metaEl) metaEl.style.display = 'none';
       return;
     }
 
-    listEl.innerHTML = chatRecords.map(record => {
+    // Filtrar y procesar según búsqueda
+    let displayRecords = chatRecords;
+    let totalMatchesInChat = 0;
+    let matchingCardsCount = 0;
+
+    if (query) {
+      displayRecords = chatRecords.filter(record => {
+        // Contar coincidencias en cada versión
+        const matchesPerAttempt = record.attempts.map(att => countMatches(att.text, query));
+        const recordTotalMatches = matchesPerAttempt.reduce((acc, c) => acc + c, 0);
+
+        if (recordTotalMatches > 0) {
+          totalMatchesInChat += recordTotalMatches;
+          matchingCardsCount++;
+
+          // OPCIÓN A: Auto-selección de la versión que contiene la coincidencia
+          const currentSelected = selectedAttempts[record.key] !== undefined
+            ? Math.min(selectedAttempts[record.key], record.attempts.length - 1)
+            : record.attempts.length - 1;
+
+          // Si la versión actual no tiene coincidencias, cambiar a la primera que sí tenga
+          if (matchesPerAttempt[currentSelected] === 0) {
+            const firstMatchingIdx = matchesPerAttempt.findIndex(m => m > 0);
+            if (firstMatchingIdx !== -1) {
+              selectedAttempts[record.key] = firstMatchingIdx;
+            }
+          }
+          return true;
+        }
+        return false;
+      });
+
+      // Actualizar metadata de búsqueda
+      if (metaEl) {
+        metaEl.style.display = 'block';
+        if (matchingCardsCount > 0) {
+          metaEl.innerHTML = `<span>${totalMatchesInChat}</span> ${totalMatchesInChat === 1 ? 'coincidencia' : 'coincidencias'} en <span>${matchingCardsCount}</span> ${matchingCardsCount === 1 ? 'turno' : 'turnos'}`;
+        } else {
+          metaEl.innerHTML = `<span class="search-no-match">Sin coincidencias para "${escapeHtml(query)}"</span>`;
+        }
+      }
+    } else {
+      if (metaEl) {
+        metaEl.textContent = '';
+        metaEl.style.display = 'none';
+      }
+    }
+
+    if (displayRecords.length === 0) {
+      listEl.innerHTML = `<div class="drawer-empty">No se encontraron respuestas que contengan "<strong>${escapeHtml(query)}</strong>".</div>`;
+      return;
+    }
+
+    listEl.innerHTML = displayRecords.map(record => {
       const attemptsCount = record.attempts.length;
       const activeIndex = selectedAttempts[record.key] !== undefined 
         ? Math.min(selectedAttempts[record.key], attemptsCount - 1) 
@@ -442,17 +588,30 @@
       const isEditing = (editingAttemptKey === record.key && editingAttemptIndex === activeIndex);
       const time = new Date(currentAttempt.timestamp).toLocaleTimeString();
       const statusClass = currentAttempt.isBlocked ? 'status-blocked' : (currentAttempt.finishReason === 'STOP' ? 'status-ok' : 'status-generating');
-      const textPreview = currentAttempt.text ? escapeHtml(currentAttempt.text) : '<em style="color:#888;">(Sin texto generado)</em>';
-      const thoughtsPreview = currentAttempt.thoughts ? `<details class="item-thoughts"><summary>💭 Pensamiento (${currentAttempt.thoughts.length} chars)</summary><pre>${escapeHtml(currentAttempt.thoughts)}</pre></details>` : '';
+      
+      // Resaltado dinámico seguro solo en modo lectura
+      const textPreview = currentAttempt.text 
+        ? highlightText(currentAttempt.text, query)
+        : '<em style="color:#888;">(Sin texto generado)</em>';
 
+      const thoughtsPreview = currentAttempt.thoughts 
+        ? `<details class="item-thoughts"><summary>💭 Pensamiento (${currentAttempt.thoughts.length} chars)</summary><pre>${escapeHtml(currentAttempt.thoughts)}</pre></details>` 
+        : '';
+
+      // Selector de Versiones con badges de coincidencia
       const versionTabs = attemptsCount > 1 ? `
         <div class="attempts-selector">
           <span class="attempts-label">Versiones:</span>
-          ${record.attempts.map((att, idx) => `
-            <button class="attempt-tab ${idx === activeIndex ? 'active' : ''} ${att.isBlocked ? 'blocked' : ''}" data-key="${record.key}" data-index="${idx}">
-              v${idx + 1} ${att.isBlocked ? '⚠️' : '✅'}
-            </button>
-          `).join('')}
+          ${record.attempts.map((att, idx) => {
+            const attMatches = query ? countMatches(att.text, query) : 0;
+            const matchBadge = attMatches > 0 ? `<span class="tab-match-badge" title="${attMatches} coincidencias">${attMatches}</span>` : '';
+            const matchClass = query ? (attMatches > 0 ? 'has-matches' : 'no-matches') : '';
+            return `
+              <button class="attempt-tab ${idx === activeIndex ? 'active' : ''} ${att.isBlocked ? 'blocked' : ''} ${matchClass}" data-key="${record.key}" data-index="${idx}">
+                v${idx + 1} ${att.isBlocked ? '' : ''}${matchBadge}
+              </button>
+            `;
+          }).join('')}
         </div>
       ` : '';
 
@@ -460,7 +619,7 @@
       const deleteBtnText = isConfirming ? '⚠️ ¿Confirmar?' : `🗑️ Eliminar v${activeIndex + 1}`;
       const deleteBtnClass = isConfirming ? 'delete-attempt-btn btn-confirm-delete' : 'delete-attempt-btn';
 
-      // Cuerpo de la respuesta: área editable si está en edición, o pre normal si no
+      // Área editable vs lectura normal
       const responseHtml = isEditing ? `
         <div class="response-edit-wrapper">
           <textarea class="response-edit-area" data-key="${record.key}" data-index="${activeIndex}" placeholder="Escribe o edita la respuesta rescatada...">${escapeHtml(currentAttempt.text)}</textarea>
@@ -472,7 +631,6 @@
         </div>
       `;
 
-      // Botones dinámicos según el modo edición
       const footerButtons = isEditing ? `
         <button class="save-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">💾 Guardar</button>
         <button class="cancel-attempt-btn" data-key="${record.key}" data-index="${activeIndex}">✖️ Cancelar</button>
@@ -514,19 +672,25 @@
       `;
     }).join('');
 
-    // Listener para cambiar de pestaña de versión
+    // Reasignar listeners
+    attachCardEventListeners(listEl);
+  }
+
+  function attachCardEventListeners(listEl) {
+    // Cambio de pestaña de versión
     listEl.querySelectorAll('.attempt-tab').forEach(btn => {
       btn.addEventListener('click', (e) => {
         resetAttemptDeleteState();
         resetAttemptEditState();
-        const key = e.target.getAttribute('data-key');
-        const index = parseInt(e.target.getAttribute('data-index'), 10);
+        const tab = e.target.closest('.attempt-tab');
+        const key = tab.getAttribute('data-key');
+        const index = parseInt(tab.getAttribute('data-index'), 10);
         selectedAttempts[key] = index;
         renderPromptList();
       });
     });
 
-    // Listener para entrar en modo edición
+    // Entrar en modo edición
     listEl.querySelectorAll('.edit-attempt-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         resetAttemptDeleteState();
@@ -534,7 +698,6 @@
         editingAttemptIndex = parseInt(btn.getAttribute('data-index'), 10);
         renderPromptList();
 
-        // Poner foco al final del textarea
         const textarea = listEl.querySelector(`.response-edit-area[data-key="${editingAttemptKey}"][data-index="${editingAttemptIndex}"]`);
         if (textarea) {
           textarea.focus();
@@ -543,7 +706,7 @@
       });
     });
 
-    // Listener para guardar edición
+    // Guardar edición
     listEl.querySelectorAll('.save-attempt-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const key = btn.getAttribute('data-key');
@@ -555,7 +718,7 @@
       });
     });
 
-    // Listener para cancelar edición
+    // Cancelar edición
     listEl.querySelectorAll('.cancel-attempt-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         resetAttemptEditState();
@@ -563,7 +726,7 @@
       });
     });
 
-    // Atajos de teclado en el textarea (Ctrl/Cmd + Enter para guardar, Esc para cancelar)
+    // Atajos de teclado en el textarea
     listEl.querySelectorAll('.response-edit-area').forEach(textarea => {
       textarea.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -579,7 +742,7 @@
       });
     });
 
-    // Listener para copiar prompt
+    // Copiar prompt
     listEl.querySelectorAll('.copy-prompt-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const key = e.target.getAttribute('data-key');
@@ -592,7 +755,7 @@
       });
     });
 
-    // Listener para copiar respuesta
+    // Copiar respuesta
     listEl.querySelectorAll('.copy-response-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const key = e.target.getAttribute('data-key');
@@ -607,7 +770,7 @@
       });
     });
 
-    // Listener para eliminar intento individual (con confirmación de 2 pasos)
+    // Eliminar versión individual
     listEl.querySelectorAll('.delete-attempt-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
