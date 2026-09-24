@@ -1,8 +1,164 @@
 /*
-   Estilos para el botón de eliminar captura
+   1. BOTÓN DE ALTERNANCIA DE VISTAS (HEADER)
+*/
+.view-toggle-btn {
+  background: #252729;
+  border: 1px solid #3c4043;
+  color: #c4c7c5;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-toggle-btn:hover {
+  background: #333538;
+  border-color: #8ab4f8;
+  color: #ffffff;
+}
+
+.view-toggle-btn.mode-compact {
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+  background: rgba(138, 180, 248, 0.12);
+}
+
+.view-toggle-btn .view-label {
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/*
+   2. BARRA DE CHIPS / TABS DE VERSIONES (MODO COMPACTO)
+*/
+.compact-nav-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #18191a;
+  border-bottom: 1px solid #282a2c;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+  scrollbar-color: #3c4043 transparent;
+}
+
+.compact-nav-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.compact-nav-bar::-webkit-scrollbar-thumb {
+  background: #3c4043;
+  border-radius: 4px;
+}
+
+.version-chip {
+  background: #222426;
+  border: 1px solid #3c4043;
+  color: #c4c7c5;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-family: Google Sans, sans-serif;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.18s ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.version-chip:hover {
+  background: #2f3235;
+  border-color: #5f6368;
+  color: #ffffff;
+}
+
+.version-chip.active {
+  background: #182f4d;
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+  font-weight: 600;
+  box-shadow: 0 0 6px rgba(138, 180, 248, 0.25);
+}
+
+.version-chip.chip-blocked {
+  border-color: #f28b82;
+  color: #f28b82;
+  background: #291818;
+}
+
+.version-chip.chip-blocked.active {
+  background: #4d1c1c;
+  color: #fce8e6;
+  box-shadow: 0 0 6px rgba(242, 139, 130, 0.35);
+}
+
+/* .version-chip.chip-generating {
+  border-color: #8ab4f8;
+  animation: pulse-chip-gen 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-chip-gen {
+  0% { border-color: #3c4043; }
+  50% { border-color: #8ab4f8; }
+  100% { border-color: #3c4043; }
+} */
+
+.chip-match-badge {
+  background: #fdd663;
+  color: #202124;
+  font-size: 9px;
+  font-weight: 800;
+  border-radius: 8px;
+  padding: 1px 5px;
+  line-height: 1.2;
+}
+
+/*
+   3. ADAPTACIONES ERGONÓMICAS EN MODO COMPACTO
+*/
+.drawer-content.compact-mode-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .prompt-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .response-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .response-body pre {
+  max-height: calc(100vh - 310px);
+  flex: 1;
+}
+
+.drawer-content.compact-mode-view .response-edit-area {
+  min-height: calc(100vh - 350px);
+  max-height: calc(100vh - 320px);
+}
+
+/*
+   4. ESTILOS DE EDICIÓN & TARJETAS
 */
 .card-footer-buttons {
+  display: flex;
   flex-wrap: wrap;
+  gap: 6px;
 }
 
 .card-footer-buttons button.delete-capture-btn {
@@ -26,9 +182,6 @@
   animation: delete-pulse 1.2s infinite alternate ease-in-out;
 }
 
-/*
-   Modo de edición de respuesta
-*/
 .prompt-card.item-editing {
   border-color: #8ab4f8;
   box-shadow: 0 0 8px rgba(138, 180, 248, 0.2);
@@ -38,6 +191,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
 }
 
 .response-edit-area {
@@ -76,7 +230,6 @@
   color: #a8c7fa;
 }
 
-/* Botones de acción de edición */
 .card-footer-buttons button.save-capture-btn {
   background: #133824;
   color: #81c995;
@@ -107,7 +260,7 @@
 }
 
 /*
-   1. BOTÓN FLOTANTE (BADGE)
+   5. BOTÓN FLOTANTE (BADGE)
 */
 #ai-interceptor-badge {
   position: fixed;
@@ -156,7 +309,7 @@
 }
 
 /*
-   2. PANEL LATERAL (DRAWER)
+   6. PANEL LATERAL (DRAWER)
 */
 #ai-interceptor-drawer {
   position: fixed;
@@ -261,7 +414,7 @@
 }
 
 /*
-   3. TARJETAS DE CAPTURA
+   7. TARJETAS DE CAPTURA
 */
 .prompt-card {
   background: #1e1f20;
@@ -316,7 +469,6 @@
 .status-blocked { background: #4d1c1c; color: #f28b82; }
 .status-generating { background: #182f4d; color: #8ab4f8; }
 
-/* Cuerpo de la Respuesta */
 .response-body pre {
   margin: 0;
   white-space: pre-wrap;
@@ -331,7 +483,6 @@
   color: #c4c7c5;
 }
 
-/* Pensamiento (Thoughts) */
 .item-thoughts {
   font-size: 11px;
   color: #8ab4f8;
@@ -347,7 +498,6 @@
   overflow-y: auto;
 }
 
-/* Pie de Tarjeta */
 .prompt-card-footer {
   display: flex;
   justify-content: space-between;
@@ -358,11 +508,6 @@
 .char-count {
   font-size: 11px;
   color: #8e918f;
-}
-
-.card-footer-buttons {
-  display: flex;
-  gap: 6px;
 }
 
 .card-footer-buttons button {
@@ -381,7 +526,7 @@
 }
 
 /*
-   4. TOAST DE ALERTA & ANIMACIONES
+   8. TOAST DE ALERTA & ANIMACIONES
 */
 #ai-interceptor-toast {
   position: fixed;
@@ -445,7 +590,7 @@
 }
 
 /*
-   5. BARRA DE BÚSQUEDA Y RESALTADO
+   9. BARRA DE BÚSQUEDA Y RESALTADO
 */
 .drawer-search-container {
   padding: 10px 16px;
@@ -542,4 +687,257 @@ mark.vault-highlight {
   border-radius: 2px;
   padding: 0 2px;
   font-weight: 600;
+}
+
+/* 
+   AJUSTE DE ALTURA Y BOTONES FIJOS EN VISTA COMPACTA / TARJETAS
+    */
+
+/* 1. Cuando la vista compacta está activa, el contenedor no debe scrollear por fuera */
+#ai-interceptor-list.drawer-content {
+  flex: 1;
+  min-height: 0; /* Clave en flexbox para permitir scroll interno sin desbordar */
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 12px;
+}
+
+/* En vista compacta (cuando solo se renderiza 1 tarjeta activa): */
+#ai-interceptor-list .prompt-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* Evita que la tarjeta crezca indefinidamente */
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* Cabecera de la tarjeta fija arriba */
+.prompt-card-header {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+}
+
+/* Área de pensamiento (si existe) */
+.item-thoughts {
+  flex-shrink: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+/* 2. El cuerpo de la respuesta se expande y SOLO su <pre> tiene scroll */
+.response-body {
+  flex: 1;
+  min-height: 0; /* Crucial para activar el scroll interno */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.response-body pre {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  max-height: none; /* Quitamos límites fijos artificiales */
+  overflow-y: auto; /* Solo el texto se desplaza */
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c4c7c5;
+}
+
+/* 3. El pie con los botones queda SIEMPRE visible y anclado al pie */
+.prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
+}
+
+/* En caso de modo edición (textarea) */
+.response-edit-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.response-edit-area {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  resize: none; /* En flexbox de alto completo no requiere resize manual */
+}
+
+
+/* ==============
+   SISTEMA DE VISTAS: MODO LISTA vs MODO COMPACTO
+   ============== */
+
+/* Contenedor general de la lista */
+#ai-interceptor-list.drawer-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 14px;
+}
+
+/* ==========================================
+   1. MODO LISTA (Múltiples tarjetas visibles)
+   ========================================== */
+#ai-interceptor-list:not(.mode-compact),
+#ai-interceptor-list.mode-list {
+  overflow-y: auto; /* El drawer hace scroll entre tarjetas */
+}
+
+/* Tarjeta en modo lista: Tamaño máximo controlado */
+#ai-interceptor-list:not(.mode-compact) .prompt-card,
+#ai-interceptor-list.mode-list .prompt-card {
+  flex: 0 0 auto;
+  max-height: 360px; /* Límite para que no monopolice la pantalla */
+  display: flex;
+  flex-direction: column;
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+#ai-interceptor-list:not(.mode-compact) .prompt-card-header,
+#ai-interceptor-list.mode-list .prompt-card-header {
+  flex-shrink: 0;
+  padding-bottom: 8px;
+}
+
+/* Vista previa de texto en modo lista */
+#ai-interceptor-list:not(.mode-compact) .response-body,
+#ai-interceptor-list.mode-list .response-body {
+  flex: 1;
+  min-height: 40px;
+  max-height: 200px; /* Muestra de 8 a 12 líneas de preview */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#ai-interceptor-list:not(.mode-compact) .response-body pre,
+#ai-interceptor-list.mode-list .response-body pre {
+  margin: 0;
+  flex: 1;
+  max-height: 200px;
+  overflow-y: auto; /* Scroll interno si el texto supera el preview */
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #c4c7c5;
+}
+
+/* Los botones en la lista quedan inmediatamente accesibles */
+#ai-interceptor-list:not(.mode-compact) .prompt-card-footer,
+#ai-interceptor-list.mode-list .prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
+}
+
+
+/* ==========================================
+   2. MODO COMPACTO (1 Sola tarjeta a pantalla completa)
+   ========================================== */
+#ai-interceptor-list.mode-compact,
+#ai-interceptor-list.view-compact {
+  overflow: hidden; /* Cero scroll en el panel exterior */
+}
+
+#ai-interceptor-list.mode-compact .prompt-card,
+#ai-interceptor-list.view-compact .prompt-card {
+  flex: 1;
+  min-height: 0;
+  max-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+}
+
+#ai-interceptor-list.mode-compact .prompt-card-header,
+#ai-interceptor-list.view-compact .prompt-card-header {
+  flex-shrink: 0;
+  padding-bottom: 8px;
+}
+
+#ai-interceptor-list.mode-compact .response-body,
+#ai-interceptor-list.view-compact .response-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#ai-interceptor-list.mode-compact .response-body pre,
+#ai-interceptor-list.view-compact .response-body pre {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c4c7c5;
+}
+
+#ai-interceptor-list.mode-compact .prompt-card-footer,
+#ai-interceptor-list.view-compact .prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
 }
