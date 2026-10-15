@@ -6,7 +6,6 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -149,7 +148,7 @@ class GoogleDriveManager:
         self._ai_studio_folder_id = folder["id"]
         return self._ai_studio_folder_id
 
-    def _download_bytes(self, file_id: str) -> Optional[bytes]:
+    def _download_bytes(self, file_id: str) -> bytes | None:
         """Descarga un archivo de Drive en memoria y devuelve sus bytes."""
         try:
             request = self.service.files().get_media(fileId=file_id)
@@ -175,8 +174,8 @@ class GoogleDriveManager:
         self,
         content: bytes,
         mime_type: str,
-        metadata: Optional[dict] = None,
-        file_id: Optional[str] = None,
+        metadata: dict | None = None,
+        file_id: str | None = None,
     ) -> dict:
         """Sube o actualiza un archivo en Drive. Si file_id es proporcionado, se actualiza el archivo existente, en caso contrario, se crea un nuevo archivo.
 
@@ -223,7 +222,7 @@ class GoogleDriveManager:
         )
         return resp
 
-    def _resolver_content(self, content: Union[str, Path, bytes]):
+    def _resolver_content(self, content: str | Path | bytes):
         if isinstance(content, Path):
             return content.read_bytes()
         elif isinstance(content, str):
@@ -233,7 +232,7 @@ class GoogleDriveManager:
         else:
             raise ValueError("content debe ser una cadena, un Path o un bytes")
 
-    def get_metadata(self, file_id: str) -> Optional[FileDriver]:
+    def get_metadata(self, file_id: str) -> FileDriver | None:
         # Google Drive API v3 permite controlar qué propiedades del recurso File
         # se devuelven mediante el parámetro `fields`.
         #
@@ -267,7 +266,7 @@ class GoogleDriveManager:
             )
             return None
 
-    def find_item_by_name(self, name: str, parent_id: str = "root") -> Optional[dict]:
+    def find_item_by_name(self, name: str, parent_id: str = "root") -> dict | None:
         try:
             response = (
                 self.service.files()
@@ -285,7 +284,7 @@ class GoogleDriveManager:
             return None
 
     def update_file(
-        self, file_id: str, content: Union[str, Path, bytes], mime_type: str
+        self, file_id: str, content: str | Path | bytes, mime_type: str
     ) -> FileDriver:
         """Actualiza un archivo en Drive con el contenido proporcionado."""
         bytes = self._resolver_content(content)
@@ -296,7 +295,7 @@ class GoogleDriveManager:
         self,
         folder_id: str,
         file_name: str,
-        content: Union[str, Path, bytes],
+        content: str | Path | bytes,
         mime_type: str,
     ) -> FileDriver:
         """Crea un archivo en Drive con el contenido proporcionado."""
@@ -450,3 +449,34 @@ class GoogleDriveManager:
             inlineFile=InlineFile(mimeType=mime_type, data=encoded_data),
             createTime=create_time,
         )
+
+    def list_files_in_folder(self, folder_id: str) -> list[FileDriver]:
+        """Lista todos los archivos contenidos en una carpeta específica de Drive gestionando paginación."""
+        fields = f"nextPageToken, files({', '.join(FileDriver.model_fields.keys())})"
+        all_files: list[FileDriver] = []
+        page_token = None
+
+        try:
+            while True:
+                response = (
+                    self.service.files()
+                    .list(
+                        q=f"'{folder_id}' in parents and trashed = false",
+                        spaces="drive",
+                        fields=fields,
+                        pageToken=page_token,
+                        pageSize=1000,
+                    )
+                    .execute()
+                )
+                items = response.get("files", [])
+                all_files.extend([FileDriver(**item) for item in items])
+
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+
+            return all_files
+        except HttpError as error:
+            logger.error(f"Error al listar archivos en carpeta '{folder_id}': {error}")
+            return []
