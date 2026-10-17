@@ -1,77 +1,77 @@
 (function () {
-  console.log('%c[AI Studio Interceptor] 🚀 Inicializado (Soporte Dual: XHR + Fetch)', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
-
-  const PROTO_FINISH_REASONS = {
-    1: 'STOP',
-    2: 'MAX_TOKENS',
-    3: 'SAFETY',
-    4: 'RECITATION',
-    5: 'OTHER',
-    6: 'BLOCKLIST',
-    7: 'PROHIBITED_CONTENT',
-    8: 'SPII'
-  };
+  console.log('%c[AI Studio Vault] 🚀 Interceptor Híbrido Activo (Modo Capturas)', 'color: #8ab4f8; font-weight: bold; font-size: 13px;');
 
   function isTargetUrl(url) {
     if (!url || typeof url !== 'string') return false;
     return (
       url.includes('MakerSuiteService/GenerateContent') ||
       url.includes('GenerateContent') ||
-      url.includes('alkalimakersuite')
+      url.includes('streamGenerateContent')
     );
   }
 
-  // ==========================================
-  // 1. HOOK PARA XMLHTTPREQUEST (XHR) - PRINCIPAL
-  // ==========================================
+  // Obtiene el ID del chat actual de la URL
+  function getActiveChatId() {
+    const path = window.location.pathname;
+    const parts = path.split('/').filter(Boolean);
+    const promptIdx = parts.findIndex(p => p === 'prompts' || p === 'prompt');
+    if (promptIdx !== -1 && parts[promptIdx + 1]) {
+      return parts[promptIdx + 1];
+    }
+    return 'new_chat';
+  }
+
+  function generateCaptureId() {
+    return 'cap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+  }
+
+  
+  // 1. HOOK PARA XMLHTTPREQUEST
+  
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
 
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this._url = typeof url === 'string' ? url : (url?.toString() || '');
-    this._method = method;
     return originalOpen.apply(this, [method, url, ...rest]);
   };
 
-  XMLHttpRequest.prototype.send = function (...args) {
+  XMLHttpRequest.prototype.send = function (body) {
     if (this._url && isTargetUrl(this._url)) {
-      console.log('%c[XHR DETECTADO] 🎯 Petición GenerateContent iniciada:', 'color: #81c995; font-weight: bold;', this._url);
-      const requestId = 'xhr_' + Date.now();
+      const requestId = generateCaptureId();
+      const chatId = getActiveChatId();
+      let started = false;
 
-      dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
-
-      const handleProgress = () => {
+      const handleProgress = (isComplete = false) => {
         try {
           if (this.responseText) {
-            parseAndExtract(this.responseText, requestId, false);
+            if (!started) {
+              dispatchAppEvent('stream-start', {
+                requestId,
+                chatId,
+                timestamp: Date.now()
+              });
+              started = true;
+            }
+            parseAndExtract(this.responseText, requestId, chatId, isComplete);
           }
         } catch (e) {
-          console.error('[XHR Interceptor] Error procesando texto en streaming:', e);
+          console.error('[Vault] Error en streaming XHR:', e);
         }
       };
 
-      this.addEventListener('progress', handleProgress);
-
-      this.addEventListener('readystatechange', () => {
-        if (this.readyState === 3) {
-          handleProgress();
-        } else if (this.readyState === 4) {
-          console.log('%c[XHR FINALIZADO] ✅ Generación completa recibida', 'color: #81c995; font-weight: bold;');
-          try {
-            parseAndExtract(this.responseText, requestId, true);
-          } catch (e) {
-            console.error('[XHR Interceptor] Error en estado final:', e);
-          }
-        }
-      });
+      this.addEventListener('progress', () => handleProgress(false));
+      this.addEventListener('load', () => handleProgress(true));
+      this.addEventListener('error', () => handleProgress(true));
+      this.addEventListener('abort', () => handleProgress(true));
     }
 
-    return originalSend.apply(this, args);
+    return originalSend.apply(this, arguments);
   };
 
-  // ==========================================
-  // 2. HOOK PARA FETCH (RESPALDO)
-  // ==========================================
+  
+  // 2. HOOK PARA FETCH
+  
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     let url = '';
@@ -79,26 +79,25 @@
       url = args[0];
     } else if (args[0] instanceof Request) {
       url = args[0].url;
-    } else if (args[0] && typeof args[0] === 'object' && args[0].url) {
-      url = args[0].url;
+    } else if (args[0] && typeof args[0] === 'object') {
+      url = args[0].url || '';
     }
 
     const response = await Reflect.apply(originalFetch, window, args);
 
     if (url && isTargetUrl(url)) {
-      console.log('%c[FETCH DETECTADO] 🎯 Petición GenerateContent iniciada:', 'color: #81c995; font-weight: bold;', url);
-      const requestId = 'fetch_' + Date.now();
-      attachPassiveStreamSpy(response, requestId);
+      const requestId = generateCaptureId();
+      const chatId = getActiveChatId();
+      attachFetchStreamSpy(response, requestId, chatId);
     }
 
     return response;
   };
 
-  function attachPassiveStreamSpy(response, requestId) {
+  function attachFetchStreamSpy(response, requestId, chatId) {
     if (!response?.body?.getReader) return;
 
-    dispatchAppEvent('stream-start', { requestId, timestamp: Date.now() });
-
+    let started = false;
     const originalGetReader = response.body.getReader.bind(response.body);
     const decoder = new TextDecoder('utf-8');
     let fullRawText = '';
@@ -107,16 +106,49 @@
       const reader = originalGetReader(...readerArgs);
       const originalRead = reader.read.bind(reader);
 
+      const originalCancel = reader.cancel ? reader.cancel.bind(reader) : null;
+      if (originalCancel) {
+        reader.cancel = async function (...cancelArgs) {
+          try {
+            if (fullRawText) {
+              parseAndExtract(fullRawText, requestId, chatId, true);
+            }
+          } catch (e) {}
+          return originalCancel(...cancelArgs);
+        };
+      }
+
       reader.read = async function () {
-        const result = await originalRead();
+        let result;
         try {
+          result = await originalRead();
+        } catch (streamErr) {
+          try {
+            if (fullRawText) {
+              parseAndExtract(fullRawText, requestId, chatId, true);
+            }
+          } catch (e) {}
+          throw streamErr;
+        }
+
+        try {
+          if (!started) {
+            dispatchAppEvent('stream-start', {
+              requestId,
+              chatId,
+              timestamp: Date.now()
+            });
+            started = true;
+          }
+
           if (!result.done && result.value) {
             fullRawText += decoder.decode(result.value, { stream: true });
-            parseAndExtract(fullRawText, requestId, false);
+            parseAndExtract(fullRawText, requestId, chatId, false);
           } else if (result.done) {
-            parseAndExtract(fullRawText, requestId, true);
+            parseAndExtract(fullRawText, requestId, chatId, true);
           }
         } catch (err) {}
+
         return result;
       };
 
@@ -124,11 +156,11 @@
     };
   }
 
-  // ==========================================
-  // 3. PARSER Y EXTRACTOR DE CONTENIDO
-  // ==========================================
-  function parseAndExtract(rawText, requestId, isComplete) {
-    if (!rawText) return;
+  
+  // 3. PARSER Y DETECTOR DE RESPUESTAS
+  
+  function parseAndExtract(rawText, requestId, chatId, isComplete) {
+    if (!rawText || rawText.trim().length === 0) return;
 
     let accumulatedText = '';
     let thoughtsText = '';
@@ -146,25 +178,18 @@
           } else {
             accumulatedText += text;
           }
-        }, (reasonCode, isSafety) => {
-          finishReason = reasonCode;
-          if (isSafety) isBlocked = true;
+        }, (reason, safetyFlag) => {
+          finishReason = reason;
+          if (safetyFlag) isBlocked = true;
         });
-      } catch (e) {
-        // Bloque JSON parcial
-      }
+      } catch (e) {}
     }
 
-    if (isBlocked && finishReason === 'STOP') {
-      finishReason = 'SAFETY';
-    }
-
-    if (accumulatedText.length > 0) {
-      console.log(`%c[CAPTURA] 📝 ${accumulatedText.length} caracteres extraídos | Estado: ${finishReason}`, 'color: #ff9800;');
-    }
+    if (!accumulatedText && !thoughtsText && !isBlocked) return;
 
     dispatchAppEvent(isComplete ? 'stream-complete' : 'stream-progress', {
       requestId,
+      chatId,
       accumulatedText,
       thoughtsText,
       isBlocked,
@@ -193,43 +218,71 @@
     return results;
   }
 
-  function extractFromJspb(node, onTextFound, onFinishReason) {
+  function extractFromJspb(node, onTextFound, onFinishReason, inheritedIsThought = false) {
     if (!node) return;
 
+    // Caso 1: Objetos JSON estándar (como los chunks de AI Studio / Drive)
     if (typeof node === 'object' && !Array.isArray(node)) {
-      if (node.text && typeof node.text === 'string') {
-        onTextFound(node.text, !!node.thought);
+      // Es pensamiento si lo hereda del padre o si el objeto tiene 'isThought' o 'thought' en true
+      const currentIsThought = inheritedIsThought || !!(node.isThought || node.thought);
+
+      // Si el objeto tiene un array 'parts', delegamos la extracción a las partes hijas
+      // para evitar duplicar el texto si 'node.text' también existe en la raíz
+      const hasParts = Array.isArray(node.parts) && node.parts.length > 0;
+
+      if (!hasParts && node.text && typeof node.text === 'string') {
+        onTextFound(node.text, currentIsThought);
       }
-      if (node.finishReason) {
-        const isSafe = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(node.finishReason);
-        onFinishReason(node.finishReason, isSafe);
+
+      if (node.finishReason && typeof node.finishReason === 'string') {
+        const isSafety = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(node.finishReason);
+        onFinishReason(node.finishReason, isSafety);
       }
+
+      if (Array.isArray(node.safetyRatings)) {
+        const hasBlocked = node.safetyRatings.some(r => r.blocked || r.probability === 'HIGH');
+        if (hasBlocked) onFinishReason('SAFETY', true);
+      }
+
+      // Recorrer recursivamente propagando si este bloque es un pensamiento
       for (const key in node) {
-        extractFromJspb(node[key], onTextFound, onFinishReason);
+        extractFromJspb(node[key], onTextFound, onFinishReason, currentIsThought);
       }
       return;
     }
 
+    // Caso 2: Arrays (serialización JsPb / Protobuf de Google)
     if (Array.isArray(node)) {
+      // Estructura de un Part en JsPb: [null, "texto...", ...] o [index, "texto...", ...]
       if (node.length >= 2 && typeof node[1] === 'string' && (node[0] === null || typeof node[0] === 'number')) {
         const textCandidate = node[1];
-        if (textCandidate.length > 0 && !textCandidate.startsWith('!FBel') && !textCandidate.startsWith('CAES')) {
-          const isThought = node[2] === true || node[3] === true;
+        if (
+          textCandidate.length > 0 &&
+          !textCandidate.startsWith('!FBel') &&
+          !textCandidate.startsWith('CAES') &&
+          !textCandidate.startsWith('generic::')
+        ) {
+          // En JsPb, el flag 'thought' es un booleano true dentro del array del Part (no solo en pos 2 o 3)
+          const isThoughtInArray = node.slice(2).some(item => item === true || item === 'THOUGHT');
+          const isThought = inheritedIsThought || isThoughtInArray;
+
           onTextFound(textCandidate, isThought);
         }
       }
 
       for (const item of node) {
-        if (typeof item === 'number' && PROTO_FINISH_REASONS[item]) {
-          onFinishReason(PROTO_FINISH_REASONS[item], [3, 6, 7, 8].includes(item));
-        } else if (typeof item === 'string' && ['SAFETY', 'PROHIBITED_CONTENT', 'STOP', 'MAX_TOKENS'].includes(item)) {
-          onFinishReason(item, item !== 'STOP' && item !== 'MAX_TOKENS');
+        if (typeof item === 'string') {
+          if (['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(item)) {
+            onFinishReason(item, true);
+          } else if (['STOP', 'MAX_TOKENS', 'RECITATION'].includes(item)) {
+            onFinishReason(item, false);
+          }
         }
       }
 
       for (const child of node) {
         if (typeof child === 'object' && child !== null) {
-          extractFromJspb(child, onTextFound, onFinishReason);
+          extractFromJspb(child, onTextFound, onFinishReason, inheritedIsThought);
         }
       }
     }

@@ -1,10 +1,11 @@
 {
     "manifest_version": 3,
-    "name": "AI Studio Safety & Stream Interceptor",
-    "version": "1.0.4",
-    "description": "Intercepta respuestas de AI Studio, rescata texto y almacena historial temporal en memoria.",
+    "name": "AI Studio Safety & Prompt Vault",
+    "version": "1.3.9",
+    "description": "Intercepta y rescata respuestas de AI Studio agrupadas por prompt y chat, con almacenamiento persistente.",
     "permissions": [
-        "storage"
+        "storage",
+        "unlimitedStorage"
     ],
     "host_permissions": [
         "https://aistudio.google.com/*",

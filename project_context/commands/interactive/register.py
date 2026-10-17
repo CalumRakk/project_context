@@ -1,7 +1,7 @@
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
 
 from project_context.core.project_context import ProjectContext
 from project_context.core.snapshot_mg import SnapshotManager
@@ -9,6 +9,7 @@ from project_context.services.api_drive import GoogleDriveManager
 from project_context.services.commit_service import CommitService
 from project_context.services.context_service import ContextService
 from project_context.services.git_service import GitService
+from project_context.services.replication_service import ReplicationService
 from project_context.ui import UI
 
 audit_logger = logging.getLogger("project_context.audit")
@@ -21,10 +22,19 @@ class SessionContext:
     api: GoogleDriveManager
     project_context: ProjectContext
 
-    _snapshot_manager: Optional[SnapshotManager] = None
-    _git: Optional[GitService] = None
-    _commit_service: Optional[CommitService] = None
-    _context_service: Optional[ContextService] = None
+    _snapshot_manager: SnapshotManager | None = None
+    _git: GitService | None = None
+    _commit_service: CommitService | None = None
+    _context_service: ContextService | None = None
+    _replication_service: ReplicationService | None = None
+
+    @property
+    def replication_service(self) -> ReplicationService:
+        if self._replication_service is None:
+            self._replication_service = ReplicationService(
+                self.api, self.project_context
+            )
+        return self._replication_service
 
     @property
     def snapshot_manager(self):
@@ -51,9 +61,34 @@ class SessionContext:
             self._context_service = ContextService(self.api, self.project_context)
         return self._context_service
 
+    def switch_session(
+        self, new_api: GoogleDriveManager, new_email: str, profile_name: str
+    ) -> None:
+        """Conmuta la sesión interactiva hacia otra cuenta/perfil en caliente."""
+        self.api = new_api
+        self.project_context.switch_identity(new_email)
+
+        # Invalidar cachés de servicios dependientes de la identidad/API
+        self._snapshot_manager = None
+        self._context_service = None
+        self._replication_service = None
+
+        # Persistir el nuevo perfil activo globalmente
+        try:
+            from project_context.core.profile_mg import ProfileManager
+
+            ProfileManager().set_active_profile(profile_name)
+            audit_logger.info(
+                f"SESSION_SWITCHED: Perfil activo cambiado globalmente a '{profile_name}' ({new_email})."
+            )
+        except Exception as e:
+            audit_logger.warning(
+                f"No se pudo persistir '{profile_name}' como perfil activo global: {e}"
+            )
+
 
 class CommandOption:
-    def __init__(self, names: List[str], description: str, is_flag: bool = True):
+    def __init__(self, names: list[str], description: str, is_flag: bool = True):
         self.names = names
         self.description = description
         self.is_flag = is_flag
@@ -65,7 +100,7 @@ class CommandArgument:
         name: str,
         description: str,
         required: bool = True,
-        completer_type: Optional[str] = None,
+        completer_type: str | None = None,
     ):
         self.name = name
         self.description = description
@@ -75,17 +110,17 @@ class CommandArgument:
 
 class ParsedArgs:
     def __init__(self):
-        self.flags: Dict[str, bool] = {}
-        self.options: Dict[str, str] = {}
-        self.args: List[str] = []
+        self.flags: dict[str, bool] = {}
+        self.options: dict[str, str] = {}
+        self.args: list[str] = []
 
     def has_flag(self, flag_name: str) -> bool:
         return self.flags.get(flag_name.lower(), False)
 
-    def get_option(self, opt_name: str) -> Optional[str]:
+    def get_option(self, opt_name: str) -> str | None:
         return self.options.get(opt_name.lower())
 
-    def get_arg(self, index: int, default: Optional[str] = None) -> Optional[str]:
+    def get_arg(self, index: int, default: str | None = None) -> str | None:
         if index < len(self.args):
             return self.args[index]
         return default
@@ -94,11 +129,11 @@ class ParsedArgs:
 class CommandMetadata:
     def __init__(
         self,
-        handler: Callable[[SessionContext, ParsedArgs], Optional[bool]],
+        handler: Callable[[SessionContext, ParsedArgs], bool | None],
         description: str,
         require_chat: bool = True,
-        options: Optional[List[CommandOption]] = None,
-        arguments: Optional[List[CommandArgument]] = None,
+        options: list[CommandOption] | None = None,
+        arguments: list[CommandArgument] | None = None,
     ):
         self.handler = handler
         self.description = description
@@ -109,16 +144,16 @@ class CommandMetadata:
 
 class InteractiveRegistry:
     def __init__(self):
-        self._commands: Dict[str, CommandMetadata] = {}
+        self._commands: dict[str, CommandMetadata] = {}
 
     def register(
         self,
-        names: List[str],
-        handler: Callable[[SessionContext, ParsedArgs], Optional[bool]],
+        names: list[str],
+        handler: Callable[[SessionContext, ParsedArgs], bool | None],
         description: str,
         require_chat: bool = True,
-        options: Optional[List[CommandOption]] = None,
-        arguments: Optional[List[CommandArgument]] = None,
+        options: list[CommandOption] | None = None,
+        arguments: list[CommandArgument] | None = None,
     ):
         metadata = CommandMetadata(
             handler=handler,
@@ -130,12 +165,12 @@ class InteractiveRegistry:
         for name in names:
             self._commands[name.lower()] = metadata
 
-    def get_commands_map(self) -> Dict[str, CommandMetadata]:
+    def get_commands_map(self) -> dict[str, CommandMetadata]:
         return self._commands
 
     def execute(
-        self, name: str, ctx: SessionContext, args_list: List[str]
-    ) -> Optional[bool]:
+        self, name: str, ctx: SessionContext, args_list: list[str]
+    ) -> bool | None:
         cmd_name = name.lower()
         start_time = time.time()
 
@@ -187,11 +222,11 @@ class InteractiveRegistry:
             raise
 
     def _parse_arguments(
-        self, args_list: List[str], metadata: CommandMetadata
+        self, args_list: list[str], metadata: CommandMetadata
     ) -> ParsedArgs:
         parsed = ParsedArgs()
-        flag_aliases: Dict[str, str] = {}
-        option_aliases: Dict[str, str] = {}
+        flag_aliases: dict[str, str] = {}
+        option_aliases: dict[str, str] = {}
 
         for opt in metadata.options:
             canonical = opt.names[0].lower()

@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.table import Table
@@ -12,23 +11,10 @@ console_rich = Console()
 logger = logging.getLogger("project_context.context_cmd")
 
 
-def _get_relative_path(path_str: str, project_path: Path) -> Optional[str]:
-    """Resuelve la entrada del usuario a una ruta relativa válida dentro del proyecto."""
-    target = Path(path_str)
-    try:
-        if target.is_absolute():
-            return target.relative_to(project_path).as_posix()
-        else:
-            abs_target = (Path.cwd() / target).resolve()
-            return abs_target.relative_to(project_path.resolve()).as_posix()
-    except ValueError:
-        return None
-
-
 def cmd_context(ctx: SessionContext, args: ParsedArgs):
     """Manejador interactivo para la gestión integral del contexto."""
     project_context = ctx.project_context
-    project_path = project_context.project_path
+    _ = project_context.project_path
     config = project_context.load_context_config()
 
     action = args.get_arg(0)
@@ -38,7 +24,6 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
     action = action.lower()
 
     # CONTROL E INSPECCIÓN: STATUS
-
     if action == "status":
         table = Table(
             title="[bold cyan]Configuración de Contexto Activo[/]",
@@ -59,7 +44,7 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
                 for folder in config.folders:
                     table.add_row("Foco de Carpeta", folder)
 
-        # Archivos Forzados / Excepciones (Whitelist con diagnóstico de anulación)
+        # Archivos Forzados / Excepciones (Whitelist)
         if config.files:
             for file_path in config.files:
                 override = project_context.check_file_override(file_path)
@@ -107,7 +92,6 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
         return
 
     # ENFOQUE BASE: SET
-
     elif action == "set":
         target_raw = args.get_arg(1)
         if not target_raw:
@@ -120,39 +104,35 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             project_context.save_context_config(config)
             UI.success("Área de trabajo redefinida a todo el proyecto (raíz '.').")
             UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
-            logger.info(
-                f"CONTEXT_CONFIG_UPDATED: folders={config.folders}, files={config.files}, exclusions={config.exclusions}"
-            )
             return
 
-        rel_str = _get_relative_path(target_raw, project_path)
-        if rel_str is None:
+        resolved = project_context.resolve_context_path(target_raw)
+        if resolved is None or not resolved.exists:
+            UI.error(f"La ruta '{target_raw}' no existe o no pertenece al proyecto.")
+            return
+
+        if resolved.is_external:
             UI.error(
-                f"La ruta '{target_raw}' debe estar ubicada dentro del proyecto '{project_path}'."
+                f"'{resolved.virtual_path}' pertenece a un paquete externo vinculado ({resolved.external_alias}).\n"
+                "El comando 'set' define el área local. Para incorporar código externo usa 'context add'."
             )
             return
 
-        full_path = project_path / rel_str
-        if not full_path.exists():
-            UI.error(f"La ruta '{rel_str}' no existe físicamente en el repositorio.")
-            return
+        if resolved.was_auto_translated:
+            UI.info(f"Ruta física resuelta como: [bold cyan]{resolved.virtual_path}[/]")
 
-        if full_path.is_dir():
-            config.folders = [rel_str]
+        if resolved.is_dir:
+            config.folders = [resolved.virtual_path]
             config.files = []
             UI.success(
-                f"Área de trabajo fijada exclusivamente en la carpeta '{rel_str}'."
+                f"Área de trabajo fijada exclusivamente en la carpeta '{resolved.virtual_path}'."
             )
         else:
             config.folders = []
-            config.files = [rel_str]
-            UI.success(f"Foco fijado exclusivamente en el archivo '{rel_str}'.")
-
-            override = project_context.check_file_override(rel_str)
-            if override == "exclude":
-                UI.info("Nota: Este archivo anula una regla de exclusión activa.")
-            elif override == ".gitignore":
-                UI.info("Nota: Este archivo anula una regla de .gitignore.")
+            config.files = [resolved.virtual_path]
+            UI.success(
+                f"Foco fijado exclusivamente en el archivo '{resolved.virtual_path}'."
+            )
 
         project_context.save_context_config(config)
         UI.info(
@@ -160,7 +140,6 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
         )
 
     # RESCATE Y SUMA SEGURA: ADD
-
     elif action == "add":
         target_raw = args.get_arg(1)
         if not target_raw:
@@ -175,100 +154,88 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             UI.info("Escribe [bold yellow]update[/] para sincronizar.")
             return
 
-        rel_str = _get_relative_path(target_raw, project_path)
-        if rel_str is None:
+        resolved = project_context.resolve_context_path(target_raw)
+        if resolved is None or not resolved.exists:
             UI.error(
-                f"La ruta '{target_raw}' debe estar ubicada dentro del proyecto '{project_path}'."
+                f"La ruta '{target_raw}' no existe en el proyecto ni en paquetes externos vinculados."
             )
             return
 
-        full_path = project_path / rel_str
-        if not full_path.exists():
-            UI.error(f"La ruta '{rel_str}' no existe físicamente en el repositorio.")
+        if resolved.was_auto_translated:
+            UI.info(f"Ruta resuelta como: [bold cyan]{resolved.virtual_path}[/]")
+
+        # Caso: Archivo individual (Local o de Paquete Externo)
+        if resolved.is_file:
+            if resolved.virtual_path not in config.files:
+                config.files.append(resolved.virtual_path)
+                override = project_context.check_file_override(resolved.virtual_path)
+                if override:
+                    UI.success(
+                        f"Archivo '{resolved.virtual_path}' sumado como excepción (anula {override})."
+                    )
+                else:
+                    UI.success(
+                        f"Archivo '{resolved.virtual_path}' sumado al foco de trabajo."
+                    )
+                project_context.save_context_config(config)
+                UI.info("Escribe [bold yellow]update[/] para sincronizar.")
+            else:
+                UI.info(
+                    f"El archivo '{resolved.virtual_path}' ya está registrado en el foco."
+                )
             return
 
-        # ESCENARIO A: Contexto general activo (folders == ["."])
-        if config.folders == ["."]:
-            if full_path.is_file():
-                override = project_context.check_file_override(rel_str)
-                if override:
-                    if rel_str not in config.files:
-                        config.files.append(rel_str)
-                        UI.success(
-                            f"Archivo '{rel_str}' añadido como excepción forzada (anula {override})."
-                        )
-                        project_context.save_context_config(config)
-                        UI.info("Escribe [bold yellow]update[/] para sincronizar.")
-                    else:
-                        UI.info(
-                            f"El archivo '{rel_str}' ya está registrado en las excepciones forzadas."
-                        )
-                else:
-                    if rel_str in config.files:
-                        UI.info(
-                            f"El archivo '{rel_str}' ya está registrado como excepción."
-                        )
-                    else:
-                        UI.info(
-                            f"El archivo '{rel_str}' ya forma parte del contexto por defecto del proyecto."
-                        )
-                        UI.tip(
-                            "No necesitas añadirlo manualmente a menos que esté en .gitignore o en exclusions."
-                        )
-            else:
-                # Es una carpeta
+        # Caso: Carpeta
+        if resolved.is_dir:
+            if resolved.is_external:
                 UI.info(
-                    f"La carpeta '{rel_str}' ya forma parte del contexto por defecto del proyecto."
+                    f"El paquete externo '{resolved.external_alias}' ya está vinculado globalmente.\n"
+                    f"Para sumar archivos específicos, usa: [bold yellow]context add {resolved.virtual_path}/archivo.py[/]"
+                )
+                return
+
+            if config.folders == ["."]:
+                UI.info(
+                    f"La carpeta '{resolved.virtual_path}' ya forma parte del contexto por defecto."
                 )
                 UI.tip(
                     "Si deseas enfocarte únicamente en esta carpeta, usa:",
-                    commands=[f"context set {rel_str}"],
+                    commands=[f"context set {resolved.virtual_path}"],
                 )
-            return
-
-        # ESCENARIO B: Foco restringido activo (folders != ["."])
-        if full_path.is_dir():
-            if rel_str not in config.folders:
-                config.folders.append(rel_str)
-                UI.success(f"Carpeta '{rel_str}' sumada al foco de trabajo.")
-                project_context.save_context_config(config)
-                UI.info("Escribe [bold yellow]update[/] para sincronizar.")
             else:
-                UI.info(f"La carpeta '{rel_str}' ya está en el foco de trabajo.")
-        else:
-            if rel_str not in config.files:
-                config.files.append(rel_str)
-                override = project_context.check_file_override(rel_str)
-                if override:
+                if resolved.virtual_path not in config.folders:
+                    config.folders.append(resolved.virtual_path)
                     UI.success(
-                        f"Archivo '{rel_str}' sumado al foco como excepción (anula {override})."
+                        f"Carpeta '{resolved.virtual_path}' sumada al foco de trabajo."
                     )
+                    project_context.save_context_config(config)
+                    UI.info("Escribe [bold yellow]update[/] para sincronizar.")
                 else:
-                    UI.success(f"Archivo '{rel_str}' sumado al foco de trabajo.")
-                project_context.save_context_config(config)
-                UI.info("Escribe [bold yellow]update[/] para sincronizar.")
-            else:
-                UI.info(f"El archivo '{rel_str}' ya está registrado en el foco.")
+                    UI.info(
+                        f"La carpeta '{resolved.virtual_path}' ya está en el foco de trabajo."
+                    )
 
     # PODA Y FILTROS: EXCLUDE
-
     elif action == "exclude":
         target_raw = args.get_arg(1)
         if not target_raw:
             UI.error("Uso: context exclude <ruta_o_patrón_glob>")
             return
 
-        # Detectar si es una ruta física del proyecto o un patrón glob
-        rel_str = _get_relative_path(target_raw, project_path)
-        pattern = target_raw.strip()
+        resolved = project_context.resolve_context_path(target_raw)
+        if resolved is None:
+            UI.error(
+                f"La ruta '{target_raw}' no es válida dentro del proyecto ni paquetes vinculados."
+            )
+            return
 
-        if rel_str is not None:
-            full_path = project_path / rel_str
-            if full_path.exists():
-                if full_path.is_dir():
-                    pattern = f"{rel_str}/**"
-                else:
-                    pattern = rel_str
+        if resolved.was_auto_translated:
+            UI.info(f"Ruta física resuelta como: [bold cyan]{resolved.virtual_path}[/]")
+
+        if resolved.is_dir:
+            pattern = f"{resolved.virtual_path}/**"
+        else:
+            pattern = resolved.virtual_path
 
         if pattern in config.exclusions:
             UI.info(f"El patrón o ruta '{pattern}' ya se encuentra excluido.")
@@ -277,38 +244,37 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
         config.exclusions.append(pattern)
 
         # Si estaba en files o folders, limpiarlo para mantener coherencia
-        if rel_str and rel_str in config.files:
-            config.files.remove(rel_str)
-            UI.info(f"Se removió '{rel_str}' de las excepciones forzadas.")
+        if resolved.virtual_path in config.files:
+            config.files.remove(resolved.virtual_path)
+            UI.info(
+                f"Se removió '{resolved.virtual_path}' de las excepciones forzadas."
+            )
 
-        if rel_str and rel_str in config.folders:
-            config.folders.remove(rel_str)
+        if resolved.virtual_path in config.folders:
+            config.folders.remove(resolved.virtual_path)
             if not config.folders and not config.files:
                 config.folders = ["."]
-            UI.info(f"Se removió '{rel_str}' del foco de carpetas.")
+            UI.info(f"Se removió '{resolved.virtual_path}' del foco de carpetas.")
 
         project_context.save_context_config(config)
         UI.success(f"Exclusión '{pattern}' aplicada con éxito.")
         UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
 
     # DESHACER INTELIGENTE: REMOVE / RM
-
     elif action in ("remove", "rm"):
         target_raw = args.get_arg(1)
         if not target_raw:
             UI.error("Uso: context remove <ruta_archivo | ruta_carpeta | patrón>")
             return
 
-        rel_str = _get_relative_path(target_raw, project_path)
-        target_clean = target_raw.strip()
+        resolved = project_context.resolve_context_path(target_raw)
+        v_path = resolved.virtual_path if resolved else target_raw.strip()
         removed = False
 
-        # Comprobar si está en exclusions (exacto o variante de carpeta)
+        # Comprobar si está en exclusions
         matching_exc = None
         for exc in list(config.exclusions):
-            if exc == target_clean or (
-                rel_str and exc in (rel_str, f"{rel_str}/**", f"{rel_str}/*")
-            ):
+            if exc == v_path or exc in (v_path, f"{v_path}/**", f"{v_path}/*"):
                 matching_exc = exc
                 break
 
@@ -318,27 +284,25 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             UI.success(f"Exclusión '{matching_exc}' removida del filtro.")
 
         # Comprobar si está en files
-        if rel_str and rel_str in config.files:
-            config.files.remove(rel_str)
+        if v_path in config.files:
+            config.files.remove(v_path)
             removed = True
-            UI.success(f"Archivo '{rel_str}' removido de las excepciones.")
+            UI.success(f"Archivo '{v_path}' removido de las excepciones.")
 
         # Comprobar si está en folders
-        if rel_str and rel_str in config.folders:
-            config.folders.remove(rel_str)
+        if v_path in config.folders:
+            config.folders.remove(v_path)
             removed = True
-            UI.success(f"Carpeta '{rel_str}' removida del foco.")
+            UI.success(f"Carpeta '{v_path}' removida del foco.")
             if not config.folders and not config.files:
                 config.folders = ["."]
-                UI.info(
-                    "No quedan focos locales activos. Reestablecido al proyecto completo (raíz '.')."
-                )
+                UI.info("Reestablecido al proyecto completo (raíz '.').")
 
         # Comprobar si es un paquete externo
         external_folders = getattr(config, "external_folders", {})
-        if target_clean in external_folders:
+        if v_path in external_folders:
             UI.warn(
-                f"'{target_clean}' es un paquete externo vinculado. Para desconectarlo usa: [bold yellow]context unlink {target_clean}[/]"
+                f"'{v_path}' es un paquete externo vinculado. Para desconectarlo usa: [bold yellow]context unlink {v_path}[/]"
             )
             return
 
@@ -352,18 +316,21 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
         UI.info("Escribe [bold yellow]update[/] para sincronizar con Google Drive.")
 
     # DES-EXCLUIR EXPLÍCITO: UNEXCLUDE
-
     elif action == "unexclude":
         pattern = args.get_arg(1)
         if not pattern:
             UI.error("Uso: context unexclude <patrón_glob>")
             return
 
-        rel_str = _get_relative_path(pattern, project_path)
+        resolved = project_context.resolve_context_path(pattern)
+        target_pattern = resolved.virtual_path if resolved else pattern.strip()
+
         matching_exc = None
         for exc in list(config.exclusions):
-            if exc == pattern or (
-                rel_str and exc in (rel_str, f"{rel_str}/**", f"{rel_str}/*")
+            if exc == target_pattern or exc in (
+                target_pattern,
+                f"{target_pattern}/**",
+                f"{target_pattern}/*",
             ):
                 matching_exc = exc
                 break
@@ -377,7 +344,6 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             UI.warn(f"El patrón '{pattern}' no está registrado en las exclusiones.")
 
     # PAQUETES EXTERNOS: LINK / UNLINK
-
     elif action == "link":
         alias = args.get_arg(1)
         target_raw = args.get_arg(2)
@@ -586,7 +552,6 @@ def cmd_context(ctx: SessionContext, args: ParsedArgs):
             )
 
     # RESTABLECER Y VISTA PREVIA: RESET / TREE
-
     elif action in ("reset", "clear"):
         config.reset_to_default()
         project_context.save_context_config(config)

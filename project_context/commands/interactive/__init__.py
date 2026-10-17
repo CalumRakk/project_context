@@ -8,6 +8,7 @@ from project_context.commands.interactive.chat import (
     cmd_save,
     cmd_update,
 )
+from project_context.commands.interactive.clone import cmd_clone
 from project_context.commands.interactive.commit import cmd_commit
 from project_context.commands.interactive.context import cmd_context
 from project_context.commands.interactive.inline import cmd_inline
@@ -189,6 +190,29 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
                 "Ruta del archivo Markdown destino (ej: capitulo_1.md).",
                 required=True,
                 completer_type="path",
+            )
+        ],
+    )
+
+    # COMANDO CLONE / REPLICATE
+    registry.register(
+        names=["clone", "copy-to", "replicate"],
+        handler=cmd_clone,
+        description="Clona el chat actual y sus dependencias de Drive hacia otro perfil/cuenta.",
+        require_chat=True,
+        options=[
+            CommandOption(
+                ["--switch", "-s"],
+                "Conmuta automáticamente la sesión interactiva al perfil destino tras clonar.",
+                is_flag=True,
+            )
+        ],
+        arguments=[
+            CommandArgument(
+                "perfil",
+                "Nombre del perfil destino configurado en el sistema.",
+                required=True,
+                completer_type="profile",  # Autocompletado automático con Tab
             )
         ],
     )

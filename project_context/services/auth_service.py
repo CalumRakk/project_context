@@ -1,7 +1,6 @@
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -26,17 +25,33 @@ class AuthService:
 
     @classmethod
     def authenticate(
-        cls, token_path: str | Path, secret_path: str | Path
+        cls,
+        token_path: str | Path,
+        secret_path: str | Path,
+        expected_email: str | None = None,
     ) -> Credentials:
-        credentials = cls.load_credentials_from_file(token_path)
-        if credentials and cls.refresh_credentials(credentials):
-            return credentials
+        credentials = None
+        try:
+            credentials = cls.load_credentials_from_file(token_path)
+            if credentials and cls.refresh_credentials(credentials):
+                return credentials
+        except ProfileTokenNotFoundError:
+            logger.info(
+                f"Token no encontrado en '{token_path}'. Iniciando flujo de autorización..."
+            )
 
+        # Iniciar OAuth interactivo si no existe o expiró sin refresh token
         credentials = cls.run_oauth_flow(secret_path)
+
+        # Si se especificó un correo esperado, verificar que no se haya logueado con otra cuenta
+        if expected_email:
+            actual_email = cls.fetch_user_email(credentials)
+            cls.verify_email_consistency(expected_email, actual_email)
+
         return cls.save_token(token_path, credentials)
 
     @classmethod
-    def load_credentials_from_dict(cls, token_data: dict) -> Optional[Credentials]:
+    def load_credentials_from_dict(cls, token_data: dict) -> Credentials | None:
         """
         Construye las credenciales a partir de un diccionario de datos (token serializado).
         """
@@ -49,9 +64,7 @@ class AuthService:
             return None
 
     @classmethod
-    def load_credentials_from_file(
-        cls, token_path: Path | str
-    ) -> Optional[Credentials]:
+    def load_credentials_from_file(cls, token_path: Path | str) -> Credentials | None:
         token_path = Path(token_path)
         if not token_path.exists():
             raise ProfileTokenNotFoundError(

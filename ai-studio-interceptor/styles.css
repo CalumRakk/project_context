@@ -1,4 +1,267 @@
-/* Botón Flotante */
+/*
+   1. BOTÓN DE ALTERNANCIA DE VISTAS (HEADER)
+*/
+.view-toggle-btn {
+  background: #252729;
+  border: 1px solid #3c4043;
+  color: #c4c7c5;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-toggle-btn:hover {
+  background: #333538;
+  border-color: #8ab4f8;
+  color: #ffffff;
+}
+
+.view-toggle-btn.mode-compact {
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+  background: rgba(138, 180, 248, 0.12);
+}
+
+.view-toggle-btn .view-label {
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/*
+   2. BARRA DE CHIPS / TABS DE VERSIONES (MODO COMPACTO)
+*/
+.compact-nav-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #18191a;
+  border-bottom: 1px solid #282a2c;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+  scrollbar-color: #3c4043 transparent;
+}
+
+.compact-nav-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.compact-nav-bar::-webkit-scrollbar-thumb {
+  background: #3c4043;
+  border-radius: 4px;
+}
+
+.version-chip {
+  background: #222426;
+  border: 1px solid #3c4043;
+  color: #c4c7c5;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-family: Google Sans, sans-serif;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.18s ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.version-chip:hover {
+  background: #2f3235;
+  border-color: #5f6368;
+  color: #ffffff;
+}
+
+.version-chip.active {
+  background: #182f4d;
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+  font-weight: 600;
+  box-shadow: 0 0 6px rgba(138, 180, 248, 0.25);
+}
+
+.version-chip.chip-blocked {
+  border-color: #f28b82;
+  color: #f28b82;
+  background: #291818;
+}
+
+.version-chip.chip-blocked.active {
+  background: #4d1c1c;
+  color: #fce8e6;
+  box-shadow: 0 0 6px rgba(242, 139, 130, 0.35);
+}
+
+/* .version-chip.chip-generating {
+  border-color: #8ab4f8;
+  animation: pulse-chip-gen 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-chip-gen {
+  0% { border-color: #3c4043; }
+  50% { border-color: #8ab4f8; }
+  100% { border-color: #3c4043; }
+} */
+
+.chip-match-badge {
+  background: #fdd663;
+  color: #202124;
+  font-size: 9px;
+  font-weight: 800;
+  border-radius: 8px;
+  padding: 1px 5px;
+  line-height: 1.2;
+}
+
+/*
+   3. ADAPTACIONES ERGONÓMICAS EN MODO COMPACTO
+*/
+.drawer-content.compact-mode-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .prompt-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .response-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-content.compact-mode-view .response-body pre {
+  max-height: calc(100vh - 310px);
+  flex: 1;
+}
+
+.drawer-content.compact-mode-view .response-edit-area {
+  min-height: calc(100vh - 350px);
+  max-height: calc(100vh - 320px);
+}
+
+/*
+   4. ESTILOS DE EDICIÓN & TARJETAS
+*/
+.card-footer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.card-footer-buttons button.delete-capture-btn {
+  background: #251818;
+  color: #f28b82;
+  border-color: #4d2828;
+  transition: all 0.2s ease;
+}
+
+.card-footer-buttons button.delete-capture-btn:hover {
+  background: #3c1e1e;
+  border-color: #f28b82;
+  color: #fce8e6;
+}
+
+.card-footer-buttons button.delete-capture-btn.btn-confirm-delete {
+  background: #5c1b1b;
+  border-color: #f28b82;
+  color: #ffffff;
+  font-weight: bold;
+  animation: delete-pulse 1.2s infinite alternate ease-in-out;
+}
+
+.prompt-card.item-editing {
+  border-color: #8ab4f8;
+  box-shadow: 0 0 8px rgba(138, 180, 248, 0.2);
+}
+
+.response-edit-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.response-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 180px;
+  max-height: 420px;
+  background: #111213;
+  color: #f1f3f4;
+  border: 1px solid #8ab4f8;
+  border-radius: 4px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.response-edit-area:focus {
+  border-color: #a8c7fa;
+  box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.25);
+}
+
+.response-edit-hint {
+  font-size: 10px;
+  color: #8e918f;
+  text-align: right;
+}
+
+.response-edit-hint code {
+  background: #282a2c;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #a8c7fa;
+}
+
+.card-footer-buttons button.save-capture-btn {
+  background: #133824;
+  color: #81c995;
+  border-color: #27623a;
+  font-weight: 600;
+}
+
+.card-footer-buttons button.save-capture-btn:hover {
+  background: #1d4d32;
+  border-color: #81c995;
+  color: #e6f4ea;
+}
+
+.card-footer-buttons button.cancel-capture-btn {
+  background: #282a2c;
+  color: #c4c7c5;
+}
+
+.card-footer-buttons button.cancel-capture-btn:hover {
+  background: #3c4043;
+  color: #ffffff;
+}
+
+.card-footer-buttons button.edit-capture-btn:hover {
+  background: #182f4d;
+  border-color: #8ab4f8;
+  color: #8ab4f8;
+}
+
+/*
+   5. BOTÓN FLOTANTE (BADGE)
+*/
 #ai-interceptor-badge {
   position: fixed;
   bottom: 24px;
@@ -45,13 +308,15 @@
   color: #202124;
 }
 
-/* Panel Lateral (Drawer) */
+/*
+   6. PANEL LATERAL (DRAWER)
+*/
 #ai-interceptor-drawer {
   position: fixed;
   top: 0;
   right: 0;
-  width: 480px;
-  max-width: 90vw;
+  width: 520px;
+  max-width: 92vw;
   height: 100vh;
   background: #131314;
   border-left: 1px solid #2d2f31;
@@ -77,28 +342,59 @@
 }
 
 .drawer-title span {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   display: block;
 }
 
 .drawer-title small {
   font-size: 11px;
-  color: #8e918f;
+  color: #8ab4f8;
+}
+
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-divider {
+  width: 1px;
+  height: 18px;
+  background: #3c4043;
 }
 
 .drawer-actions button {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: #c4c7c5;
   cursor: pointer;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
 }
 
 .drawer-actions button:hover {
   background: #282a2c;
+  border-color: #3c4043;
+}
+
+#ai-interceptor-close {
+  font-size: 15px;
+  padding: 6px 9px;
+  border-radius: 50%;
+}
+
+#ai-interceptor-clear.btn-confirm-delete {
+  background: #4d1c1c;
+  border-color: #f28b82;
+  color: #fce8e6;
+  font-weight: 600;
+  animation: delete-pulse 1.2s infinite alternate ease-in-out;
 }
 
 .drawer-content {
@@ -107,36 +403,53 @@
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .drawer-empty {
   text-align: center;
   color: #8e918f;
-  margin-top: 40px;
+  margin-top: 50px;
   font-size: 13px;
 }
 
-/* Elementos del Historial */
-.history-item {
+/*
+   7. TARJETAS DE CAPTURA
+*/
+.prompt-card {
   background: #1e1f20;
   border: 1px solid #2d2f31;
   border-radius: 8px;
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.history-item.item-blocked {
+.prompt-card.item-blocked {
   border-color: #f28b82;
   background: #251818;
 }
 
-.item-meta {
+.prompt-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.prompt-turn-tag {
+  font-size: 11px;
+  font-weight: bold;
+  background: #2d2f31;
+  color: #8ab4f8;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.prompt-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
 }
 
@@ -148,6 +461,7 @@
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: bold;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -155,11 +469,11 @@
 .status-blocked { background: #4d1c1c; color: #f28b82; }
 .status-generating { background: #182f4d; color: #8ab4f8; }
 
-.item-body pre {
+.response-body pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 220px;
+  max-height: 260px;
   overflow-y: auto;
   background: #131314;
   padding: 8px;
@@ -184,7 +498,7 @@
   overflow-y: auto;
 }
 
-.item-footer {
+.prompt-card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -196,22 +510,24 @@
   color: #8e918f;
 }
 
-.copy-btn {
+.card-footer-buttons button {
   background: #282a2c;
   color: #e3e3e3;
   border: 1px solid #3c4043;
   border-radius: 4px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 11px;
   cursor: pointer;
   transition: background 0.2s;
 }
 
-.copy-btn:hover {
+.card-footer-buttons button:hover {
   background: #3c4043;
 }
 
-/* Toast de Alerta */
+/*
+   8. TOAST DE ALERTA & ANIMACIONES
+*/
 #ai-interceptor-toast {
   position: fixed;
   bottom: 80px;
@@ -266,4 +582,422 @@
   0% { box-shadow: 0 0 0 0 rgba(242, 139, 130, 0.4); }
   70% { box-shadow: 0 0 0 10px rgba(242, 139, 130, 0); }
   100% { box-shadow: 0 0 0 0 rgba(242, 139, 130, 0); }
+}
+
+@keyframes delete-pulse {
+  0% { transform: scale(0.98); }
+  100% { transform: scale(1.02); }
+}
+
+/*
+   9. BARRA DE BÚSQUEDA Y RESALTADO
+*/
+.drawer-search-container {
+  padding: 10px 16px;
+  background: #18191a;
+  border-bottom: 1px solid #282a2c;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  color: #8e918f;
+  pointer-events: none;
+}
+
+#vault-search-input {
+  width: 100%;
+  background: #111213;
+  color: #f1f3f4;
+  border: 1px solid #3c4043;
+  border-radius: 6px;
+  padding: 6px 30px 6px 30px;
+  font-size: 12px;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+#vault-search-input:focus {
+  border-color: #8ab4f8;
+  background: #141516;
+  box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.2);
+}
+
+#vault-search-input::placeholder {
+  color: #8e918f;
+  font-size: 12px;
+}
+
+#vault-search-clear {
+  position: absolute;
+  right: 6px;
+  background: #282a2c;
+  border: none;
+  color: #c4c7c5;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.2s;
+}
+
+#vault-search-clear:hover {
+  background: #3c4043;
+  color: #ffffff;
+}
+
+.search-meta {
+  font-size: 11px;
+  color: #8e918f;
+  padding: 0 4px;
+}
+
+.search-meta span {
+  color: #fdd663;
+  font-weight: 600;
+}
+
+.search-meta .search-no-match {
+  color: #f28b82;
+  font-weight: normal;
+}
+
+mark.vault-highlight {
+  background: rgba(253, 214, 99, 0.28);
+  color: #fdd663;
+  border-bottom: 2px solid #fdd663;
+  border-radius: 2px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+/* 
+   AJUSTE DE ALTURA Y BOTONES FIJOS EN VISTA COMPACTA / TARJETAS
+    */
+
+/* 1. Cuando la vista compacta está activa, el contenedor no debe scrollear por fuera */
+#ai-interceptor-list.drawer-content {
+  flex: 1;
+  min-height: 0; /* Clave en flexbox para permitir scroll interno sin desbordar */
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 12px;
+}
+
+/* En vista compacta (cuando solo se renderiza 1 tarjeta activa): */
+#ai-interceptor-list .prompt-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* Evita que la tarjeta crezca indefinidamente */
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* Cabecera de la tarjeta fija arriba */
+.prompt-card-header {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+}
+
+/* Área de pensamiento (si existe) */
+.item-thoughts {
+  flex-shrink: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+/* 2. El cuerpo de la respuesta se expande y SOLO su <pre> tiene scroll */
+.response-body {
+  flex: 1;
+  min-height: 0; /* Crucial para activar el scroll interno */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.response-body pre {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  max-height: none; /* Quitamos límites fijos artificiales */
+  overflow-y: auto; /* Solo el texto se desplaza */
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c4c7c5;
+}
+
+/* 3. El pie con los botones queda SIEMPRE visible y anclado al pie */
+.prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
+}
+
+/* En caso de modo edición (textarea) */
+.response-edit-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.response-edit-area {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  resize: none; /* En flexbox de alto completo no requiere resize manual */
+}
+
+
+/* ==============
+   SISTEMA DE VISTAS: MODO LISTA vs MODO COMPACTO
+   ============== */
+
+/* Contenedor general de la lista */
+#ai-interceptor-list.drawer-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 14px;
+}
+
+/* ==========================================
+   1. MODO LISTA (Múltiples tarjetas visibles)
+   ========================================== */
+#ai-interceptor-list:not(.mode-compact),
+#ai-interceptor-list.mode-list {
+  overflow-y: auto; /* El drawer hace scroll entre tarjetas */
+}
+
+/* Tarjeta en modo lista: Tamaño máximo controlado */
+#ai-interceptor-list:not(.mode-compact) .prompt-card,
+#ai-interceptor-list.mode-list .prompt-card {
+  flex: 0 0 auto;
+  max-height: 360px; /* Límite para que no monopolice la pantalla */
+  display: flex;
+  flex-direction: column;
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+#ai-interceptor-list:not(.mode-compact) .prompt-card-header,
+#ai-interceptor-list.mode-list .prompt-card-header {
+  flex-shrink: 0;
+  padding-bottom: 8px;
+}
+
+/* Vista previa de texto en modo lista */
+#ai-interceptor-list:not(.mode-compact) .response-body,
+#ai-interceptor-list.mode-list .response-body {
+  flex: 1;
+  min-height: 40px;
+  max-height: 200px; /* Muestra de 8 a 12 líneas de preview */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#ai-interceptor-list:not(.mode-compact) .response-body pre,
+#ai-interceptor-list.mode-list .response-body pre {
+  margin: 0;
+  flex: 1;
+  max-height: 200px;
+  overflow-y: auto; /* Scroll interno si el texto supera el preview */
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #c4c7c5;
+}
+
+/* Los botones en la lista quedan inmediatamente accesibles */
+#ai-interceptor-list:not(.mode-compact) .prompt-card-footer,
+#ai-interceptor-list.mode-list .prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
+}
+
+
+/* ==========================================
+   2. MODO COMPACTO (1 Sola tarjeta a pantalla completa)
+   ========================================== */
+#ai-interceptor-list.mode-compact,
+#ai-interceptor-list.view-compact {
+  overflow: hidden; /* Cero scroll en el panel exterior */
+}
+
+#ai-interceptor-list.mode-compact .prompt-card,
+#ai-interceptor-list.view-compact .prompt-card {
+  flex: 1;
+  min-height: 0;
+  max-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1e1f20;
+  border: 1px solid #2d2f31;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+}
+
+#ai-interceptor-list.mode-compact .prompt-card-header,
+#ai-interceptor-list.view-compact .prompt-card-header {
+  flex-shrink: 0;
+  padding-bottom: 8px;
+}
+
+#ai-interceptor-list.mode-compact .response-body,
+#ai-interceptor-list.view-compact .response-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#ai-interceptor-list.mode-compact .response-body pre,
+#ai-interceptor-list.view-compact .response-body pre {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #131314;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c4c7c5;
+}
+
+#ai-interceptor-list.mode-compact .prompt-card-footer,
+#ai-interceptor-list.view-compact .prompt-card-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #282a2c;
+  background: #1e1f20;
+}
+
+/* =========================================
+   ESTILOS DE FAVORITOS (CHIPS Y TARJETAS)
+   ========================================= */
+
+/* 1. Chips en Modo Compacto */
+.version-chip.chip-favorite {
+  border-color: #fdd663;
+  color: #ffe082;
+  background: rgba(253, 214, 99, 0.08);
+}
+
+.version-chip.chip-favorite:hover {
+  background: rgba(253, 214, 99, 0.16);
+  border-color: #ffe082;
+  color: #ffffff;
+}
+
+.version-chip.chip-favorite.active {
+  background: #332b14;
+  border-color: #fdd663;
+  color: #fdd663;
+  box-shadow: 0 0 8px rgba(253, 214, 99, 0.35);
+}
+
+/* 2. Tarjetas en Modo Detallado / Lista */
+.prompt-card.item-favorite {
+  border-color: rgba(253, 214, 99, 0.45);
+  box-shadow: 0 0 10px rgba(253, 214, 99, 0.08);
+}
+
+.prompt-turn-tag.tag-favorite {
+  background: #2e2612;
+  color: #fdd663;
+  border: 1px solid rgba(253, 214, 99, 0.4);
+}
+
+/* 3. Botón de Favorito en el pie de la tarjeta */
+.card-footer-buttons button.fav-capture-btn {
+  transition: all 0.2s ease;
+}
+
+.card-footer-buttons button.fav-capture-btn:hover {
+  border-color: #fdd663;
+  color: #fdd663;
+  background: rgba(253, 214, 99, 0.08);
+}
+
+.card-footer-buttons button.fav-capture-btn.is-fav {
+  background: #332b14;
+  color: #fdd663;
+  border-color: #fdd663;
+  font-weight: 600;
+}
+
+.card-footer-buttons button.fav-capture-btn.is-fav:hover {
+  background: #44391a;
+  border-color: #ffe082;
+  color: #fff2b2;
 }

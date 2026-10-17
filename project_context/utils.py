@@ -5,7 +5,7 @@ import sys
 import zlib
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import List, Optional, Tuple, Union, cast
+from typing import cast
 
 import pathspec
 from rich.console import Console
@@ -19,18 +19,19 @@ COMMIT_TASK_MARKER = "<!-- TASK:COMMIT_SUGGESTION -->"
 
 PROMPT_TEMPLATE = """Eres un ingeniero de software senior y experto en análisis de código completo.
 
-A continuación te paso **todo el código fuente de mi proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest).
+A continuación te paso **el código fuente del proyecto** en formato texto plano optimizado para LLMs (generado con Gitingest).
 
-Formato del resumen:
+Formato y Convenciones:
 - Las rutas de archivo aparecen entre ``` (tres acentos graves) seguidas del path completo.
-- Luego viene el contenido completo del archivo.
-- Los directorios vacíos o archivos ignorados (.gitignore, node_modules, binarios, etc.) están excluidos.
-- Todo el proyecto está aquí, no hay archivos externos ni dependencias que no se vean.
+- Luego viene el contenido del archivo.
+- Los archivos ignorados (.gitignore, node_modules, binarios, etc.) están completamente excluidos.
+- Los archivos con etiqueta `(parcial)` en el árbol incluyen únicamente sus secciones esenciales delimitadas por `<project_context>`.
+- Los archivos o carpetas con `(excluido)` o `(resto excluido)` pertenecen a la arquitectura pero su código fue omitido deliberadamente para ahorrar contexto.
 
 INSTRUCCIONES OBLIGATORIAS:
 1. Analiza TODA la estructura del proyecto antes de responder.
 2. Recuerda el contenido de cada archivo importante (no lo olvides en respuestas siguientes).
-3. Si necesitas ver algún archivo de nuevo, puedes pedírmelo por su ruta exacta.
+3. Si necesitas ver el contenido completo de algún archivo excluido u omitido, pídemelo por su ruta exacta.
 4. Cuando hagas sugerencias de código, respeta la arquitectura actual y el estilo del proyecto.
 
 ¿Entendido? Confirma con "Listo, proyecto cargado" y dime brevemente de qué va el proyecto según lo que ves.
@@ -57,7 +58,7 @@ custom_theme = Theme(
 console = Console(theme=custom_theme)
 
 
-def check_path_match(patterns: List[str], rel_path: str) -> bool:
+def check_path_match(patterns: list[str], rel_path: str) -> bool:
     """Evalúa si una ruta relativa coincide con una lista de patrones glob estilo git."""
     if not patterns:
         return False
@@ -66,8 +67,8 @@ def check_path_match(patterns: List[str], rel_path: str) -> bool:
 
 
 def diagnose_file_override(
-    project_path: Path, rel_file_path: str, exclusions: List[str]
-) -> Optional[str]:
+    project_path: Path, rel_file_path: str, exclusions: list[str]
+) -> str | None:
     """Determina si un archivo específico está anulando una regla de exclusión o .gitignore.
 
     Retorna:
@@ -157,7 +158,7 @@ def get_app_root_dir() -> Path:
     return base / "project_context"
 
 
-def compute_md5(source: Union[bytes, str, Path]) -> str:
+def compute_md5(source: bytes | str | Path) -> str:
     """Calcula el hash MD5 de un bloque de bytes o de un archivo físico."""
     import hashlib
 
@@ -176,7 +177,7 @@ def compute_md5(source: Union[bytes, str, Path]) -> str:
     return hash_md5.hexdigest()
 
 
-def generate_unique_id(path: Union[str, Path]) -> str:
+def generate_unique_id(path: str | Path) -> str:
     p = Path(path) if isinstance(path, str) else path
     st = p.stat()
     return f"{st.st_dev}-{st.st_ino}"
@@ -190,7 +191,7 @@ def human_to_int(value) -> int:
     return int(float(value))
 
 
-def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
+def get_ignore_patterns(folder: Path, filename: str) -> list[str]:
     """Lee patrones de un archivo de ignore (gitignore o contextignore)."""
     path_file = folder / filename
     if path_file.exists():
@@ -202,7 +203,7 @@ def get_ignore_patterns(folder: Path, filename: str) -> List[str]:
     return []
 
 
-def ensure_gitignore(project_path: Union[str, Path], state_data: Optional[dict] = None):
+def ensure_gitignore(project_path: str | Path, state_data: dict | None = None):
     """Verifica y añade la regla de exclusión del directorio local a .gitignore."""
     project_path = Path(project_path)
 
@@ -248,9 +249,7 @@ def has_files_modified_since(
 
     if target_path.is_file():
         fecha_mod = target_path.stat().st_mtime
-        if fecha_mod > st_mtime:
-            return True
-        return False
+        return fecha_mod > st_mtime
     elif target_path.is_dir():
         for file in target_path.rglob("*"):
             if not file.is_file():
@@ -302,15 +301,18 @@ def get_potential_media_folders(project_path: Path) -> list[Path]:
     }
     found = []
     for p in project_path.rglob("*"):
-        if p.is_dir() and p.name.lower() in common_names:
-            if not any(
+        if (
+            p.is_dir()
+            and p.name.lower() in common_names
+            and not any(
                 part.startswith(".") or part == "node_modules" for part in p.parts
-            ):
-                found.append(p)
+            )
+        ):
+            found.append(p)
     return found
 
 
-def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
+def extract_image_references_from_text(content: str) -> list[tuple[str, bool]]:
     """Extrae referencias Markdown, HTML o WikiLink de imágenes."""
     results = []
     std_patterns = [
@@ -335,7 +337,7 @@ def extract_image_references_from_text(content: str) -> List[Tuple[str, bool]]:
     return list(dict.fromkeys(results))
 
 
-def extract_image_references(file_path: Path) -> List[Tuple[str, bool]]:
+def extract_image_references(file_path: Path) -> list[tuple[str, bool]]:
     if not file_path.exists():
         return []
     return extract_image_references_from_text(file_path.read_text(encoding="utf-8"))
