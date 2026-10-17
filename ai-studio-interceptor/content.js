@@ -246,7 +246,8 @@
         text: '',
         thoughts: '',
         finishReason: 'GENERATING...',
-        isBlocked: false
+        isBlocked: false,
+        isFavorite: false
       };
       captures.unshift(capture);
     }
@@ -307,6 +308,15 @@
 
     persistStorage();
     updateBadge();
+    renderCaptureList();
+  }
+    
+  function toggleFavoriteCapture(id) {
+    const capture = captures.find(c => c.id === id);
+    if (!capture) return;
+
+    capture.isFavorite = !capture.isFavorite;
+    persistStorage();
     renderCaptureList();
   }
 
@@ -553,6 +563,7 @@
   function generateCardHtml(cap, query) {
     const isEditing = (editingCaptureId === cap.id);
     const isConfirming = (confirmingCaptureId === cap.id);
+    const isFav = !!cap.isFavorite;
     const time = new Date(cap.timestamp).toLocaleTimeString();
     const statusClass = cap.isBlocked ? 'status-blocked' : (cap.finishReason === 'STOP' ? 'status-ok' : 'status-generating');
 
@@ -582,6 +593,9 @@
       <button class="save-capture-btn" data-id="${cap.id}">💾 Guardar</button>
       <button class="cancel-capture-btn" data-id="${cap.id}">✖️ Cancelar</button>
     ` : `
+      <button class="fav-capture-btn ${isFav ? 'is-fav' : ''}" data-id="${cap.id}" title="${isFav ? 'Quitar de favoritos' : 'Marcar como favorito'}">
+        ${isFav ? '★ Favorito' : '☆ Favorito'}
+      </button>
       <button class="edit-capture-btn" data-id="${cap.id}" title="Editar esta captura">✏️ Editar</button>
       <button class="copy-response-btn" data-id="${cap.id}">📋 Copiar</button>
       <button class="${deleteBtnClass}" data-id="${cap.id}" title="Eliminar captura v${cap.version}">
@@ -590,9 +604,11 @@
     `;
 
     return `
-      <div class="prompt-card ${cap.isBlocked ? 'item-blocked' : ''} ${isEditing ? 'item-editing' : ''}">
+      <div class="prompt-card ${cap.isBlocked ? 'item-blocked' : ''} ${isFav ? 'item-favorite' : ''} ${isEditing ? 'item-editing' : ''}">
         <div class="prompt-card-header">
-          <span class="prompt-turn-tag">Captura v${cap.version}</span>
+          <span class="prompt-turn-tag ${isFav ? 'tag-favorite' : ''}">
+            ${isFav ? '⭐ ' : ''}Captura v${cap.version}
+          </span>
           <div class="prompt-header-actions">
             <span class="item-time">${time}</span>
             <span class="item-status ${statusClass}">${cap.finishReason}</span>
@@ -684,20 +700,20 @@
         compactNavEl.innerHTML = orderedForChips.map(cap => {
           const isActive = (cap.id === selectedCaptureId);
           const isGen = cap.finishReason === 'GENERATING...';
+          const isFav = !!cap.isFavorite;
           const matchInfo = capturesWithMatches.find(item => item.cap.id === cap.id);
           const matchBadge = (query && matchInfo && matchInfo.matchCount > 0) 
             ? `<span class="chip-match-badge">${matchInfo.matchCount}</span>` 
             : '';
 
           let icon = '';
-          if (cap.isBlocked) icon = '';
-          else if (isGen) icon = '';
+          if (isFav) icon = '⭐ ';
 
           return `
             <button 
-              class="version-chip ${isActive ? 'active' : ''} ${cap.isBlocked ? 'chip-blocked' : ''} ${isGen ? 'chip-generating' : ''}" 
+              class="version-chip ${isActive ? 'active' : ''} ${cap.isBlocked ? 'chip-blocked' : ''} ${isFav ? 'chip-favorite' : ''} ${isGen ? 'chip-generating' : ''}" 
               data-id="${cap.id}"
-              title="Versión ${cap.version} - ${cap.finishReason} (${cap.text.length} caracteres)"
+              title="Versión ${cap.version}${isFav ? ' (Favorito)' : ''} - ${cap.finishReason} (${cap.text.length} caracteres)"
             >
               <span class="chip-title">${icon}v${cap.version}</span>
               ${matchBadge}
@@ -811,6 +827,14 @@
             renderCaptureList();
           }, 3500);
         }
+      });
+    });
+
+    listEl.querySelectorAll('.fav-capture-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.getAttribute('data-id');
+        toggleFavoriteCapture(id);
       });
     });
   }

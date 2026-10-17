@@ -941,3 +941,63 @@ mark.vault-highlight {
   border-top: 1px solid #282a2c;
   background: #1e1f20;
 }
+
+/* =========================================
+   ESTILOS DE FAVORITOS (CHIPS Y TARJETAS)
+   ========================================= */
+
+/* 1. Chips en Modo Compacto */
+.version-chip.chip-favorite {
+  border-color: #fdd663;
+  color: #ffe082;
+  background: rgba(253, 214, 99, 0.08);
+}
+
+.version-chip.chip-favorite:hover {
+  background: rgba(253, 214, 99, 0.16);
+  border-color: #ffe082;
+  color: #ffffff;
+}
+
+.version-chip.chip-favorite.active {
+  background: #332b14;
+  border-color: #fdd663;
+  color: #fdd663;
+  box-shadow: 0 0 8px rgba(253, 214, 99, 0.35);
+}
+
+/* 2. Tarjetas en Modo Detallado / Lista */
+.prompt-card.item-favorite {
+  border-color: rgba(253, 214, 99, 0.45);
+  box-shadow: 0 0 10px rgba(253, 214, 99, 0.08);
+}
+
+.prompt-turn-tag.tag-favorite {
+  background: #2e2612;
+  color: #fdd663;
+  border: 1px solid rgba(253, 214, 99, 0.4);
+}
+
+/* 3. Botón de Favorito en el pie de la tarjeta */
+.card-footer-buttons button.fav-capture-btn {
+  transition: all 0.2s ease;
+}
+
+.card-footer-buttons button.fav-capture-btn:hover {
+  border-color: #fdd663;
+  color: #fdd663;
+  background: rgba(253, 214, 99, 0.08);
+}
+
+.card-footer-buttons button.fav-capture-btn.is-fav {
+  background: #332b14;
+  color: #fdd663;
+  border-color: #fdd663;
+  font-weight: 600;
+}
+
+.card-footer-buttons button.fav-capture-btn.is-fav:hover {
+  background: #44391a;
+  border-color: #ffe082;
+  color: #fff2b2;
+}

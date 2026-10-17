@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "AI Studio Safety & Prompt Vault",
-    "version": "1.3.7",
+    "version": "1.3.9",
     "description": "Intercepta y rescata respuestas de AI Studio agrupadas por prompt y chat, con almacenamiento persistente.",
     "permissions": [
         "storage",

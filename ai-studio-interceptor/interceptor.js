@@ -218,28 +218,42 @@
     return results;
   }
 
-  function extractFromJspb(node, onTextFound, onFinishReason) {
+  function extractFromJspb(node, onTextFound, onFinishReason, inheritedIsThought = false) {
     if (!node) return;
 
+    // Caso 1: Objetos JSON estándar (como los chunks de AI Studio / Drive)
     if (typeof node === 'object' && !Array.isArray(node)) {
-      if (node.text && typeof node.text === 'string') {
-        onTextFound(node.text, !!node.thought);
+      // Es pensamiento si lo hereda del padre o si el objeto tiene 'isThought' o 'thought' en true
+      const currentIsThought = inheritedIsThought || !!(node.isThought || node.thought);
+
+      // Si el objeto tiene un array 'parts', delegamos la extracción a las partes hijas
+      // para evitar duplicar el texto si 'node.text' también existe en la raíz
+      const hasParts = Array.isArray(node.parts) && node.parts.length > 0;
+
+      if (!hasParts && node.text && typeof node.text === 'string') {
+        onTextFound(node.text, currentIsThought);
       }
+
       if (node.finishReason && typeof node.finishReason === 'string') {
         const isSafety = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(node.finishReason);
         onFinishReason(node.finishReason, isSafety);
       }
+
       if (Array.isArray(node.safetyRatings)) {
         const hasBlocked = node.safetyRatings.some(r => r.blocked || r.probability === 'HIGH');
         if (hasBlocked) onFinishReason('SAFETY', true);
       }
+
+      // Recorrer recursivamente propagando si este bloque es un pensamiento
       for (const key in node) {
-        extractFromJspb(node[key], onTextFound, onFinishReason);
+        extractFromJspb(node[key], onTextFound, onFinishReason, currentIsThought);
       }
       return;
     }
 
+    // Caso 2: Arrays (serialización JsPb / Protobuf de Google)
     if (Array.isArray(node)) {
+      // Estructura de un Part en JsPb: [null, "texto...", ...] o [index, "texto...", ...]
       if (node.length >= 2 && typeof node[1] === 'string' && (node[0] === null || typeof node[0] === 'number')) {
         const textCandidate = node[1];
         if (
@@ -248,7 +262,10 @@
           !textCandidate.startsWith('CAES') &&
           !textCandidate.startsWith('generic::')
         ) {
-          const isThought = node[2] === true || node[3] === true;
+          // En JsPb, el flag 'thought' es un booleano true dentro del array del Part (no solo en pos 2 o 3)
+          const isThoughtInArray = node.slice(2).some(item => item === true || item === 'THOUGHT');
+          const isThought = inheritedIsThought || isThoughtInArray;
+
           onTextFound(textCandidate, isThought);
         }
       }
@@ -265,7 +282,7 @@
 
       for (const child of node) {
         if (typeof child === 'object' && child !== null) {
-          extractFromJspb(child, onTextFound, onFinishReason);
+          extractFromJspb(child, onTextFound, onFinishReason, inheritedIsThought);
         }
       }
     }
