@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
@@ -12,6 +13,27 @@ from project_context.ui import UI
 from project_context.utils import compute_md5, human_to_int
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ResolvedPath:
+    virtual_path: str
+    physical_path: Path | None = None
+    is_external: bool = False
+    external_alias: str | None = None
+    was_auto_translated: bool = False
+
+    @property
+    def exists(self) -> bool:
+        return self.physical_path is not None and self.physical_path.exists()
+
+    @property
+    def is_dir(self) -> bool:
+        return self.physical_path is not None and self.physical_path.is_dir()
+
+    @property
+    def is_file(self) -> bool:
+        return self.physical_path is not None and self.physical_path.is_file()
 
 
 class ProjectContext:
@@ -233,7 +255,6 @@ class ProjectContext:
 
     def generate_context(self) -> Context:
         """Genera el prompt de contexto unificado aplicando el principio de cortocircuito
-
         y la precedencia de reglas:
         Archivo Explícito (files) > Exclusiones (exclusions) > Área de Trabajo (folders) > .gitignore.
         """
@@ -241,9 +262,9 @@ class ProjectContext:
 
         from project_context.utils import get_ignore_patterns
 
-        custom_ignores = list(config.exclusions)
-        gitignore_ignores = get_ignore_patterns(self.project_path, ".gitignore")
-        all_ignores = set(custom_ignores + gitignore_ignores)
+        # Separación conceptual estricta
+        custom_exclusions = set(config.exclusions)
+        gitignore_ignores = set(get_ignore_patterns(self.project_path, ".gitignore"))
 
         import uuid
 
@@ -253,16 +274,33 @@ class ProjectContext:
         targets = []
 
         # ARCHIVOS FORZADOS / WHITELIST (Máxima prioridad: cortocircuitan .gitignore y exclusions)
+        external_folders = getattr(config, "external_folders", {}) or {}
         for f_path in config.files:
-            real_path = self.project_path / f_path
-            if real_path.exists() and real_path.is_file():
-                targets.append(
-                    VirtualTarget(
-                        physical_path=real_path,
-                        virtual_alias=".",
-                        is_file=True,
+            # Comprobar si pertenece a un paquete externo vinculado
+            parts = f_path.split("/", 1)
+            if parts[0] in external_folders:
+                alias = parts[0]
+                sub_rel = parts[1] if len(parts) > 1 else ""
+                real_path = Path(external_folders[alias]) / sub_rel
+                if real_path.exists() and real_path.is_file():
+                    targets.append(
+                        VirtualTarget(
+                            physical_path=real_path,
+                            virtual_alias=alias,
+                            is_file=True,
+                        )
                     )
-                )
+            else:
+                # Archivo local del proyecto
+                real_path = self.project_path / f_path
+                if real_path.exists() and real_path.is_file():
+                    targets.append(
+                        VirtualTarget(
+                            physical_path=real_path,
+                            virtual_alias=".",
+                            is_file=True,
+                        )
+                    )
 
         # ÁREA DE TRABAJO LOCAL (Aplica .gitignore y exclusions)
         if config.folders == ["."]:
@@ -298,13 +336,14 @@ class ProjectContext:
                     )
                 )
 
-        # Construimos la query de ingesta
+        # Construimos la query separando filtros duros de suaves
         query = IngestionQuery(
             local_path=self.project_path,
             slug=self.project_path.name,
             id=uuid.uuid4(),
             max_file_size=10 * 1024 * 1024,
-            ignore_patterns=all_ignores,
+            ignore_patterns=gitignore_ignores,
+            exclude_patterns=custom_exclusions,
             targets=targets,
         )
 
@@ -321,4 +360,101 @@ class ProjectContext:
         self.state_path = self.local_dir / f"state_{self.identity_hash}.json"
         logger.info(
             f"PROJECT_CONTEXT_IDENTITY_SWITCHED: email='{self.email}' | hash='{self.identity_hash}'"
+        )
+
+    def resolve_context_path(self, target_raw: str) -> ResolvedPath | None:
+        """Resuelve una ruta provista por el usuario (local, externa con alias o absoluta)
+
+        a un objeto canónico ResolvedPath.
+        """
+        if not target_raw or not target_raw.strip():
+            return None
+
+        clean_str = target_raw.strip().replace("\\", "/")
+        if clean_str != ".":
+            clean_str = clean_str.strip("/")
+
+        config = self.load_context_config()
+        external_folders = getattr(config, "external_folders", {}) or {}
+
+        # Comprobar si es un patrón glob con comodines (*, ?, [)
+        if any(c in clean_str for c in ("*", "?", "[")):
+            return ResolvedPath(virtual_path=clean_str)
+
+        raw_path = Path(target_raw)
+
+        # Comprobar si el usuario pasó una ruta absoluta física
+        if raw_path.is_absolute():
+            abs_target = raw_path.resolve()
+            abs_project = self.project_path.resolve()
+
+            # 2a. Cae dentro del proyecto local
+            if abs_target == abs_project or abs_project in abs_target.parents:
+                rel = abs_target.relative_to(abs_project).as_posix()
+                v_path = "." if rel == "." else rel
+                return ResolvedPath(
+                    virtual_path=v_path,
+                    physical_path=abs_target,
+                    is_external=False,
+                    was_auto_translated=True,
+                )
+
+            # 2b. Cae dentro de algún paquete externo vinculado
+            for alias, ext_path_str in external_folders.items():
+                abs_ext = Path(ext_path_str).resolve()
+                if abs_target == abs_ext or abs_ext in abs_target.parents:
+                    rel = abs_target.relative_to(abs_ext).as_posix()
+                    v_path = alias if rel == "." else f"{alias}/{rel}"
+                    return ResolvedPath(
+                        virtual_path=v_path,
+                        physical_path=abs_target,
+                        is_external=True,
+                        external_alias=alias,
+                        was_auto_translated=True,
+                    )
+
+            # Es absoluta pero no pertenece ni al proyecto ni a ningún paquete vinculado
+            return None
+
+        # Comprobar si empieza con el alias de un paquete externo (ej: "gitchunk/models.py" o "gitchunk")
+        parts = clean_str.split("/", 1)
+        first_segment = parts[0]
+        if first_segment in external_folders:
+            alias = first_segment
+            ext_base = Path(external_folders[alias]).resolve()
+            sub_rel = parts[1] if len(parts) > 1 else ""
+            phys_target = (ext_base / sub_rel).resolve() if sub_rel else ext_base
+            return ResolvedPath(
+                virtual_path=clean_str,
+                physical_path=phys_target,
+                is_external=True,
+                external_alias=alias,
+                was_auto_translated=False,
+            )
+
+        # Comprobar si es una ruta local del proyecto
+        abs_project = self.project_path.resolve()
+        candidate = (abs_project / clean_str).resolve()
+        try:
+            if candidate == abs_project:
+                return ResolvedPath(
+                    virtual_path=".",
+                    physical_path=abs_project,
+                    is_external=False,
+                )
+            elif abs_project in candidate.parents:
+                rel = candidate.relative_to(abs_project).as_posix()
+                return ResolvedPath(
+                    virtual_path=rel,
+                    physical_path=candidate,
+                    is_external=False,
+                )
+        except ValueError:
+            pass
+
+        # Si no existe físicamente pero es relativa, se acepta como patrón (ej: carpetas a excluir que no existen aún)
+        return ResolvedPath(
+            virtual_path=clean_str,
+            physical_path=candidate if not candidate.is_absolute() else None,
+            is_external=False,
         )
