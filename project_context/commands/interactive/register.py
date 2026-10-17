@@ -61,6 +61,31 @@ class SessionContext:
             self._context_service = ContextService(self.api, self.project_context)
         return self._context_service
 
+    def switch_session(
+        self, new_api: GoogleDriveManager, new_email: str, profile_name: str
+    ) -> None:
+        """Conmuta la sesión interactiva hacia otra cuenta/perfil en caliente."""
+        self.api = new_api
+        self.project_context.switch_identity(new_email)
+
+        # Invalidar cachés de servicios dependientes de la identidad/API
+        self._snapshot_manager = None
+        self._context_service = None
+        self._replication_service = None
+
+        # Persistir el nuevo perfil activo globalmente
+        try:
+            from project_context.core.profile_mg import ProfileManager
+
+            ProfileManager().set_active_profile(profile_name)
+            audit_logger.info(
+                f"SESSION_SWITCHED: Perfil activo cambiado globalmente a '{profile_name}' ({new_email})."
+            )
+        except Exception as e:
+            audit_logger.warning(
+                f"No se pudo persistir '{profile_name}' como perfil activo global: {e}"
+            )
+
 
 class CommandOption:
     def __init__(self, names: list[str], description: str, is_flag: bool = True):

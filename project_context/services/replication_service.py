@@ -23,6 +23,7 @@ class ReplicationSummary:
     total_dependencies: int
     reused_dependencies: int
     uploaded_dependencies: int
+    target_api: GoogleDriveManager | None = None
     mapped_ids: dict[str, str] = field(default_factory=dict)
 
 
@@ -60,7 +61,7 @@ class ReplicationService:
         source_state = self.source_project_context.load_state()
         assert source_state.chat_id is not None
 
-        # 1. Autenticar perfil destino validando identidad
+        # Autenticar perfil destino validando identidad
         UI.info(f"Autenticando perfil destino: [bold cyan]{target_profile_name}[/]...")
         target_profile_data = self.profile_manager.load_profile_data(
             target_profile_name
@@ -72,7 +73,7 @@ class ReplicationService:
         )
         target_api = GoogleDriveManager(target_creds)
 
-        # 2. Descargar chat origen e identificar dependencias
+        # Descargar chat origen e identificar dependencias
         UI.info("Descargando chat origen e inspeccionando dependencias...")
         source_chat = self.source_api.get_chat(source_state.chat_id)
         source_chat_meta = self.source_api.get_metadata(source_state.chat_id)
@@ -82,7 +83,7 @@ class ReplicationService:
             f"REPLICATION_DEPS_FOUND: {len(referenced_file_ids)} archivo(s) de Drive detectados en el chat."
         )
 
-        # 3. Indexar catálogo de archivos en destino (con paginación completa)
+        # Indexar catálogo de archivos en destino (con paginación completa)
         UI.info("Consultando catálogo de archivos en la cuenta destino...")
         target_folder_id = target_api.ai_studio_folder
         target_files = target_api.list_files_in_folder(target_folder_id)
@@ -92,7 +93,7 @@ class ReplicationService:
             if f.md5sum:
                 target_md5_index[f.md5sum] = f
 
-        # 4. Transferir o reutilizar dependencias
+        # Transferir o reutilizar dependencias
         id_map: dict[str, str] = {}
         reused_count = 0
         uploaded_count = 0
@@ -144,7 +145,7 @@ class ReplicationService:
                     f"REPLICATION_UPLOADED: '{filename}' subido con ID {new_file.file_id}"
                 )
 
-        # 5. Traducir referencias dentro de los Chunks
+        # Traducir referencias dentro de los Chunks
         UI.info("Traduciendo referencias del chat para la nueva cuenta...")
         cloned_chat = self._translate_chat(source_chat, id_map)
 
@@ -162,7 +163,7 @@ class ReplicationService:
             chat_data=cloned_chat,
         )
 
-        # 6. Persistir el estado para el perfil destino
+        # Persistir el estado para el perfil destino
         target_context_file_id = id_map.get(source_state.file_id or "")
         self._update_target_state(
             target_email=target_profile_data.email,
@@ -180,6 +181,7 @@ class ReplicationService:
             total_dependencies=len(referenced_file_ids),
             reused_dependencies=reused_count,
             uploaded_dependencies=uploaded_count,
+            target_api=target_api,
             mapped_ids=id_map,
         )
 

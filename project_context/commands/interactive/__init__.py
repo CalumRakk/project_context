@@ -200,6 +200,13 @@ def bootstrap_interactive_registry() -> InteractiveRegistry:
         handler=cmd_clone,
         description="Clona el chat actual y sus dependencias de Drive hacia otro perfil/cuenta.",
         require_chat=True,
+        options=[
+            CommandOption(
+                ["--switch", "-s"],
+                "Conmuta automáticamente la sesión interactiva al perfil destino tras clonar.",
+                is_flag=True,
+            )
+        ],
         arguments=[
             CommandArgument(
                 "perfil",

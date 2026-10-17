@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Self
+from typing import Self
 
 import typer
 from filelock import FileLock, Timeout
@@ -11,14 +11,11 @@ from project_context.core.schemas import Context, ContextConfig, ProjectState
 from project_context.ui import UI
 from project_context.utils import compute_md5, human_to_int
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 
 class ProjectContext:
-    def __init__(self, email: str, project_path: Optional[Path] = None):
+    def __init__(self, email: str, project_path: Path | None = None):
         self.email = email
         self.project_path = project_path or Path.cwd()
 
@@ -31,7 +28,7 @@ class ProjectContext:
         self.state_path = self.local_dir / f"state_{self.identity_hash}.json"
 
         self._lock_path = self.local_dir / "app.lock"
-        self._lock: Optional[FileLock] = None
+        self._lock: FileLock | None = None
         self.is_multiple_instances = bool(
             os.getenv("PROJECT_CONTEXT_MULTIPLE_INSTANCES")
         )
@@ -125,7 +122,7 @@ class ProjectContext:
         except json.JSONDecodeError:
             return ProjectState(state_path=self.state_path)
 
-    def check_file_override(self, rel_path: str) -> Optional[str]:
+    def check_file_override(self, rel_path: str) -> str | None:
         """Comprueba si una ruta de archivo relativa anula un exclude o un .gitignore."""
         config = self.load_context_config()
         from project_context.utils import diagnose_file_override
@@ -316,3 +313,12 @@ class ProjectContext:
         estimated_tokens = human_to_int(summary.split()[-1])
 
         return Context(text=full_context, token_count=estimated_tokens)
+
+    def switch_identity(self, new_email: str) -> None:
+        """Actualiza la identidad del perfil activo preservando la estructura y bloqueos locales."""
+        self.email = new_email
+        self.identity_hash = compute_md5(new_email.strip().lower())
+        self.state_path = self.local_dir / f"state_{self.identity_hash}.json"
+        logger.info(
+            f"PROJECT_CONTEXT_IDENTITY_SWITCHED: email='{self.email}' | hash='{self.identity_hash}'"
+        )
