@@ -27,14 +27,15 @@ def cmd_update(ctx: SessionContext, args: ParsedArgs):
     """Actualiza el contexto general y reconstruye el chat."""
     anchor_file_path = ctx.project_context.local_dir / "story_anchor.txt"
 
-    if anchor_file_path.exists():
-        story_anchor_rel = anchor_file_path.read_text(encoding="utf-8").strip()
-        UI.info("Modo historia detectado activo. Reconstruyendo prompt del chat...")
-        from project_context.core.story_ops import apply_story_update
+    with UI.loading("Sincronizando contexto con Google Drive..."):
+        if anchor_file_path.exists():
+            story_anchor_rel = anchor_file_path.read_text(encoding="utf-8").strip()
+            UI.info("Modo historia detectado activo. Reconstruyendo prompt del chat...")
+            from project_context.core.story_ops import apply_story_update
 
-        apply_story_update(ctx.api, ctx.project_context, story_anchor_rel, ctx)
-    else:
-        ctx.context_service.create_or_update_chat()
+            apply_story_update(ctx.api, ctx.project_context, story_anchor_rel, ctx)
+        else:
+            ctx.context_service.create_or_update_chat()
 
 
 def cmd_save(ctx: SessionContext, args: ParsedArgs):

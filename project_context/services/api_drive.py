@@ -191,8 +191,14 @@ class GoogleDriveManager:
         t0 = time.time()
         size_kb = len(content) / 1024
         content_stream = io.BytesIO(content)
-        media = MediaIoBaseUpload(content_stream, mimetype=mime_type, resumable=True)
-        fields = " ,".join(FileDriver.model_fields.keys())
+
+        # Solo usar subida resumible para archivos pesados (> 5 MB).
+        # Para context.txt y chat.prompt (500 KB), subida directa atómica en 1 solo request:
+        is_resumable = len(content) > 5 * 1024 * 1024
+        media = MediaIoBaseUpload(
+            content_stream, mimetype=mime_type, resumable=is_resumable
+        )
+        fields = ", ".join(FileDriver.model_fields.keys())
 
         action = (
             f"UPDATE (file_id={file_id})"
@@ -204,17 +210,15 @@ class GoogleDriveManager:
         )
 
         if file_id:
-            resp = (
-                self.service.files()
-                .update(fileId=file_id, media_body=media, fields=fields)
-                .execute()
+            req = self.service.files().update(
+                fileId=file_id, media_body=media, fields=fields
             )
         else:
-            resp = (
-                self.service.files()
-                .create(body=metadata, media_body=media, fields=fields)
-                .execute()
+            req = self.service.files().create(
+                body=metadata, media_body=media, fields=fields
             )
+
+        resp = self._execute_with_retry(req)
 
         elapsed = time.time() - t0
         logger.debug(
@@ -480,3 +484,30 @@ class GoogleDriveManager:
         except HttpError as error:
             logger.error(f"Error al listar archivos en carpeta '{folder_id}': {error}")
             return []
+
+    def _reset_connections(self):
+        """Limpia las conexiones cacheadas en httplib2 para descartar sockets zombis."""
+        try:
+            http_layer = getattr(self.service, "_http", None)
+            if http_layer:
+                real_http = getattr(http_layer, "http", http_layer)
+                if hasattr(real_http, "connections"):
+                    real_http.connections.clear()
+                    logger.debug("DRIVE_TRANSPORT: Conexiones TCP inactivas purgadas.")
+        except Exception as e:
+            logger.debug(f"No se pudieron purgar conexiones de httplib2: {e}")
+
+    def _execute_with_retry(self, request, max_retries=1):
+        """Ejecuta una petición a Drive; si el socket murió por inactividad, reconecta y reintenta."""
+        for attempt in range(max_retries + 1):
+            try:
+                return request.execute()
+            except (TimeoutError, OSError) as e:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"Conexión con Google Drive interrumpida o socket inactivo ({e}). "
+                        f"Reconectando con sesión limpia..."
+                    )
+                    self._reset_connections()
+                    continue
+                raise

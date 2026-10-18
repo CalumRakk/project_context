@@ -258,6 +258,11 @@ class ProjectContext:
         y la precedencia de reglas:
         Archivo Explícito (files) > Exclusiones (exclusions) > Área de Trabajo (folders) > .gitignore.
         """
+        import time
+
+        t_start = time.perf_counter()
+        logger.info("[DIAG 1/5] Inicio de generate_context()")
+
         config = self.load_context_config()
 
         from project_context.utils import get_ignore_patterns
@@ -273,10 +278,9 @@ class ProjectContext:
 
         targets = []
 
-        # ARCHIVOS FORZADOS / WHITELIST (Máxima prioridad: cortocircuitan .gitignore y exclusions)
+        # ARCHIVOS FORZADOS / WHITELIST
         external_folders = getattr(config, "external_folders", {}) or {}
         for f_path in config.files:
-            # Comprobar si pertenece a un paquete externo vinculado
             parts = f_path.split("/", 1)
             if parts[0] in external_folders:
                 alias = parts[0]
@@ -291,7 +295,6 @@ class ProjectContext:
                         )
                     )
             else:
-                # Archivo local del proyecto
                 real_path = self.project_path / f_path
                 if real_path.exists() and real_path.is_file():
                     targets.append(
@@ -302,7 +305,7 @@ class ProjectContext:
                         )
                     )
 
-        # ÁREA DE TRABAJO LOCAL (Aplica .gitignore y exclusions)
+        # ÁREA DE TRABAJO LOCAL
         if config.folders == ["."]:
             targets.append(
                 VirtualTarget(
@@ -336,20 +339,35 @@ class ProjectContext:
                     )
                 )
 
-        # Construimos la query separando filtros duros de suaves
+        logger.info(
+            f"[DIAG 2/5] Targets listos ({len(targets)} targets). "
+            f"Exclusiones activas: {len(custom_exclusions)} | Reglas .gitignore: {len(gitignore_ignores)}"
+        )
+
         query = IngestionQuery(
             local_path=self.project_path,
             slug=self.project_path.name,
             id=uuid.uuid4(),
             max_file_size=10 * 1024 * 1024,
             ignore_patterns=gitignore_ignores,
-            exclude_patterns=custom_exclusions,
+            exclude_patterns=custom_exclusions,  # type: ignore
             targets=targets,
         )
 
+        logger.info("[DIAG 3/5] Invocando ingest_query(query)...")
+        t_ingest = time.perf_counter()
         summary, tree, content = ingest_query(query)
+        logger.info(
+            f"[DIAG 4/5] ingest_query() completado en {time.perf_counter() - t_ingest:.3f}s"
+        )
+
         full_context = tree + "\n" + content
         estimated_tokens = human_to_int(summary.split()[-1])
+
+        logger.info(
+            f"[DIAG 5/5] generate_context() finalizado en {time.perf_counter() - t_start:.3f}s "
+            f"(Tokens: {estimated_tokens:,} | Chars: {len(full_context):,})"
+        )
 
         return Context(text=full_context, token_count=estimated_tokens)
 
