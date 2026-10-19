@@ -498,16 +498,19 @@ class GoogleDriveManager:
             logger.debug(f"No se pudieron purgar conexiones de httplib2: {e}")
 
     def _execute_with_retry(self, request, max_retries=1):
-        """Ejecuta una petición a Drive; si el socket murió por inactividad, reconecta y reintenta."""
         for attempt in range(max_retries + 1):
             try:
                 return request.execute()
             except (TimeoutError, OSError) as e:
                 if attempt < max_retries:
                     logger.warning(
-                        f"Conexión con Google Drive interrumpida o socket inactivo ({e}). "
-                        f"Reconectando con sesión limpia..."
+                        f"Socket inactivo o descartado por Google Drive ({e}). "
+                        "Reintentando inmediatamente con conexión fresca..."
                     )
                     self._reset_connections()
                     continue
-                raise
+                # Si falla dos veces consecutivas, fallamos rápido
+                raise ConnectionError(
+                    "No se pudo comunicar con Google Drive tras reintentar. "
+                    "Verifica tu conexión a internet."
+                ) from e

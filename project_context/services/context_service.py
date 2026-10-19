@@ -46,7 +46,7 @@ class ContextService:
         file = self.api.update_file(file_id, context.text, mimetype)
         return ContextRemote(context=context, file_id=file.id)
 
-    def create_or_update_chat(self) -> None:
+    def create_or_update_chat(self, force: bool = False) -> None:
         folder_id = self.api.ai_studio_folder
         state = self.project_context.load_state()
         context_filename = self.build_filename_context()
@@ -57,7 +57,8 @@ class ContextService:
             f"Contexto generado: {context.token_count} tokens aprox. | MD5: {context.md5sum}"
         )
 
-        # Asegurar Documento de contexto
+        # 1. Asegurar o actualizar Documento de contexto
+        needs_context_upload = True
         if state.file_id is None or not self.api.can_access_file(state.file_id):
             logger.info("Creando nuevo documento de contexto en Drive...")
             context_remote = self.create_context_document(context_filename, context)
@@ -65,12 +66,21 @@ class ContextService:
             state.save()
             logger.info(f"Documento de contexto creado con ID: {state.file_id}")
         else:
-            logger.info(
-                f"Actualizando documento de contexto existente: {state.file_id}"
-            )
-            context_remote = self.update_context_document(context, state.file_id)
+            # Comprobación de MD5 para evitar subir 500KB+ si no hubo cambios
+            meta = self.api.get_metadata(state.file_id)
+            if not force and meta and meta.md5sum == context.md5sum:
+                logger.info(
+                    f"Contexto sin cambios (MD5 coincidente: {context.md5sum}). Omitiendo subida."
+                )
+                needs_context_upload = False
+                context_remote = ContextRemote(context=context, file_id=state.file_id)
+            else:
+                logger.info(
+                    f"Actualizando documento de contexto existente: {state.file_id}"
+                )
+                context_remote = self.update_context_document(context, state.file_id)
 
-        # Asegurar Chat de AI Studio
+        # 2. Asegurar o actualizar Chat de AI Studio
         if state.chat_id is None or not self.api.can_access_file(state.chat_id):
             logger.info("Creando nuevo Chat en Drive...")
             chat_filename = self.build_filename_chat()
@@ -83,11 +93,14 @@ class ContextService:
             logger.info(f"Nuevo Chat creado en Drive: {state.chat_id}")
             UI.success(f"Se creó nuevo Chat ID: [dim]{state.chat_id}[/]")
         else:
+            # Si el contexto no cambió y el chat ya está vinculado, no hacemos peticiones redundantes
+            if not needs_context_upload and not force:
+                UI.success("El contexto está sincronizado (sin cambios detectados).")
+                return
+
             logger.info(f"Verificando y sincronizando Chat activo: {state.chat_id}")
             chat = self.api.get_chat(state.chat_id)
 
-            # --- CORRECCIÓN CRÍTICA AQUÍ ---
-            # Asegurar que el chunk de contexto exista y apunte a state.file_id
             context_chunk_found = False
             for chunk in chat.chunkedPrompt.chunks:
                 if chunk.is_document or hasattr(chunk, "driveDocument"):
@@ -97,7 +110,6 @@ class ContextService:
                     break
 
             if not context_chunk_found:
-                # Si por alguna razón el chat no tenía el documento incrustado, se inserta al inicio
                 new_chunk = ChunkFactory.create_file(
                     state.file_id, role="user", tokens=context.token_count
                 )

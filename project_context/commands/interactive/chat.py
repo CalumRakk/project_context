@@ -26,6 +26,7 @@ def cmd_clear(ctx: SessionContext, args: ParsedArgs):
 def cmd_update(ctx: SessionContext, args: ParsedArgs):
     """Actualiza el contexto general y reconstruye el chat."""
     anchor_file_path = ctx.project_context.local_dir / "story_anchor.txt"
+    force = args.has_flag("--force")
 
     with UI.loading("Sincronizando contexto con Google Drive..."):
         if anchor_file_path.exists():
@@ -35,7 +36,7 @@ def cmd_update(ctx: SessionContext, args: ParsedArgs):
 
             apply_story_update(ctx.api, ctx.project_context, story_anchor_rel, ctx)
         else:
-            ctx.context_service.create_or_update_chat()
+            ctx.context_service.create_or_update_chat(force=force)
 
 
 def cmd_save(ctx: SessionContext, args: ParsedArgs):
