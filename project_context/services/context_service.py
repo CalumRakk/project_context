@@ -24,11 +24,9 @@ class ContextService:
         self.project_context = project_context
 
     def build_filename_chat(self) -> str:
-        """Genera el nombre estándar para el archivo de chat en Drive."""
         return self.project_context.project_path.name + "_chat.prompt"
 
     def build_filename_context(self) -> str:
-        """Genera el nombre estándar para el archivo de contexto en Drive."""
         return self.project_context.project_path.name + "_context.txt"
 
     def create_context_document(self, filename: str, context: Context) -> ContextRemote:
@@ -46,8 +44,11 @@ class ContextService:
         file = self.api.update_file(file_id, context.text, mimetype)
         return ContextRemote(context=context, file_id=file.id)
 
-    def create_or_update_chat(self, force: bool = False) -> None:
-        folder_id = self.api.ai_studio_folder
+    def sync_context_document(self, force: bool = False) -> tuple[ContextRemote, bool]:
+        """Sincroniza únicamente el documento de contexto en Drive (context.txt).
+
+        Retorna (ContextRemote, was_updated).
+        """
         state = self.project_context.load_state()
         context_filename = self.build_filename_context()
 
@@ -57,28 +58,33 @@ class ContextService:
             f"Contexto generado: {context.token_count} tokens aprox. | MD5: {context.md5sum}"
         )
 
-        # 1. Asegurar o actualizar Documento de contexto
-        needs_context_upload = True
         if state.file_id is None or not self.api.can_access_file(state.file_id):
             logger.info("Creando nuevo documento de contexto en Drive...")
             context_remote = self.create_context_document(context_filename, context)
             state.file_id = context_remote.file_id
             state.save()
             logger.info(f"Documento de contexto creado con ID: {state.file_id}")
+            return context_remote, True
         else:
-            # Comprobación de MD5 para evitar subir 500KB+ si no hubo cambios
             meta = self.api.get_metadata(state.file_id)
             if not force and meta and meta.md5sum == context.md5sum:
                 logger.info(
                     f"Contexto sin cambios (MD5 coincidente: {context.md5sum}). Omitiendo subida."
                 )
-                needs_context_upload = False
                 context_remote = ContextRemote(context=context, file_id=state.file_id)
+                return context_remote, False
             else:
                 logger.info(
                     f"Actualizando documento de contexto existente: {state.file_id}"
                 )
                 context_remote = self.update_context_document(context, state.file_id)
+                return context_remote, True
+
+    def create_or_update_chat(self, force: bool = False) -> None:
+        folder_id = self.api.ai_studio_folder
+        state = self.project_context.load_state()
+
+        context_remote, context_updated = self.sync_context_document(force=force)
 
         # 2. Asegurar o actualizar Chat de AI Studio
         if state.chat_id is None or not self.api.can_access_file(state.chat_id):
@@ -93,8 +99,7 @@ class ContextService:
             logger.info(f"Nuevo Chat creado en Drive: {state.chat_id}")
             UI.success(f"Se creó nuevo Chat ID: [dim]{state.chat_id}[/]")
         else:
-            # Si el contexto no cambió y el chat ya está vinculado, no hacemos peticiones redundantes
-            if not needs_context_upload and not force:
+            if not context_updated and not force:
                 UI.success("El contexto está sincronizado (sin cambios detectados).")
                 return
 
@@ -105,13 +110,15 @@ class ContextService:
             for chunk in chat.chunkedPrompt.chunks:
                 if chunk.is_document or hasattr(chunk, "driveDocument"):
                     chunk.file_id = state.file_id
-                    chunk.tokenCount = context.token_count
+                    chunk.tokenCount = context_remote.context.token_count
                     context_chunk_found = True
                     break
 
             if not context_chunk_found:
                 new_chunk = ChunkFactory.create_file(
-                    state.file_id, role="user", tokens=context.token_count
+                    state.file_id,
+                    role="user",
+                    tokens=context_remote.context.token_count,
                 )
                 chat.chunkedPrompt.chunks.insert(0, new_chunk)
 
@@ -119,7 +126,6 @@ class ContextService:
             UI.success("Contexto del Chat actualizado y sincronizado.")
 
     def restore_backup_if_exists(self) -> bool:
-        """Restaura el chat original si se detecta un archivo de respaldo local."""
         backup_path = self.project_context.local_dir / "chat_backup.prompt"
 
         if not backup_path.exists():

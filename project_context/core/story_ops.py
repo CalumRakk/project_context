@@ -2,7 +2,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from project_context.commands.interactive.register import SessionContext
 from project_context.core.project_context import ProjectContext
@@ -147,7 +146,7 @@ def _ensure_image_chunk_pair(
 def sync_story_images(
     api: GoogleDriveManager,
     project_path: Path,
-    resolved_images: List[Tuple[Path, str]],
+    resolved_images: list[tuple[Path, str]],
 ) -> list:
     """
     Sincroniza un listado de imágenes locales con Drive de forma ligera.
@@ -163,12 +162,17 @@ def apply_story_update(
     api: GoogleDriveManager,
     project_context: ProjectContext,
     story_anchor_rel: str,
-    ctx: Optional[SessionContext] = None,
+    ctx: SessionContext | None = None,
 ):
     """
     Actualiza el contexto, analiza la historia ancla,
-    sincroniza recursos visuales y actualiza el chat en Drive.
+    sincroniza recursos visuales y actualiza el chat en Drive en una sola pasada.
     """
+    from project_context.services.context_service import ContextService
+
+    context_service = (
+        ctx.context_service if ctx else ContextService(api, project_context)
+    )
 
     anchor_file = project_context.project_path / story_anchor_rel
     UI.info(f"Analizando intención en el archivo ancla: [cyan]{story_anchor_rel}[/]")
@@ -214,34 +218,56 @@ def apply_story_update(
     anchor_file_path = anchor_file.relative_to(project_context.project_path).as_posix()
     story_prompt = generate_story_prompt(parsed_data, anchor_file_path)
 
-    # Actualizamos el contexto maestro y el archivo del chat
-    assert ctx is not None
-    ctx.context_service.create_or_update_chat()
+    context_remote, _ = context_service.sync_context_document()
 
     state = project_context.load_state()
-    chat_id = state.chat_id
-    if not chat_id:
-        raise ValueError(
-            "No se pudo obtener un chat_id válido tras actualizar el contexto."
+
+    if state.chat_id is None or not api.can_access_file(state.chat_id):
+        UI.info("Creando nuevo Chat de Modo Historia en Google Drive...")
+        chat_data = ChunkFactory.build_initial_chat(context_remote)
+        base_chunks = chat_data.chunkedPrompt.chunks[:3]
+
+        new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
+        base_chunks.append(new_instruction_chunk)
+        if image_chunks:
+            base_chunks.extend(image_chunks)
+
+        chat_data.chunkedPrompt.chunks = base_chunks
+        chat_data.chunkedPrompt.pendingInputs = []
+
+        chat_file = api.create_chat(
+            folder_id=api.ai_studio_folder,
+            file_name=context_service.build_filename_chat(),
+            chat_data=chat_data,
         )
+        state.chat_id = chat_file.id
+        state.save()
+    else:
+        UI.info("Descargando chat para inyectar prompt de historia...")
+        chat_data = api.get_chat(state.chat_id)
 
-    chat_data = api.get_chat(chat_id)
+        # Asegurar que el primer chunk de documento de contexto apunte al file_id y tokens correctos
+        for chunk in chat_data.chunkedPrompt.chunks:
+            if chunk.is_document or hasattr(chunk, "driveDocument"):
+                chunk.file_id = context_remote.file_id
+                chunk.tokenCount = context_remote.context.token_count
+                break
 
-    UI.info("Actualizando bloques de prompt del chat e integrando recursos visuales...")
+        # Tomar los 3 primeros bloques estándar (o menos si el chat estaba casi vacío)
+        base_chunks = chat_data.chunkedPrompt.chunks[:3]
 
-    # Mantenemos únicamente los 3 primeros bloques iniciales
-    base_chunks = chat_data.chunkedPrompt.chunks[:3]
+        new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
+        base_chunks.append(new_instruction_chunk)
 
-    new_instruction_chunk = ChunkFactory.create_text(story_prompt, role="user")
-    base_chunks.append(new_instruction_chunk)
+        if image_chunks:
+            base_chunks.extend(image_chunks)
 
-    if image_chunks:
-        base_chunks.extend(image_chunks)
+        chat_data.chunkedPrompt.chunks = base_chunks
+        chat_data.chunkedPrompt.pendingInputs = []
 
-    chat_data.chunkedPrompt.chunks = base_chunks
-    chat_data.chunkedPrompt.pendingInputs = []
+        UI.info("Actualizando Chat en Google Drive...")
+        api.update_chat(state.chat_id, chat_data)
 
-    api.update_chat(chat_id, chat_data)
     UI.success(
         "¡Chat preparado! Ve a AI Studio, REFRESCA LA PÁGINA (F5) y presiona RUN."
     )

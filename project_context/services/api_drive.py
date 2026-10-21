@@ -48,7 +48,6 @@ class FileDriver(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # Propiedades de google Driver traducidas a la semantica del proyecto.
     @property
     def mimetype(self):
         return self.mimeType
@@ -87,7 +86,6 @@ class ChunkFactory:
 
     @classmethod
     def create_default_run_settings(cls) -> RunSettings:
-        """Retorna una configuración de RunSettings con valores iniciales explícitos y seguros."""
         thinkingLevel = "THINKING_MEDIUM"
         return RunSettings(
             model="models/gemini-3.5-flash",
@@ -101,8 +99,6 @@ class ChunkFactory:
 
     @classmethod
     def build_initial_chat(cls, context_remote: ContextRemote):
-        """Construye los tres chunks iniciales estándar (Contexto, Prompt de bienvenida, Acuse de recibo)."""
-
         context = context_remote.context
         context_chunk = ChunkFactory.create_file(
             context_remote.file_id, role="user", tokens=context.token_count
@@ -122,21 +118,92 @@ class ChunkFactory:
 
 class GoogleDriveManager:
     MIME_PROMPT = "application/vnd.google-makersuite.prompt"
+    MAX_IDLE_SECONDS = (
+        45  # Google Frontend descarta sockets inactivos alrededor de los 60s
+    )
+    SOCKET_TIMEOUT = 5  # Tiempo límite estricto de socket para descartar cuelgues
 
     def __init__(self, credentials: Credentials):
-        # FIXME: Esto abre un bloqueo que no se libera.
         self._lock = threading.Lock()
+        self._ai_studio_folder_id = None
+        self._last_request_time: float | None = None
 
         self.service = build("drive", "v3", credentials=credentials)
-        self._ai_studio_folder_id = None
+        self._configure_http_timeout(self.SOCKET_TIMEOUT)
         UI.success("Google Drive Manager inicializado con éxito.")
+
+    def _configure_http_timeout(self, timeout: float):
+        """Configura el timeout de socket a nivel de capa HTTP subyacente (httplib2)."""
+        try:
+            http_layer = getattr(self.service, "_http", None)
+            if http_layer:
+                real_http = getattr(http_layer, "http", http_layer)
+                if hasattr(real_http, "timeout"):
+                    real_http.timeout = timeout
+                    logger.debug(
+                        f"DRIVE_TRANSPORT: Timeout de socket fijado en {timeout}s."
+                    )
+        except Exception as e:
+            logger.debug(f"No se pudo configurar timeout en httplib2: {e}")
+
+    def _ensure_fresh_connection(self):
+        """Purga sockets viejos si hubo inactividad prolongada antes de enviar una petición."""
+        now = time.time()
+        if self._last_request_time and (
+            now - self._last_request_time > self.MAX_IDLE_SECONDS
+        ):
+            logger.debug(
+                f"DRIVE_TRANSPORT: Inactividad detectada ({now - self._last_request_time:.1f}s > {self.MAX_IDLE_SECONDS}s). "
+                "Purgando sockets preventivamente para evitar sockets zombis..."
+            )
+            self._reset_connections()
+        self._last_request_time = now
+
+    def _reset_connections(self):
+        """Cierra y limpia las conexiones cacheadas en httplib2."""
+        try:
+            http_layer = getattr(self.service, "_http", None)
+            if http_layer:
+                real_http = getattr(http_layer, "http", http_layer)
+                if hasattr(real_http, "connections"):
+                    for conn in list(real_http.connections.values()):
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                    real_http.connections.clear()
+                    logger.debug(
+                        "DRIVE_TRANSPORT: Conexiones TCP inactivas cerradas y purgadas."
+                    )
+        except Exception as e:
+            logger.debug(f"No se pudieron purgar conexiones de httplib2: {e}")
+
+    def _execute_with_retry(self, request, max_retries=1):
+        self._ensure_fresh_connection()
+        for attempt in range(max_retries + 1):
+            try:
+                resp = request.execute()
+                self._last_request_time = time.time()
+                return resp
+            except HttpError:
+                self._last_request_time = time.time()
+                raise
+            except (TimeoutError, OSError) as e:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"Socket inactivo o descartado por Google Drive ({e}). "
+                        "Reintentando inmediatamente con conexión fresca..."
+                    )
+                    self._reset_connections()
+                    self._last_request_time = time.time()
+                    continue
+                raise ConnectionError(
+                    "No se pudo comunicar con Google Drive tras reintentar. "
+                    "Verifica tu conexión a internet."
+                ) from e
 
     @property
     def ai_studio_folder(self) -> str:
-        """
-        Resuelve de manera perezosa (lazy) el ID de la carpeta de Google AI Studio.
-        Lanza un FileNotFoundError si no se encuentra en el entorno de Drive.
-        """
         if self._ai_studio_folder_id is not None:
             return self._ai_studio_folder_id
 
@@ -149,7 +216,7 @@ class GoogleDriveManager:
         return self._ai_studio_folder_id
 
     def _download_bytes(self, file_id: str) -> bytes | None:
-        """Descarga un archivo de Drive en memoria y devuelve sus bytes."""
+        self._ensure_fresh_connection()
         try:
             request = self.service.files().get_media(fileId=file_id)
             file_stream = io.BytesIO()
@@ -157,15 +224,14 @@ class GoogleDriveManager:
             done = False
 
             while not done:
-                status, done = downloader.next_chunk()
+                _, done = downloader.next_chunk()
 
+            self._last_request_time = time.time()
             return file_stream.getvalue()
 
         except HttpError as error:
             if error.resp.status == 404:
-                logger.debug(
-                    f"El archivo con ID '{file_id}' no está disponible para descarga (404)."
-                )
+                logger.debug(f"El archivo con ID '{file_id}' no está disponible (404).")
             else:
                 logger.error(f"Error HTTP al descargar archivo '{file_id}': {error}")
             return None
@@ -177,23 +243,10 @@ class GoogleDriveManager:
         metadata: dict | None = None,
         file_id: str | None = None,
     ) -> dict:
-        """Sube o actualiza un archivo en Drive. Si file_id es proporcionado, se actualiza el archivo existente, en caso contrario, se crea un nuevo archivo.
-
-        Args:
-            content: Contenido del archivo en bytes.
-            mime_type: Tipo MIME del archivo.
-            metadata: Metadatos adicionales del archivo. Defaults to None.
-            file_id: ID del archivo existente a actualizar. Defaults to None.
-            fields: Campos a incluir en la respuesta. Defaults to "id, name".
-
-        """
-
         t0 = time.time()
         size_kb = len(content) / 1024
         content_stream = io.BytesIO(content)
 
-        # Solo usar subida resumible para archivos pesados (> 5 MB).
-        # Para context.txt y chat.prompt (500 KB), subida directa atómica en 1 solo request:
         is_resumable = len(content) > 5 * 1024 * 1024
         media = MediaIoBaseUpload(
             content_stream, mimetype=mime_type, resumable=is_resumable
@@ -219,6 +272,7 @@ class GoogleDriveManager:
             )
 
         resp = self._execute_with_retry(req)
+        assert isinstance(resp, dict)
 
         elapsed = time.time() - t0
         logger.debug(
@@ -234,7 +288,7 @@ class GoogleDriveManager:
         elif isinstance(content, bytes):
             return content
         else:
-            raise ValueError("content debe ser una cadena, un Path o un bytes")
+            raise TypeError("content debe ser una cadena, un Path o un bytes")
 
     def get_metadata(self, file_id: str) -> FileDriver | None:
         # Google Drive API v3 permite controlar qué propiedades del recurso File
@@ -255,32 +309,32 @@ class GoogleDriveManager:
         fields = ", ".join(FileDriver.model_fields.keys())
         try:
             t0 = time.time()
-            data = self.service.files().get(fileId=file_id, fields=fields).execute()
+            req = self.service.files().get(fileId=file_id, fields=fields)
+            data = self._execute_with_retry(req)
             elapsed = time.time() - t0
             logger.debug(f"DRIVE_METADATA_FETCHED: file_id={file_id} ({elapsed:.2f}s)")
+            assert isinstance(data, dict)
             return FileDriver(**data)
         except HttpError as e:
             logger.warning(
                 f"DRIVE_METADATA_HTTP_ERROR: file_id={file_id} | status={e.resp.status} | {e}"
             )
             return None
-        except Exception as e:
+        except Exception:
             logger.exception(
-                f"DRIVE_METADATA_PARSE_ERROR: file_id={file_id} | Fallo al parsear FileDriver: {e}"
+                f"DRIVE_METADATA_PARSE_ERROR: file_id={file_id} | Fallo al parsear FileDriver"
             )
             return None
 
     def find_item_by_name(self, name: str, parent_id: str = "root") -> dict | None:
         try:
-            response = (
-                self.service.files()
-                .list(
-                    q=f"name = '{name}' and '{parent_id}' in parents and trashed = false",
-                    spaces="drive",
-                    fields="files(id, name, mimeType, modifiedTime)",
-                )
-                .execute()
+            req = self.service.files().list(
+                q=f"name = '{name}' and '{parent_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="files(id, name, mimeType, modifiedTime)",
             )
+            response = self._execute_with_retry(req)
+            assert isinstance(response, dict)
             items = response.get("files", [])
             return items[0] if items else None
         except HttpError as error:
@@ -290,9 +344,8 @@ class GoogleDriveManager:
     def update_file(
         self, file_id: str, content: str | Path | bytes, mime_type: str
     ) -> FileDriver:
-        """Actualiza un archivo en Drive con el contenido proporcionado."""
-        bytes = self._resolver_content(content)
-        data = self._upload_bytes(bytes, mime_type, file_id=file_id)
+        bytes_data = self._resolver_content(content)
+        data = self._upload_bytes(bytes_data, mime_type, file_id=file_id)
         return FileDriver(**data)
 
     def create_file(
@@ -302,19 +355,19 @@ class GoogleDriveManager:
         content: str | Path | bytes,
         mime_type: str,
     ) -> FileDriver:
-        """Crea un archivo en Drive con el contenido proporcionado."""
         file_metadata = {
             "name": file_name,
             "parents": [folder_id],
             "mimeType": mime_type,
         }
-        bytes = self._resolver_content(content)
-        file = self._upload_bytes(bytes, mime_type, metadata=file_metadata)
+        bytes_data = self._resolver_content(content)
+        file = self._upload_bytes(bytes_data, mime_type, metadata=file_metadata)
         return FileDriver(**file)
 
     def delete_file(self, file_id: str) -> bool:
         try:
-            self.service.files().delete(fileId=file_id).execute()
+            req = self.service.files().delete(fileId=file_id)
+            self._execute_with_retry(req)
             return True
         except HttpError as error:
             logger.error(f"Error al eliminar archivo '{file_id}': {error}")
@@ -344,7 +397,6 @@ class GoogleDriveManager:
         )
 
     def update_chat(self, chat_id: str, chat_data: ChatIAStudio):
-        """Actualiza el chat en Drive."""
         content_json = chat_data.model_dump_json(exclude_none=True, exclude_unset=True)
         self.update_file(
             file_id=chat_id,
@@ -370,7 +422,8 @@ class GoogleDriveManager:
 
     def can_access_file(self, file_id):
         try:
-            self.service.files().get(fileId=file_id, fields="id").execute()
+            req = self.service.files().get(fileId=file_id, fields="id")
+            self._execute_with_retry(req)
             logger.debug(f"DRIVE_ACCESS_CHECK: file_id={file_id} -> ACCESSIBLE")
             return True
         except HttpError as e:
@@ -380,7 +433,6 @@ class GoogleDriveManager:
             return False
 
     def clear_chat(self, chat_id: str):
-        # TODO: REFACTOR ESTE MÉTODO. QUÉ DOLOR ANALIZARLO!
         chat = self.get_chat(chat_id)
 
         chunks = chat.chunkedPrompt.chunks
@@ -426,28 +478,19 @@ class GoogleDriveManager:
         return True
 
     def get_file_content(self, file_id: str) -> bytes:
-
-        request = self.service.files().get_media(fileId=file_id)
-        file_stream = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_stream, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        return file_stream.getvalue()
+        data = self._download_bytes(file_id)
+        if data is None:
+            raise FileNotFoundError(f"No se pudo descargar el archivo {file_id}")
+        return data
 
     @staticmethod
     def create_inline_file(
         data_bytes: bytes, mime_type: str, role: Role = "user"
     ) -> ChunkInlineFile:
-        """Construye un bloque ChunkInlineFile codificando el contenido en Base64."""
-
         encoded_data = base64.b64encode(data_bytes).decode("utf-8")
-
-        # Formato ISO 8601 estandarizado compatible con milisegundos y terminación Z
         create_time = (
             datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         )
-
         return ChunkInlineFile(
             role=role,
             inlineFile=InlineFile(mimeType=mime_type, data=encoded_data),
@@ -455,24 +498,21 @@ class GoogleDriveManager:
         )
 
     def list_files_in_folder(self, folder_id: str) -> list[FileDriver]:
-        """Lista todos los archivos contenidos en una carpeta específica de Drive gestionando paginación."""
         fields = f"nextPageToken, files({', '.join(FileDriver.model_fields.keys())})"
         all_files: list[FileDriver] = []
         page_token = None
 
         try:
             while True:
-                response = (
-                    self.service.files()
-                    .list(
-                        q=f"'{folder_id}' in parents and trashed = false",
-                        spaces="drive",
-                        fields=fields,
-                        pageToken=page_token,
-                        pageSize=1000,
-                    )
-                    .execute()
+                req = self.service.files().list(
+                    q=f"'{folder_id}' in parents and trashed = false",
+                    spaces="drive",
+                    fields=fields,
+                    pageToken=page_token,
+                    pageSize=1000,
                 )
+                response = self._execute_with_retry(req)
+                assert isinstance(response, dict)
                 items = response.get("files", [])
                 all_files.extend([FileDriver(**item) for item in items])
 
@@ -484,33 +524,3 @@ class GoogleDriveManager:
         except HttpError as error:
             logger.error(f"Error al listar archivos en carpeta '{folder_id}': {error}")
             return []
-
-    def _reset_connections(self):
-        """Limpia las conexiones cacheadas en httplib2 para descartar sockets zombis."""
-        try:
-            http_layer = getattr(self.service, "_http", None)
-            if http_layer:
-                real_http = getattr(http_layer, "http", http_layer)
-                if hasattr(real_http, "connections"):
-                    real_http.connections.clear()
-                    logger.debug("DRIVE_TRANSPORT: Conexiones TCP inactivas purgadas.")
-        except Exception as e:
-            logger.debug(f"No se pudieron purgar conexiones de httplib2: {e}")
-
-    def _execute_with_retry(self, request, max_retries=1):
-        for attempt in range(max_retries + 1):
-            try:
-                return request.execute()
-            except (TimeoutError, OSError) as e:
-                if attempt < max_retries:
-                    logger.warning(
-                        f"Socket inactivo o descartado por Google Drive ({e}). "
-                        "Reintentando inmediatamente con conexión fresca..."
-                    )
-                    self._reset_connections()
-                    continue
-                # Si falla dos veces consecutivas, fallamos rápido
-                raise ConnectionError(
-                    "No se pudo comunicar con Google Drive tras reintentar. "
-                    "Verifica tu conexión a internet."
-                ) from e
